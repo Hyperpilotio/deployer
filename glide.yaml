@@ -1,7 +1,0 @@
-package: github.com/hyperpilotio/deployer
-import:
-- package: github.com/aws/aws-sdk-go
-  subpackages:
-  - aws
-  - aws/awserr
-  - service/ecs
