@@ -1,4 +1,4 @@
-package deployer
+package main
 
 import (
 	"os"
@@ -7,8 +7,7 @@ import (
 )
 
 func Run(cluster string, port string) error {
-	StartServer(port)
-	return nil
+	return StartServer(port)
 }
 
 func main() {
