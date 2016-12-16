@@ -2,7 +2,9 @@ package main
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/hyperpilotio/deployer/aws-ecs"
+	"github.com/hyperpilotio/deployer/awsecs"
+
+	"net/http"
 )
 
 // StartServer start a web server
@@ -35,14 +37,12 @@ func getDeployment(c *gin.Context) {
 }
 
 func createDeployment(c *gin.Context) {
-	var deployment Deployment
+	var deployment awsecs.Deployment
 	if c.BindJSON(&deployment) == nil {
-
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
 			"data":  "",
 		})
-
 	}
 
 }

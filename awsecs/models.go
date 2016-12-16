@@ -1,4 +1,4 @@
-package ecs
+package awsecs
 
 import (
 	"github.com/aws/aws-sdk-go/service/ecs"
@@ -15,8 +15,8 @@ type ClusterDefinition struct {
 type Deployment struct {
 	Name              string
 	Region            string
-	TaskDefinition    []RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
-	ClusterDefinition ClusterDefinition             `from:"clusterDefinition" json:"clusterDefinition" binding:"required"`
+	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+	ClusterDefinition ClusterDefinition                 `from:"clusterDefinition" json:"clusterDefinition" binding:"required"`
 	NodeMapping       []struct {
 		Id   int
 		Task string
