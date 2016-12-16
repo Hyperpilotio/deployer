@@ -3,14 +3,25 @@ package main
 import (
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/awsecs"
+	"github.com/spf13/viper"
 
 	"net/http"
 )
 
-// StartServer start a web server
-func StartServer(port string) error {
-	//gin.SetMode(mode)
+type Server struct {
+	Config           *viper.Viper
+	DeployedClusters map[string]*awsecs.DeployedCluster
+}
 
+func NewServer(config *viper.Viper) Server {
+	return Server{
+		Config: config,
+	}
+}
+
+// StartServer start a web server
+func (server Server) StartServer() error {
+	//gin.SetMode("release")
 	router := gin.New()
 
 	// Global middleware
@@ -19,15 +30,25 @@ func StartServer(port string) error {
 
 	daemonsGroup := router.Group("/deployment")
 	{
-		daemonsGroup.GET("", getDeployment)
-		daemonsGroup.POST("", createDeployment)
-		daemonsGroup.DELETE("", deleteDeployment)
+		daemonsGroup.GET("", server.getDeployment)
+		daemonsGroup.POST("", server.createDeployment)
+		daemonsGroup.DELETE("", server.deleteDeployment)
+		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 	}
 
-	return router.Run(":" + port)
+	return router.Run(":" + server.Config.GetString("port"))
 }
 
-func getDeployment(c *gin.Context) {
+func (server Server) updateDeployment(c *gin.Context) {
+	// TODO Implement function to update deployment
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
+func (server Server) getDeployment(c *gin.Context) {
 	// TODO Implement function to get current deployment
 
 	c.JSON(http.StatusNotFound, gin.H{
@@ -36,9 +57,25 @@ func getDeployment(c *gin.Context) {
 	})
 }
 
-func createDeployment(c *gin.Context) {
+func (server Server) createDeployment(c *gin.Context) {
 	var deployment awsecs.Deployment
 	if c.BindJSON(&deployment) == nil {
+		if _, ok := server.DeployedClusters[deployment.Name]; ok {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Already deployed",
+			})
+			return
+		}
+		deployedCluster, err := awsecs.CreateDeployment(server.Config, &deployment)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  err,
+			})
+			return
+		}
+		server.DeployedClusters[deployment.Name] = deployedCluster
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
 			"data":  "",
@@ -47,7 +84,7 @@ func createDeployment(c *gin.Context) {
 
 }
 
-func deleteDeployment(c *gin.Context) {
+func (server Server) deleteDeployment(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
 		"error": false,
 		"data":  "",

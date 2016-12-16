@@ -3,15 +3,24 @@ package main
 import (
 	"os"
 
+	"github.com/spf13/viper"
 	cli "github.com/urfave/cli"
 )
 
-func Run(cluster string, port string) error {
-	return StartServer(port)
+func Run(fileConfig string) error {
+	viper := viper.New()
+	viper.SetConfigName("config")
+	viper.AddConfigPath(fileConfig)
+	err := viper.ReadInConfig()
+	if err != nil {
+		return err
+	}
+	server := NewServer(viper)
+	return server.StartServer()
 }
 
 func main() {
-	var cluster = ""
+	var fileConfig = ""
 	// Parse parameters from command line input.
 	app := cli.NewApp()
 	app.Name = "deployer"
@@ -19,18 +28,13 @@ func main() {
 	// Global flags
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
-			Name:        "cluster",
-			Usage:       "The name of target cluster",
-			Destination: &cluster,
-		},
-		cli.StringFlag{
-			Name:  "port",
-			Value: "7777",
-			Usage: "The port of scheduler REST server",
+			Name:        "config",
+			Usage:       "The file path to a config file",
+			Destination: &fileConfig,
 		},
 	}
 	app.Action = func(c *cli.Context) error {
-		return Run(c.String("cluster"), c.String("port"))
+		return Run(fileConfig)
 	}
 
 	app.Run(os.Args)

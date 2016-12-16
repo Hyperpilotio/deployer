@@ -7,7 +7,10 @@ import (
 
 	"github.com/golang/glog"
 
+	"github.com/spf13/viper"
+
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -34,7 +37,7 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 	for _, taskDefinition := range deployment.TaskDefinitions {
 		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
 			glog.Errorf("Unable to register task definition", err)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return err
 		}
 	}
@@ -51,7 +54,7 @@ func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *De
 	_, err := iamSvc.CreateInstanceProfile(iamParams)
 	if err != nil {
 		glog.Errorf("Failed to create instance profile: %s", err)
-		DeleteDeployment(deployment)
+		DeleteDeployment(deployedCluster)
 		return err
 	}
 
@@ -63,7 +66,7 @@ func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *De
 	keyOutput, keyErr := ec2Svc.CreateKeyPair(keyPairParams)
 	if keyErr != nil {
 		glog.Errorf("Failed to create key pair: %s", keyErr)
-		DeleteDeployment(deployment)
+		DeleteDeployment(deployedCluster)
 		return keyErr
 	}
 
@@ -83,7 +86,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		})
 		if runErr != nil {
 			glog.Errorf("Unable to run ec2 instance %s: %s", node.Id, runErr)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return runErr
 		}
 		deployedCluster.InstanceIds[node.Id] = runResult.Instances[0].InstanceId
@@ -98,7 +101,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		})
 		if tagErr != nil {
 			glog.Errorf("Could not create tags for instance", runResult.Instances[0].InstanceId, tagErr)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return tagErr
 		}
 	}
@@ -121,7 +124,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 		if !ok {
 			err := fmt.Sprintf("Unable to find Node id %s in instance map", mapping.Id)
 			glog.Error(err)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return errors.New(err)
 		}
 
@@ -133,7 +136,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 
 		if err != nil {
 			glog.Errorf("Unable to start task", mapping.Task, err)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return err
 		}
 
@@ -144,7 +147,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 			}
 			errorMessage := fmt.Sprintf("Failed to start task", mapping.Task, failureMessage)
 			glog.Errorf(errorMessage)
-			DeleteDeployment(deployment)
+			DeleteDeployment(deployedCluster)
 			return errors.New(errorMessage)
 		}
 	}
@@ -152,14 +155,22 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	return nil
 }
 
-func CreateDeployment(deployment *Deployment) (*DeployedCluster, error) {
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(deployment.Region)})
+func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedCluster, error) {
+	awsId := viper.GetString("awsId")
+	awsSecret := viper.GetString("awsSecret")
+	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
+	config := &aws.Config{
+		Region: aws.String(deployment.Region),
+	}
+	config = config.WithCredentials(creds)
+	sess, err := session.NewSession(config)
 	if err != nil {
 		glog.Errorf("Failed to create session: %s", err)
 		return nil, err
 	}
 	deployedCluster := &DeployedCluster{
-		Name: &deployment.Name,
+		Name:       &deployment.Name,
+		Deployment: deployment,
 	}
 	ecsSvc := ecs.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
@@ -175,6 +186,7 @@ func CreateDeployment(deployment *Deployment) (*DeployedCluster, error) {
 	return deployedCluster, nil
 }
 
-func DeleteDeployment(deployment *Deployment) error {
+func DeleteDeployment(deployedCluster *DeployedCluster) error {
+
 	return nil
 }
