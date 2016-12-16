@@ -8,6 +8,7 @@ import (
 	"github.com/golang/glog"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -152,14 +153,20 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	return nil
 }
 
-func CreateDeployment(deployment *Deployment) (*DeployedCluster, error) {
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(deployment.Region)})
+func CreateDeployment(awsId string, awsSecret string, deployment *Deployment) (*DeployedCluster, error) {
+	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
+	config := &aws.Config{
+		Region: aws.String(deployment.Region),
+	}
+	config = config.WithCredentials(creds)
+	sess, err := session.NewSession(config)
 	if err != nil {
 		glog.Errorf("Failed to create session: %s", err)
 		return nil, err
 	}
 	deployedCluster := &DeployedCluster{
-		Name: &deployment.Name,
+		Name:       &deployment.Name,
+		Deployment: deployment,
 	}
 	ecsSvc := ecs.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {

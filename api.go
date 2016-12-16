@@ -8,8 +8,8 @@ import (
 )
 
 // StartServer start a web server
-func StartServer(port string) error {
-	//gin.SetMode(mode)
+func StartServer(config map[string]string) error {
+	//gin.SetMode("release")
 
 	router := gin.New()
 
@@ -24,7 +24,7 @@ func StartServer(port string) error {
 		daemonsGroup.DELETE("", deleteDeployment)
 	}
 
-	return router.Run(":" + port)
+	return router.Run(":" + config["port"])
 }
 
 func getDeployment(c *gin.Context) {
@@ -38,6 +38,7 @@ func getDeployment(c *gin.Context) {
 
 func createDeployment(c *gin.Context) {
 	var deployment awsecs.Deployment
+	awsecs.CreateDeployment(config, deployment)
 	if c.BindJSON(&deployment) == nil {
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
