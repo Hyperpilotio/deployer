@@ -1,0 +1,20 @@
+package: github.com/Hyperpilotio/deployer
+import:
+- package: github.com/aws/aws-sdk-go
+  version: ~1.6.4
+  subpackages:
+  - aws
+  - aws/credentials
+  - aws/session
+  - service/ec2
+  - service/ecs
+  - service/iam
+- package: github.com/gin-gonic/gin
+  version: ~1.1.4
+- package: github.com/golang/glog
+- package: github.com/hyperpilotio/deployer
+  subpackages:
+  - awsecs
+- package: github.com/spf13/viper
+- package: github.com/urfave/cli
+  version: ~1.19.1
