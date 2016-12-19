@@ -6,11 +6,13 @@ import (
 	"github.com/spf13/viper"
 
 	"net/http"
+	"sync"
 )
 
 type Server struct {
 	Config           *viper.Viper
 	DeployedClusters map[string]*awsecs.DeployedCluster
+	mutex            sync.Mutex
 }
 
 func NewServer(config *viper.Viper) Server {
@@ -67,6 +69,9 @@ func (server Server) createDeployment(c *gin.Context) {
 		return
 	}
 
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
 	if _, ok := server.DeployedClusters[deployment.Name]; ok {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -74,6 +79,7 @@ func (server Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
+
 	deployedCluster, err := awsecs.CreateDeployment(server.Config, &deployment)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -83,6 +89,7 @@ func (server Server) createDeployment(c *gin.Context) {
 		return
 	}
 	server.DeployedClusters[deployment.Name] = deployedCluster
+
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
 		"data":  "",
