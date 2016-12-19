@@ -59,28 +59,34 @@ func (server Server) getDeployment(c *gin.Context) {
 
 func (server Server) createDeployment(c *gin.Context) {
 	var deployment awsecs.Deployment
-	if c.BindJSON(&deployment) == nil {
-		if _, ok := server.DeployedClusters[deployment.Name]; ok {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Already deployed",
-			})
-			return
-		}
-		deployedCluster, err := awsecs.CreateDeployment(server.Config, &deployment)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  err,
-			})
-			return
-		}
-		server.DeployedClusters[deployment.Name] = deployedCluster
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  "",
+	if err := c.BindJSON(&deployment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error deserializing deployment: " + string(err.Error()),
 		})
+		return
 	}
+
+	if _, ok := server.DeployedClusters[deployment.Name]; ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Already deployed",
+		})
+		return
+	}
+	deployedCluster, err := awsecs.CreateDeployment(server.Config, &deployment)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to create deployment: " + string(err.Error()),
+		})
+		return
+	}
+	server.DeployedClusters[deployment.Name] = deployedCluster
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "",
+	})
 
 }
 
