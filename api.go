@@ -32,11 +32,12 @@ func (server *Server) StartServer() error {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	daemonsGroup := router.Group("/deployment")
+	daemonsGroup := router.Group("/v1/deployments")
 	{
-		daemonsGroup.GET("", server.getDeployment)
+		daemonsGroup.GET("", server.getAllDeployments)
+		daemonsGroup.GET("/:deployment", server.getDeployment)
 		daemonsGroup.POST("", server.createDeployment)
-		daemonsGroup.DELETE("", server.deleteDeployment)
+		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 	}
 
@@ -45,6 +46,15 @@ func (server *Server) StartServer() error {
 
 func (server *Server) updateDeployment(c *gin.Context) {
 	// TODO Implement function to update deployment
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
+func (server *Server) getAllDeployments(c *gin.Context) {
+	// TODO Implement function to get all the deployments.
 
 	c.JSON(http.StatusNotFound, gin.H{
 		"error": false,
