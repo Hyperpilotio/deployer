@@ -7,10 +7,18 @@ import (
 	cli "github.com/urfave/cli"
 )
 
+// Run start the web server
 func Run(fileConfig string) error {
 	viper := viper.New()
-	viper.SetConfigName("config")
-	viper.AddConfigPath(fileConfig)
+	viper.SetConfigType("json")
+
+	if fileConfig == "" {
+		viper.SetConfigName("config")
+		viper.AddConfigPath("/ect/deployer")
+	} else {
+		viper.SetConfigFile(fileConfig)
+	}
+
 	err := viper.ReadInConfig()
 	if err != nil {
 		return err
@@ -20,7 +28,7 @@ func Run(fileConfig string) error {
 }
 
 func main() {
-	var fileConfig = ""
+	var fileConfig string
 	// Parse parameters from command line input.
 	app := cli.NewApp()
 	app.Name = "deployer"
