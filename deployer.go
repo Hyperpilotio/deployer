@@ -14,7 +14,7 @@ func Run(fileConfig string) error {
 
 	if fileConfig == "" {
 		viper.SetConfigName("config")
-		viper.AddConfigPath("/ect/deployer")
+		viper.AddConfigPath("/etc/deployer")
 	} else {
 		viper.SetConfigFile(fileConfig)
 	}
