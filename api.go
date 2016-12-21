@@ -9,20 +9,22 @@ import (
 	"sync"
 )
 
+// Server store the stats / data of every deployment
 type Server struct {
 	Config           *viper.Viper
 	DeployedClusters map[string]*awsecs.DeployedCluster
 	mutex            sync.Mutex
 }
 
-func NewServer(config *viper.Viper) Server {
-	return Server{
+// NewServer return an instance of Server struct.
+func NewServer(config *viper.Viper) *Server {
+	return &Server{
 		Config: config,
 	}
 }
 
 // StartServer start a web server
-func (server Server) StartServer() error {
+func (server *Server) StartServer() error {
 	//gin.SetMode("release")
 	router := gin.New()
 
@@ -30,18 +32,19 @@ func (server Server) StartServer() error {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	daemonsGroup := router.Group("/deployment")
+	daemonsGroup := router.Group("/v1/deployments")
 	{
-		daemonsGroup.GET("", server.getDeployment)
+		daemonsGroup.GET("", server.getAllDeployments)
+		daemonsGroup.GET("/:deployment", server.getDeployment)
 		daemonsGroup.POST("", server.createDeployment)
-		daemonsGroup.DELETE("", server.deleteDeployment)
+		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 	}
 
 	return router.Run(":" + server.Config.GetString("port"))
 }
 
-func (server Server) updateDeployment(c *gin.Context) {
+func (server *Server) updateDeployment(c *gin.Context) {
 	// TODO Implement function to update deployment
 
 	c.JSON(http.StatusNotFound, gin.H{
@@ -50,7 +53,16 @@ func (server Server) updateDeployment(c *gin.Context) {
 	})
 }
 
-func (server Server) getDeployment(c *gin.Context) {
+func (server *Server) getAllDeployments(c *gin.Context) {
+	// TODO Implement function to get all the deployments.
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
+func (server *Server) getDeployment(c *gin.Context) {
 	// TODO Implement function to get current deployment
 
 	c.JSON(http.StatusNotFound, gin.H{
@@ -59,7 +71,8 @@ func (server Server) getDeployment(c *gin.Context) {
 	})
 }
 
-func (server Server) createDeployment(c *gin.Context) {
+func (server *Server) createDeployment(c *gin.Context) {
+	// FIXME document the structure of deployment in the doc file
 	var deployment awsecs.Deployment
 	if err := c.BindJSON(&deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -97,7 +110,7 @@ func (server Server) createDeployment(c *gin.Context) {
 
 }
 
-func (server Server) deleteDeployment(c *gin.Context) {
+func (server *Server) deleteDeployment(c *gin.Context) {
 	c.JSON(http.StatusNotFound, gin.H{
 		"error": false,
 		"data":  "",

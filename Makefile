@@ -19,3 +19,6 @@ test:
 
 build:
 	${GO_EXECUTABLE} build .
+
+dev-test: build
+	./deployer --config ./documents/dev.config
