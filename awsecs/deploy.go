@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 )
 
+// DeployedCluster stores the data of a cluster
 type DeployedCluster struct {
 	Name        *string
 	KeyPair     *ec2.CreateKeyPairOutput
@@ -26,6 +27,7 @@ type DeployedCluster struct {
 }
 
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+	// FIXME checke if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
 		ClusterName: aws.String("String"),
 	}
@@ -36,7 +38,7 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 
 	for _, taskDefinition := range deployment.TaskDefinitions {
 		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
-			glog.Errorf("Unable to register task definition", err)
+			glog.Errorln("Unable to register task definition", err)
 			DeleteDeployment(deployedCluster)
 			return err
 		}
@@ -85,7 +87,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 			UserData:     aws.String(userData),
 		})
 		if runErr != nil {
-			glog.Errorf("Unable to run ec2 instance %s: %s", node.Id, runErr)
+			glog.Errorln("Unable to run ec2 instance %s: %s", node.Id, runErr)
 			DeleteDeployment(deployedCluster)
 			return runErr
 		}
@@ -100,7 +102,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 			},
 		})
 		if tagErr != nil {
-			glog.Errorf("Could not create tags for instance", runResult.Instances[0].InstanceId, tagErr)
+			glog.Errorln("Could not create tags for instance", runResult.Instances[0].InstanceId, tagErr)
 			DeleteDeployment(deployedCluster)
 			return tagErr
 		}
@@ -120,9 +122,9 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 
 func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	for _, mapping := range deployment.NodeMapping {
-		instanceId, ok := deployedCluster.InstanceIds[mapping.Id]
+		instanceID, ok := deployedCluster.InstanceIds[mapping.Id]
 		if !ok {
-			err := fmt.Sprintf("Unable to find Node id %s in instance map", mapping.Id)
+			err := fmt.Sprintf("Unable to find Node id %d in instance map", mapping.Id)
 			glog.Error(err)
 			DeleteDeployment(deployedCluster)
 			return errors.New(err)
@@ -131,11 +133,11 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 		startTaskOutput, err := ecsSvc.StartTask(&ecs.StartTaskInput{
 			Cluster:            aws.String(deployment.Name),
 			TaskDefinition:     aws.String(mapping.Task),
-			ContainerInstances: []*string{instanceId},
+			ContainerInstances: []*string{instanceID},
 		})
 
 		if err != nil {
-			glog.Errorf("Unable to start task", mapping.Task, err)
+			glog.Errorf("Unable to start task %v\nError: %v", mapping.Task, err)
 			DeleteDeployment(deployedCluster)
 			return err
 		}
@@ -145,7 +147,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 			for _, failure := range startTaskOutput.Failures {
 				failureMessage += *failure.Reason + ", "
 			}
-			errorMessage := fmt.Sprintf("Failed to start task", mapping.Task, failureMessage)
+			errorMessage := fmt.Sprintf("Failed to start task %v\nMessage: %v", mapping.Task, failureMessage)
 			glog.Errorf(errorMessage)
 			DeleteDeployment(deployedCluster)
 			return errors.New(errorMessage)
@@ -155,10 +157,11 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	return nil
 }
 
+// CreateDeployment start a deployment
 func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedCluster, error) {
-	awsId := viper.GetString("awsId")
+	awsID := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
-	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
+	creds := credentials.NewStaticCredentials(awsID, awsSecret, "")
 	config := &aws.Config{
 		Region: aws.String(deployment.Region),
 	}
@@ -186,6 +189,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	return deployedCluster, nil
 }
 
+// DeleteDeployment clean up the cluster from AWS ECS.
 func DeleteDeployment(deployedCluster *DeployedCluster) error {
 
 	return nil
