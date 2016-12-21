@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/golang/glog"
 
@@ -29,7 +31,7 @@ type DeployedCluster struct {
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// FIXME checke if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
-		ClusterName: aws.String("String"),
+		ClusterName: aws.String("weave-ecs-demo-cluster"),
 	}
 
 	if _, err := ecsSvc.CreateCluster(clusterParams); err != nil {
@@ -44,6 +46,103 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 		}
 	}
 
+	return nil
+}
+
+func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+
+	// create vpc
+	vpcParams := &ec2.CreateVpcInput{
+		CidrBlock:                   aws.String("172.31.0.0/28"),
+		AmazonProvidedIpv6CidrBlock: aws.Bool(true),
+		DryRun:          aws.Bool(true),
+		InstanceTenancy: aws.String("Tenancy"),
+	}
+
+	resp, err := ec2Svc.CreateVpc(vpcParams)
+
+	if err != nil {
+		return err
+	}
+
+	vpcAttributeParams := &ec2.ModifyVpcAttributeInput{
+		VpcId: resp.Vpc.VpcId,
+		EnableDnsHostnames: &ec2.AttributeBooleanValue{
+			Value: aws.Bool(true),
+		},
+		EnableDnsSupport: &ec2.AttributeBooleanValue{
+			Value: aws.Bool(true),
+		},
+	}
+
+	if _, err = ec2Svc.ModifyVpcAttribute(vpcAttributeParams); err != nil {
+		return err
+	}
+
+	tagParams := &ec2.CreateTagsInput{
+		Resources: []*string{resp.Vpc.VpcId},
+		DryRun:    aws.Bool(true),
+		Tags: []*ec2.Tag{&ec2.Tag{
+			Key:   aws.String("Name"),
+			Value: aws.String("weave-ecs-demo-vpc"),
+		}},
+	}
+	if _, err = ec2Svc.CreateTags(tagParams); err != nil {
+		return err
+	}
+
+	// NOTE skip creating the subnet
+	// NOTE skip aws internet gateway
+
+	// create security group
+
+	securityGroupParams := &ec2.CreateSecurityGroupInput{
+		Description: aws.String("Weave Ecs Demo"), // Required
+		GroupName:   aws.String("weave-ecs-demo"), // Required
+		DryRun:      aws.Bool(true),
+		VpcId:       resp.Vpc.VpcId,
+	}
+	securityGroupResp, err := ec2Svc.CreateSecurityGroup(securityGroupParams)
+	if err != nil {
+		return err
+	}
+
+	// port 22, 80, 4040
+	portArr := []int{22, 80, 4040}
+
+	for _, port := range portArr {
+		securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
+			CidrIp:     aws.String("0.0.0.0/0"),
+			DryRun:     aws.Bool(true),
+			FromPort:   aws.Int64(int64(port)),
+			GroupId:    securityGroupResp.GroupId,
+			GroupName:  aws.String("weave-ecs-demo"),
+			IpProtocol: aws.String("tcp"),
+		}
+		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
+		if err != nil {
+			return err
+		}
+	}
+	// port 6783 tcp, 6783 udp, 6784 udp, 4040 tcp
+	portProtocolArr := []string{"6783-tcp", "6783-udp", "6784-udp", "4040-tcp"}
+
+	for _, item := range portProtocolArr {
+		i, _ := strconv.Atoi(strings.Split(item, "-")[0])
+		securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
+			DryRun:                     aws.Bool(true),
+			FromPort:                   aws.Int64(int64(i)),
+			GroupId:                    securityGroupResp.GroupId,
+			GroupName:                  aws.String("weave-ecs-demo"),
+			IpProtocol:                 aws.String(strings.Split(item, "-")[1]),
+			SourceSecurityGroupName:    aws.String("weave-ecs-demo"),
+			SourceSecurityGroupOwnerId: securityGroupResp.GroupId,
+		}
+		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -179,6 +278,10 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
 		return nil, err
 	}
+
+	ec2Svc := ec2.New(sess)
+	setNetwork(ec2Svc, deployedCluster)
+
 	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
 		return nil, err
 	}
