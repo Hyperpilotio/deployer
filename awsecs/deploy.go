@@ -31,7 +31,7 @@ type DeployedCluster struct {
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// FIXME checke if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
-		ClusterName: aws.String("weave-ecs-demo-cluster"),
+		ClusterName: aws.String(deployment.Name),
 	}
 
 	if _, err := ecsSvc.CreateCluster(clusterParams); err != nil {
@@ -49,7 +49,7 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 	return nil
 }
 
-func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 
 	// create vpc
 	vpcParams := &ec2.CreateVpcInput{
@@ -84,7 +84,7 @@ func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		DryRun:    aws.Bool(true),
 		Tags: []*ec2.Tag{&ec2.Tag{
 			Key:   aws.String("Name"),
-			Value: aws.String("weave-ecs-demo-vpc"),
+			Value: aws.String(deployment.Name + "-vpc"),
 		}},
 	}
 	if _, err = ec2Svc.CreateTags(tagParams); err != nil {
@@ -97,8 +97,8 @@ func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	// create security group
 
 	securityGroupParams := &ec2.CreateSecurityGroupInput{
-		Description: aws.String("Weave Ecs Demo"), // Required
-		GroupName:   aws.String("weave-ecs-demo"), // Required
+		Description: aws.String(deployment.Name), // Required
+		GroupName:   aws.String(deployment.Name), // Required
 		DryRun:      aws.Bool(true),
 		VpcId:       resp.Vpc.VpcId,
 	}
@@ -116,7 +116,7 @@ func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 			DryRun:     aws.Bool(true),
 			FromPort:   aws.Int64(int64(port)),
 			GroupId:    securityGroupResp.GroupId,
-			GroupName:  aws.String("weave-ecs-demo"),
+			GroupName:  aws.String(deployment.Name),
 			IpProtocol: aws.String("tcp"),
 		}
 		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
@@ -133,9 +133,9 @@ func setNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 			DryRun:                     aws.Bool(true),
 			FromPort:                   aws.Int64(int64(i)),
 			GroupId:                    securityGroupResp.GroupId,
-			GroupName:                  aws.String("weave-ecs-demo"),
+			GroupName:                  aws.String(deployment.Name),
 			IpProtocol:                 aws.String(strings.Split(item, "-")[1]),
-			SourceSecurityGroupName:    aws.String("weave-ecs-demo"),
+			SourceSecurityGroupName:    aws.String(deployment.Name),
 			SourceSecurityGroupOwnerId: securityGroupResp.GroupId,
 		}
 		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
@@ -280,7 +280,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	}
 
 	ec2Svc := ec2.New(sess)
-	setNetwork(ec2Svc, deployedCluster)
+	setupNetwork(deployment, ec2Svc, deployedCluster)
 
 	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
 		return nil, err
