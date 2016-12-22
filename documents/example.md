@@ -17,6 +17,8 @@ POST /v1/deployments
 body:
 {
   "name":"2",
+  "roleName": "2-role",
+  "scale": 7,
   "taskDefinitions": [{
     "containerDefinitions":[{}],
     "family": "snap"
@@ -31,7 +33,12 @@ body:
   "nodeMapping": [{
     "id": 1,
     "task": "snap:alpine"
-  }]
+  }],
+  "iamRole": {
+    "roleName": "weave-demo-role",
+    "policyName": "weave-demo-policy",
+    "policyDocument": "weave-demo-policy"
+  }
 }
 format: application/json
 ```

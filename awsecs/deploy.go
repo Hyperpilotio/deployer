@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 
+	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"github.com/aws/aws-sdk-go/service/iam"
@@ -22,10 +23,11 @@ import (
 
 // DeployedCluster stores the data of a cluster
 type DeployedCluster struct {
-	Name        *string
-	KeyPair     *ec2.CreateKeyPairOutput
-	Deployment  *Deployment
-	InstanceIds map[int]*string
+	Name            *string
+	KeyPair         *ec2.CreateKeyPairOutput
+	Deployment      *Deployment
+	SecurityGroupID *string
+	InstanceIds     map[int]*string
 }
 
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
@@ -38,13 +40,13 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 		return err
 	}
 
-	for _, taskDefinition := range deployment.TaskDefinitions {
-		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
-			glog.Errorln("Unable to register task definition", err)
-			DeleteDeployment(deployedCluster)
-			return err
-		}
-	}
+	// for _, taskDefinition := range deployment.TaskDefinitions {
+	// 	if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
+	// 		glog.Errorln("Unable to register task definition", err)
+	// 		DeleteDeployment(deployedCluster)
+	// 		return err
+	// 	}
+	// }
 
 	return nil
 }
@@ -84,7 +86,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		DryRun:    aws.Bool(true),
 		Tags: []*ec2.Tag{&ec2.Tag{
 			Key:   aws.String("Name"),
-			Value: aws.String(deployment.Name + "-vpc"),
+			Value: aws.String(deployment.Name),
 		}},
 	}
 	if _, err = ec2Svc.CreateTags(tagParams); err != nil {
@@ -106,6 +108,8 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	if err != nil {
 		return err
 	}
+
+	deployedCluster.SecurityGroupID = securityGroupResp.GroupId
 
 	// port 22, 80, 4040
 	portArr := []int{22, 80, 4040}
@@ -147,18 +151,6 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 }
 
 func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
-	iamSvc := iam.New(sess)
-
-	iamParams := &iam.CreateInstanceProfileInput{
-		InstanceProfileName: aws.String(deployment.Name),
-	}
-	_, err := iamSvc.CreateInstanceProfile(iamParams)
-	if err != nil {
-		glog.Errorf("Failed to create instance profile: %s", err)
-		DeleteDeployment(deployedCluster)
-		return err
-	}
-
 	ec2Svc := ec2.New(sess)
 
 	keyPairParams := &ec2.CreateKeyPairInput{
@@ -216,6 +208,118 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		InstanceIds: ids,
 	})
 
+	return nil
+}
+
+func setupIam(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+	iamSvc := iam.New(sess)
+
+	roleParams := &iam.CreateRoleInput{
+		AssumeRolePolicyDocument: aws.String(trustDocument),
+		RoleName:                 aws.String(deployment.RoleName),
+	}
+	// create IAM role
+	if _, err := iamSvc.CreateRole(roleParams); err != nil {
+		glog.Errorf("Failed to create AMI role: %s", err)
+		DeleteDeployment(deployedCluster)
+		return err
+	}
+	// create role policy
+	rolePolicyParams := &iam.PutRolePolicyInput{
+		RoleName:       aws.String(deployment.IamRole.RoleName),
+		PolicyName:     aws.String(deployment.IamRole.PolicyName),
+		PolicyDocument: aws.String(deployment.IamRole.PolicyDocument),
+	}
+
+	if _, err := iamSvc.PutRolePolicy(rolePolicyParams); err != nil {
+		glog.Errorf("Failed to put role policy: %s", err)
+		DeleteDeployment(deployedCluster)
+		return err
+	}
+
+	iamParams := &iam.CreateInstanceProfileInput{
+		InstanceProfileName: aws.String(deployment.Name),
+	}
+
+	if _, err := iamSvc.CreateInstanceProfile(iamParams); err != nil {
+		glog.Errorf("Failed to create instance profile: %s", err)
+		DeleteDeployment(deployedCluster)
+		return err
+	}
+
+	roleInstanceProfileParams := &iam.AddRoleToInstanceProfileInput{
+		InstanceProfileName: aws.String(deployment.Name),
+		RoleName:            aws.String(deployment.IamRole.RoleName),
+	}
+
+	if _, err := iamSvc.AddRoleToInstanceProfile(roleInstanceProfileParams); err != nil {
+		glog.Errorf("Failed to add role to instance profile: %s", err)
+		DeleteDeployment(deployedCluster)
+		return err
+	}
+
+	return nil
+}
+
+func setupAutoScaling(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+
+	svc := autoscaling.New(sess)
+
+	userData := base64.StdEncoding.EncodeToString([]byte(
+		`#!/bin/bash
+echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
+	params := &autoscaling.CreateLaunchConfigurationInput{
+		LaunchConfigurationName:  aws.String(deployment.Name), // Required
+		AssociatePublicIpAddress: aws.Bool(true),
+		EbsOptimized:             aws.Bool(true),
+		IamInstanceProfile:       aws.String(deployment.Name),
+		ImageId:                  aws.String(amiCollection[deployment.Region]),
+		InstanceMonitoring: &autoscaling.InstanceMonitoring{
+			Enabled: aws.Bool(false),
+		},
+		InstanceType: aws.String("t2.medium"),
+		KeyName:      aws.String(deployment.Name),
+		SecurityGroups: []*string{
+			deployedCluster.SecurityGroupID,
+		},
+		UserData: aws.String(userData),
+	}
+	_, err := svc.CreateLaunchConfiguration(params)
+
+	if err != nil {
+		return err
+	}
+
+	autoScalingGroupParams := &autoscaling.CreateAutoScalingGroupInput{
+		AutoScalingGroupName:    aws.String(deployment.Name),
+		MaxSize:                 aws.Int64(deployment.Scale),
+		MinSize:                 aws.Int64(deployment.Scale),
+		DefaultCooldown:         aws.Int64(1),
+		DesiredCapacity:         aws.Int64(deployment.Scale),
+		LaunchConfigurationName: aws.String(deployment.Name),
+		// NewInstancesProtectedFromScaleIn: aws.Bool(true),
+		// PlacementGroup:                   aws.String("XmlStringMaxLen255"),
+		// Tags: []*autoscaling.Tag{
+		// 	{ // Required
+		// 		Key:               aws.String("TagKey"), // Required
+		// 		PropagateAtLaunch: aws.Bool(true),
+		// 		ResourceId:        aws.String("XmlString"),
+		// 		ResourceType:      aws.String("XmlString"),
+		// 		Value:             aws.String("TagValue"),
+		// 	},
+		// },
+		// TargetGroupARNs: []*string{
+		// 	aws.String("XmlStringMaxLen511"), // Required
+		// },
+		// TerminationPolicies: []*string{
+		// 	aws.String("XmlStringMaxLen1600"), // Required
+		// },
+		// VPCZoneIdentifier: aws.String("XmlStringMaxLen2047"),
+	}
+
+	if _, err = svc.CreateAutoScalingGroup(autoScalingGroupParams); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -282,6 +386,13 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	ec2Svc := ec2.New(sess)
 	setupNetwork(deployment, ec2Svc, deployedCluster)
 
+	if err = setupIam(deployment, sess, deployedCluster); err != nil {
+		return nil, err
+	}
+
+	if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
+		return nil, err
+	}
 	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
 		return nil, err
 	}

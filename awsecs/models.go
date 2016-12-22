@@ -17,10 +17,19 @@ type ClusterDefinition struct {
 type Deployment struct {
 	Name              string                            `json:"name"`
 	Region            string                            `json:"region"`
+	Scale             int64                             `json:"scale"`
 	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
-	ClusterDefinition ClusterDefinition                 `from:"clusterDefinition" json:"clusterDefinition" binding:"required"`
+	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
 	NodeMapping       []struct {
 		Id   int    `json:"id"`
 		Task string `json:"task"`
-	} `from:"nodeMapping" json:"nodeMapping" binding:"required"`
+	} `form:"nodeMapping" json:"nodeMapping" binding:"required"`
+	IamRole `form:"iamRole" json:"iamRole" binding:"required"`
+}
+
+// IamRole store the information of iam role
+type IamRole struct {
+	RoleName       string `form:"roleName" json:"roleName" binding:"required"`
+	PolicyName     string `form:"policyName" json:"policyName" binding:"required"`
+	PolicyDocument string `form:"policyDocument" json:"policyDocument" binding:"required"`
 }
