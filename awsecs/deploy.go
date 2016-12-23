@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/golang/glog"
@@ -27,6 +26,7 @@ type DeployedCluster struct {
 	KeyPair         *ec2.CreateKeyPairOutput
 	Deployment      *Deployment
 	SecurityGroupID *string
+	SubnetID        *string
 	InstanceIds     map[int]*string
 }
 
@@ -40,28 +40,25 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 		return err
 	}
 
-	// for _, taskDefinition := range deployment.TaskDefinitions {
-	// 	if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
-	// 		glog.Errorln("Unable to register task definition", err)
-	// 		DeleteDeployment(deployedCluster)
-	// 		return err
-	// 	}
-	// }
+	for _, taskDefinition := range deployment.TaskDefinitions {
+		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
+			glog.Errorln("Unable to register task definition", err)
+			DeleteDeployment(deployedCluster)
+			return err
+		}
+	}
 
 	return nil
 }
 
 func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-
-	// create vpc
-	vpcParams := &ec2.CreateVpcInput{
+	glog.V(1).Infoln("Creating VPC")
+	resp, err := ec2Svc.CreateVpc(&ec2.CreateVpcInput{
 		CidrBlock:                   aws.String("172.31.0.0/28"),
 		AmazonProvidedIpv6CidrBlock: aws.Bool(true),
 		DryRun:          aws.Bool(true),
 		InstanceTenancy: aws.String("Tenancy"),
-	}
-
-	resp, err := ec2Svc.CreateVpc(vpcParams)
+	})
 
 	if err != nil {
 		return err
@@ -81,6 +78,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		return err
 	}
 
+	glog.V(1).Infoln("Tagging VPC with deployment name")
 	tagParams := &ec2.CreateTagsInput{
 		Resources: []*string{resp.Vpc.VpcId},
 		DryRun:    aws.Bool(true),
@@ -93,10 +91,18 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		return err
 	}
 
-	// NOTE skip creating the subnet
-	// NOTE skip aws internet gateway
+	createSubnetInput := &ec2.CreateSubnetInput{
+		VpcId:     resp.Vpc.VpcId,
+		CidrBlock: aws.String("172.31.0.0/28"),
+	}
+	subnetOutput, createSubnetErr := ec2Svc.CreateSubnet(createSubnetInput)
+	if createSubnetErr != nil {
+		return createSubnetErr
+	}
 
-	// create security group
+	deployedCluster.SubnetID = subnetOutput.Subnet.SubnetId
+
+	// NOTE skip aws internet gateway
 
 	securityGroupParams := &ec2.CreateSecurityGroupInput{
 		Description: aws.String(deployment.Name), // Required
@@ -104,6 +110,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		DryRun:      aws.Bool(true),
 		VpcId:       resp.Vpc.VpcId,
 	}
+	glog.V(1).Infoln("Creating security group")
 	securityGroupResp, err := ec2Svc.CreateSecurityGroup(securityGroupParams)
 	if err != nil {
 		return err
@@ -111,47 +118,44 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 
 	deployedCluster.SecurityGroupID = securityGroupResp.GroupId
 
-	// port 22, 80, 4040
-	portArr := []int{22, 80, 4040}
+	ports := make(map[int]string)
+	for _, port := range deployment.AllowedPorts {
+		ports[port] = "tcp"
+	}
+	// Open http and https by default
+	ports[22] = "tcp"
+	ports[80] = "tcp"
 
-	for _, port := range portArr {
-		securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
-			CidrIp:     aws.String("0.0.0.0/0"),
-			DryRun:     aws.Bool(true),
-			FromPort:   aws.Int64(int64(port)),
-			GroupId:    securityGroupResp.GroupId,
-			GroupName:  aws.String(deployment.Name),
-			IpProtocol: aws.String("tcp"),
-		}
-		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
-		if err != nil {
-			return err
+	// Also ports needed by Weave
+	ports[6783] = "tcp,udp"
+	ports[6784] = "udp"
+
+	glog.V(1).Infoln("Allowing ingress input")
+	for port, protocols := range ports {
+		for _, protocol := range strings.Split(protocols, ",") {
+			securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
+				CidrIp:     aws.String("0.0.0.0/0"),
+				DryRun:     aws.Bool(true),
+				FromPort:   aws.Int64(int64(port)),
+				GroupId:    securityGroupResp.GroupId,
+				GroupName:  aws.String(deployment.Name),
+				IpProtocol: aws.String(protocol),
+			}
+
+			_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	// port 6783 tcp, 6783 udp, 6784 udp, 4040 tcp
-	portProtocolArr := []string{"6783-tcp", "6783-udp", "6784-udp", "4040-tcp"}
 
-	for _, item := range portProtocolArr {
-		i, _ := strconv.Atoi(strings.Split(item, "-")[0])
-		securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
-			DryRun:                     aws.Bool(true),
-			FromPort:                   aws.Int64(int64(i)),
-			GroupId:                    securityGroupResp.GroupId,
-			GroupName:                  aws.String(deployment.Name),
-			IpProtocol:                 aws.String(strings.Split(item, "-")[1]),
-			SourceSecurityGroupName:    aws.String(deployment.Name),
-			SourceSecurityGroupOwnerId: securityGroupResp.GroupId,
-		}
-		_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
-		if err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
 func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	ec2Svc := ec2.New(sess)
+
+	setupNetwork(deployment, ec2Svc, deployedCluster)
 
 	keyPairParams := &ec2.CreateKeyPairInput{
 		KeyName: aws.String(deployment.Name),
@@ -170,15 +174,17 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 
 	for _, node := range deployment.ClusterDefinition.Nodes {
 		runResult, runErr := ec2Svc.RunInstances(&ec2.RunInstancesInput{
-			KeyName:      aws.String(*keyOutput.KeyName),
-			ImageId:      aws.String(node.ImageId),
-			InstanceType: aws.String(node.InstanceType),
-			MinCount:     aws.Int64(1),
-			MaxCount:     aws.Int64(1),
-			UserData:     aws.String(userData),
+			KeyName:        aws.String(*keyOutput.KeyName),
+			ImageId:        aws.String(node.ImageId),
+			SubnetId:       aws.String(*deployedCluster.SubnetID),
+			SecurityGroups: []*string{deployedCluster.SecurityGroupID},
+			InstanceType:   aws.String(node.InstanceType),
+			MinCount:       aws.Int64(1),
+			MaxCount:       aws.Int64(1),
+			UserData:       aws.String(userData),
 		})
 		if runErr != nil {
-			glog.Errorln("Unable to run ec2 instance %s: %s", node.Id, runErr)
+			glog.Errorln("Unable to run ec2 instance", node.Id, runErr)
 			DeleteDeployment(deployedCluster)
 			return runErr
 		}
@@ -211,7 +217,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 	return nil
 }
 
-func setupIam(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	iamSvc := iam.New(sess)
 
 	roleParams := &iam.CreateRoleInput{
@@ -262,12 +268,12 @@ func setupIam(deployment *Deployment, sess *session.Session, deployedCluster *De
 }
 
 func setupAutoScaling(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
-
 	svc := autoscaling.New(sess)
 
 	userData := base64.StdEncoding.EncodeToString([]byte(
 		`#!/bin/bash
 echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
+
 	params := &autoscaling.CreateLaunchConfigurationInput{
 		LaunchConfigurationName:  aws.String(deployment.Name), // Required
 		AssociatePublicIpAddress: aws.Bool(true),
@@ -383,16 +389,14 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 		return nil, err
 	}
 
-	ec2Svc := ec2.New(sess)
-	setupNetwork(deployment, ec2Svc, deployedCluster)
-
-	if err = setupIam(deployment, sess, deployedCluster); err != nil {
+	if err = setupIAM(deployment, sess, deployedCluster); err != nil {
 		return nil, err
 	}
 
-	if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
-		return nil, err
-	}
+	//if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
+	//	return nil, err
+	//}
+
 	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
 		return nil, err
 	}

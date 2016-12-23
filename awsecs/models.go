@@ -19,6 +19,7 @@ type Deployment struct {
 	Region            string                            `json:"region"`
 	Scale             int64                             `json:"scale"`
 	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+	AllowedPorts      []int                             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
 	NodeMapping       []struct {
 		Id   int    `json:"id"`
