@@ -31,7 +31,7 @@ type DeployedCluster struct {
 }
 
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	// FIXME checke if the cluster exists or not
+	// FIXME check if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
 		ClusterName: aws.String(deployment.Name),
 	}
@@ -230,11 +230,19 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 		DeleteDeployment(deployedCluster)
 		return err
 	}
+
+	var policyDoc *string
+	if deployment.IamRole.PolicyDocument != "" {
+		policyDoc = aws.String(deployment.IamRole.PolicyDocument)
+	} else {
+		policyDoc = aws.String(defaultRolePolicy)
+	}
+
 	// create role policy
 	rolePolicyParams := &iam.PutRolePolicyInput{
 		RoleName:       aws.String(deployment.IamRole.RoleName),
 		PolicyName:     aws.String(deployment.IamRole.PolicyName),
-		PolicyDocument: aws.String(deployment.IamRole.PolicyDocument),
+		PolicyDocument: policyDoc,
 	}
 
 	if _, err := iamSvc.PutRolePolicy(rolePolicyParams); err != nil {
@@ -303,23 +311,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		DefaultCooldown:         aws.Int64(1),
 		DesiredCapacity:         aws.Int64(deployment.Scale),
 		LaunchConfigurationName: aws.String(deployment.Name),
-		// NewInstancesProtectedFromScaleIn: aws.Bool(true),
-		// PlacementGroup:                   aws.String("XmlStringMaxLen255"),
-		// Tags: []*autoscaling.Tag{
-		// 	{ // Required
-		// 		Key:               aws.String("TagKey"), // Required
-		// 		PropagateAtLaunch: aws.Bool(true),
-		// 		ResourceId:        aws.String("XmlString"),
-		// 		ResourceType:      aws.String("XmlString"),
-		// 		Value:             aws.String("TagValue"),
-		// 	},
-		// },
-		// TargetGroupARNs: []*string{
-		// 	aws.String("XmlStringMaxLen511"), // Required
-		// },
-		// TerminationPolicies: []*string{
-		// 	aws.String("XmlStringMaxLen1600"), // Required
-		// },
+		// NOTE this fiedl is required once we have the function of setupVpc
 		// VPCZoneIdentifier: aws.String("XmlStringMaxLen2047"),
 	}
 
@@ -409,6 +401,17 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 
 // DeleteDeployment clean up the cluster from AWS ECS.
 func DeleteDeployment(deployedCluster *DeployedCluster) error {
-
+	// TODO check region of the deployment is defined
+	// TODO stop all the ecs tasks
+	// TODO delete all the task definitions
+	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
+	// Delete the launch configuration
+	// TODO delete IAM role
+	// TODO delete key pair
+	// TODO delete security group
+	// NOTE we don't have internet gateway and subnet. We can ignore them until we have them.
+	// TODO Delete vpc
+	// TODO Delete ecs cluster
 	return nil
+
 }
