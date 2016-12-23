@@ -1,8 +1,8 @@
-hash: 9ef195bcec4320e0146f36ef050fbd6d1cb2003ab930eb5a2cef50fa6aebfa01
-updated: 2016-12-17T22:29:00.904958054+08:00
+hash: e0aa692ae531eabc22f5ffdbeb03e72d5a4e51ddc0f4d199455e725df581a6da
+updated: 2016-12-23T22:02:53.976830809+08:00
 imports:
 - name: github.com/aws/aws-sdk-go
-  version: 0df2a7ae7e82d2643e4a8fed1b2e36a1cf0580bc
+  version: 1e6377549087b490b693300bce2c5e286dc87740
   subpackages:
   - aws
   - aws/awserr
@@ -29,6 +29,7 @@ imports:
   - private/protocol/rest
   - private/protocol/xml/xmlutil
   - private/waiter
+  - service/autoscaling
   - service/ec2
   - service/ecs
   - service/iam
@@ -59,6 +60,10 @@ imports:
   - json/parser
   - json/scanner
   - json/token
+- name: github.com/hyperpilotio/deployer
+  version: 5419b14199ea4aff12182009f2d87b624bb0fb7f
+  subpackages:
+  - awsecs
 - name: github.com/jmespath/go-jmespath
   version: bd40a432e4c76585ef6b72d3fd96fb9b6dc7b68d
 - name: github.com/magiconair/properties
