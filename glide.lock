@@ -60,10 +60,6 @@ imports:
   - json/parser
   - json/scanner
   - json/token
-- name: github.com/hyperpilotio/deployer
-  version: 5419b14199ea4aff12182009f2d87b624bb0fb7f
-  subpackages:
-  - awsecs
 - name: github.com/jmespath/go-jmespath
   version: bd40a432e4c76585ef6b72d3fd96fb9b6dc7b68d
 - name: github.com/magiconair/properties

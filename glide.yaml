@@ -1,4 +1,4 @@
-package: github.com/Hyperpilotio/deployer
+package: github.com/hyperpilotio/deployer
 import:
 - package: github.com/aws/aws-sdk-go
   version: ~1.6.4
