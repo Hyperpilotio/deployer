@@ -19,7 +19,8 @@ type Server struct {
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config: config,
+		Config:           config,
+		DeployedClusters: make(map[string]*awsecs.DeployedCluster),
 	}
 }
 
@@ -54,21 +55,25 @@ func (server *Server) updateDeployment(c *gin.Context) {
 }
 
 func (server *Server) getAllDeployments(c *gin.Context) {
-	// TODO Implement function to get all the deployments.
 
-	c.JSON(http.StatusNotFound, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "",
+		"data":  server.DeployedClusters,
 	})
 }
 
 func (server *Server) getDeployment(c *gin.Context) {
-	// TODO Implement function to get current deployment
-
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": false,
-		"data":  "",
-	})
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		c.JSON(http.StatusOK, gin.H{
+			"error": false,
+			"data":  data,
+		})
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
 }
 
 func (server *Server) createDeployment(c *gin.Context) {
@@ -111,8 +116,19 @@ func (server *Server) createDeployment(c *gin.Context) {
 }
 
 func (server *Server) deleteDeployment(c *gin.Context) {
-	c.JSON(http.StatusNotFound, gin.H{
-		"error": false,
-		"data":  "",
-	})
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+
+		// TODO create a batch job to delete the deployment
+		awsecs.DeleteDeployment(data)
+
+		c.JSON(http.StatusAccepted, gin.H{
+			"error": false,
+			"data":  "Deleting " + *data.Name,
+		})
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
 }
