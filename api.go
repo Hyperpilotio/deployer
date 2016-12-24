@@ -216,8 +216,11 @@ func (server *Server) createDeployment(c *gin.Context) {
 func (server *Server) deleteDeployment(c *gin.Context) {
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 
+		server.mutex.Lock()
+		defer server.mutex.Unlock()
+
 		// TODO create a batch job to delete the deployment
-		awsecs.DeleteDeployment(data)
+		_ = awsecs.DeleteDeployment(server.Config, data)
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
