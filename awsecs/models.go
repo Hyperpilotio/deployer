@@ -30,7 +30,5 @@ type Deployment struct {
 
 // IamRole store the information of iam role
 type IamRole struct {
-	RoleName       string `form:"roleName" json:"roleName" binding:"required"`
-	PolicyName     string `form:"policyName" json:"policyName" binding:"required"`
 	PolicyDocument string `form:"policyDocument" json:"policyDocument"`
 }

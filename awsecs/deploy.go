@@ -30,6 +30,18 @@ type DeployedCluster struct {
 	InstanceIds     map[int]*string
 }
 
+func (deployedCluster *DeployedCluster) KeyName() string {
+	return deployedCluster.Deployment.Name + "-key"
+}
+
+func (deployedCluster *DeployedCluster) PolicyName() string {
+	return deployedCluster.Deployment.Name + "-policy"
+}
+
+func (deployedCluster *DeployedCluster) RoleName() string {
+	return deployedCluster.Deployment.Name + "-role"
+}
+
 func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// FIXME check if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
@@ -37,14 +49,13 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 	}
 
 	if _, err := ecsSvc.CreateCluster(clusterParams); err != nil {
-		return err
+		return errors.New("Failed to create cluster: " + err.Error())
 	}
 
 	for _, taskDefinition := range deployment.TaskDefinitions {
 		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
-			glog.Errorln("Unable to register task definition", err)
 			DeleteDeployment(deployedCluster)
-			return err
+			return errors.New("Unable to register task definition: " + err.Error())
 		}
 	}
 
@@ -56,12 +67,10 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	resp, err := ec2Svc.CreateVpc(&ec2.CreateVpcInput{
 		CidrBlock:                   aws.String("172.31.0.0/28"),
 		AmazonProvidedIpv6CidrBlock: aws.Bool(true),
-		DryRun:          aws.Bool(true),
-		InstanceTenancy: aws.String("Tenancy"),
 	})
 
 	if err != nil {
-		return err
+		return errors.New("Unable to create VPC: " + err.Error())
 	}
 
 	vpcAttributeParams := &ec2.ModifyVpcAttributeInput{
@@ -75,20 +84,19 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	}
 
 	if _, err = ec2Svc.ModifyVpcAttribute(vpcAttributeParams); err != nil {
-		return err
+		return errors.New("Unable to modify VPC attribute: " + err.Error())
 	}
 
 	glog.V(1).Infoln("Tagging VPC with deployment name")
 	tagParams := &ec2.CreateTagsInput{
 		Resources: []*string{resp.Vpc.VpcId},
-		DryRun:    aws.Bool(true),
 		Tags: []*ec2.Tag{&ec2.Tag{
 			Key:   aws.String("Name"),
 			Value: aws.String(deployment.Name),
 		}},
 	}
 	if _, err = ec2Svc.CreateTags(tagParams); err != nil {
-		return err
+		return errors.New("Unable to tag VPC: " + err.Error())
 	}
 
 	createSubnetInput := &ec2.CreateSubnetInput{
@@ -97,7 +105,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	}
 	subnetOutput, createSubnetErr := ec2Svc.CreateSubnet(createSubnetInput)
 	if createSubnetErr != nil {
-		return createSubnetErr
+		return errors.New("Unable to create subnet: " + createSubnetErr.Error())
 	}
 
 	deployedCluster.SubnetID = subnetOutput.Subnet.SubnetId
@@ -107,13 +115,12 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	securityGroupParams := &ec2.CreateSecurityGroupInput{
 		Description: aws.String(deployment.Name), // Required
 		GroupName:   aws.String(deployment.Name), // Required
-		DryRun:      aws.Bool(true),
 		VpcId:       resp.Vpc.VpcId,
 	}
 	glog.V(1).Infoln("Creating security group")
 	securityGroupResp, err := ec2Svc.CreateSecurityGroup(securityGroupParams)
 	if err != nil {
-		return err
+		return errors.New("Unable to create security group: " + err.Error())
 	}
 
 	deployedCluster.SecurityGroupID = securityGroupResp.GroupId
@@ -135,7 +142,6 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		for _, protocol := range strings.Split(protocols, ",") {
 			securityGroupIngressParams := &ec2.AuthorizeSecurityGroupIngressInput{
 				CidrIp:     aws.String("0.0.0.0/0"),
-				DryRun:     aws.Bool(true),
 				FromPort:   aws.Int64(int64(port)),
 				GroupId:    securityGroupResp.GroupId,
 				GroupName:  aws.String(deployment.Name),
@@ -144,7 +150,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 
 			_, err = ec2Svc.AuthorizeSecurityGroupIngress(securityGroupIngressParams)
 			if err != nil {
-				return err
+				return errors.New("Unable to authorize security group ingress: " + err.Error())
 			}
 		}
 	}
@@ -155,16 +161,17 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	ec2Svc := ec2.New(sess)
 
-	setupNetwork(deployment, ec2Svc, deployedCluster)
+	if err := setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
+		return err
+	}
 
 	keyPairParams := &ec2.CreateKeyPairInput{
-		KeyName: aws.String(deployment.Name),
+		KeyName: aws.String(deployedCluster.KeyName()),
 	}
 	keyOutput, keyErr := ec2Svc.CreateKeyPair(keyPairParams)
 	if keyErr != nil {
-		glog.Errorf("Failed to create key pair: %s", keyErr)
 		DeleteDeployment(deployedCluster)
-		return keyErr
+		return errors.New("Unable to create key pair: " + keyErr.Error())
 	}
 
 	deployedCluster.KeyPair = keyOutput
@@ -222,27 +229,27 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 
 	roleParams := &iam.CreateRoleInput{
 		AssumeRolePolicyDocument: aws.String(trustDocument),
-		RoleName:                 aws.String(deployment.RoleName),
+		RoleName:                 aws.String(deployedCluster.RoleName()),
 	}
 	// create IAM role
 	if _, err := iamSvc.CreateRole(roleParams); err != nil {
-		glog.Errorf("Failed to create AMI role: %s", err)
+		glog.Errorf("Failed to create IAM role: %s", err)
 		DeleteDeployment(deployedCluster)
 		return err
 	}
 
-	var policyDoc *string
+	var policyDocument *string
 	if deployment.IamRole.PolicyDocument != "" {
-		policyDoc = aws.String(deployment.IamRole.PolicyDocument)
+		policyDocument = aws.String(deployment.IamRole.PolicyDocument)
 	} else {
-		policyDoc = aws.String(defaultRolePolicy)
+		policyDocument = aws.String(defaultRolePolicy)
 	}
 
 	// create role policy
 	rolePolicyParams := &iam.PutRolePolicyInput{
-		RoleName:       aws.String(deployment.IamRole.RoleName),
-		PolicyName:     aws.String(deployment.IamRole.PolicyName),
-		PolicyDocument: policyDoc,
+		RoleName:       aws.String(deployedCluster.RoleName()),
+		PolicyName:     aws.String(deployedCluster.PolicyName()),
+		PolicyDocument: policyDocument,
 	}
 
 	if _, err := iamSvc.PutRolePolicy(rolePolicyParams); err != nil {
@@ -263,7 +270,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 
 	roleInstanceProfileParams := &iam.AddRoleToInstanceProfileInput{
 		InstanceProfileName: aws.String(deployment.Name),
-		RoleName:            aws.String(deployment.IamRole.RoleName),
+		RoleName:            aws.String(deployedCluster.RoleName()),
 	}
 
 	if _, err := iamSvc.AddRoleToInstanceProfile(roleInstanceProfileParams); err != nil {
@@ -378,11 +385,11 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	}
 	ecsSvc := ecs.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
-		return nil, err
+		return nil, errors.New("Failed to setup ECS: " + err.Error())
 	}
 
 	if err = setupIAM(deployment, sess, deployedCluster); err != nil {
-		return nil, err
+		return nil, errors.New("Failed to setup IAM: " + err.Error())
 	}
 
 	//if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
@@ -390,10 +397,10 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment) (*DeployedClus
 	//}
 
 	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
-		return nil, err
+		return nil, errors.New("Failed to setup EC2: " + err.Error())
 	}
 	if err = launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
-		return nil, err
+		return nil, errors.New("Failed to launch ECS tasks: " + err.Error())
 	}
 
 	return deployedCluster, nil
