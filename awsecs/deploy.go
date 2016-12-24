@@ -39,14 +39,17 @@ type DeployedCluster struct {
 	InstanceIds       []*string
 }
 
+// KeyName return a key name according to the Deployment.Name with suffix "-key"
 func (deployedCluster *DeployedCluster) KeyName() string {
 	return deployedCluster.Deployment.Name + "-key"
 }
 
+// PolicyName return a key name according to the Deployment.Name with suffix "-policy"
 func (deployedCluster *DeployedCluster) PolicyName() string {
 	return deployedCluster.Deployment.Name + "-policy"
 }
 
+// RoleName return a key name according to the Deployment.Name with suffix "-role"
 func (deployedCluster *DeployedCluster) RoleName() string {
 	return deployedCluster.Deployment.Name + "-role"
 }
@@ -632,6 +635,9 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	awsId := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
 	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
+	if !validateRegion(deployment) {
+		return nil, errors.New("Region is invalidate.")
+	}
 	config := &aws.Config{
 		Region: aws.String(deployment.Region),
 	}
@@ -674,9 +680,24 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	return nil
 }
 
+func validateRegion(d *Deployment) bool {
+	if _, ok := amiCollection[d.Region]; ok {
+		return true
+	}
+
+	keys := []string{}
+	for key := range amiCollection {
+		keys = append(keys, key)
+	}
+	glog.Errorf("The region of deployment is using %s, which doesn't offer ECS yet, please set it to one from: %v", d.Region, keys)
+	return false
+}
+
 // DeleteDeployment clean up the cluster from AWS ECS.
 func DeleteDeployment(deployedCluster *DeployedCluster) error {
-	// TODO check region of the deployment is defined
+	if !validateRegion(deployedCluster.Deployment) {
+		return errors.New("Region is invalidate.")
+	}
 	// TODO stop all the ecs tasks
 	// TODO delete all the task definitions
 	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
