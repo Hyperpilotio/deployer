@@ -1,10 +1,9 @@
 package main
 
 import (
-	"os"
+	"flag"
 
 	"github.com/spf13/viper"
-	cli "github.com/urfave/cli"
 )
 
 // Run start the web server
@@ -28,22 +27,8 @@ func Run(fileConfig string) error {
 }
 
 func main() {
-	var fileConfig string
-	// Parse parameters from command line input.
-	app := cli.NewApp()
-	app.Name = "deployer"
-	app.Usage = "Pilot for deploying environments and workloads"
-	// Global flags
-	app.Flags = []cli.Flag{
-		cli.StringFlag{
-			Name:        "config",
-			Usage:       "The file path to a config file",
-			Destination: &fileConfig,
-		},
-	}
-	app.Action = func(c *cli.Context) error {
-		return Run(fileConfig)
-	}
+	configPath := flag.String("config", "", "The file path to a config file")
+	flag.Parse()
 
-	app.Run(os.Args)
+	Run(*configPath)
 }

@@ -22,8 +22,9 @@ type Deployment struct {
 	AllowedPorts      []int                             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
 	NodeMapping       []struct {
-		Id   int    `json:"id"`
-		Task string `json:"task"`
+		Count int    `json:"count"`
+		Id    int    `json:"id"`
+		Task  string `json:"task"`
 	} `form:"nodeMapping" json:"nodeMapping" binding:"required"`
 	IamRole `form:"iamRole" json:"iamRole" binding:"required"`
 }

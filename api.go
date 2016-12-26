@@ -98,7 +98,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	deployedCluster, err := awsecs.CreateDeployment(server.Config, &deployment)
+	deployedCluster := awsecs.NewDeployedCluster(&deployment)
+	// Move this after succesfuly deployment when things are working...
+	server.DeployedClusters[deployment.Name] = deployedCluster
+	err := awsecs.CreateDeployment(server.Config, &deployment, deployedCluster)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -106,7 +109,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.DeployedClusters[deployment.Name] = deployedCluster
+	//server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
@@ -123,7 +126,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
-			"data":  "Deleting " + *data.Name,
+			"data":  "Deleting " + data.Name,
 		})
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
