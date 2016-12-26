@@ -177,7 +177,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if err := c.BindJSON(&deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Error deserializing deployment: " + string(err.Error()),
+			"data":  "Error deserializing deployment: " + err.Error(),
 		})
 		return
 	}
@@ -200,7 +200,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to create deployment: " + string(err.Error()),
+			"data":  "Unable to create deployment: " + err.Error(),
 		})
 		return
 	}
