@@ -159,7 +159,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 
 	attachInternetInput := &ec2.AttachInternetGatewayInput{
 		InternetGatewayId: aws.String(deployedCluster.InternetGatewayId),
-		VpcId:             aws.String(vpcId),
+		VpcId:             aws.String(deployedCluster.VpcId),
 	}
 
 	if _, err := ec2Svc.AttachInternetGateway(attachInternetInput); err != nil {
@@ -171,7 +171,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		return errors.New("Unable to describe route tables: " + err.Error())
 	} else {
 		for _, routeTable := range describeRoutesOutput.RouteTables {
-			if *routeTable.VpcId == vpcId {
+			if *routeTable.VpcId == deployedCluster.VpcId {
 				routeTableId = *routeTable.RouteTableId
 				break
 			}
@@ -346,7 +346,6 @@ weave launch`, deployment.Name)))
 		})
 
 		if runErr != nil {
-			DeleteDeployment(deployedCluster)
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
@@ -642,10 +641,12 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	ecsSvc := ecs.New(sess)
 	ec2Svc := ec2.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup ECS: " + err.Error())
 	}
 
 	if err = setupIAM(deployment, sess, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
@@ -655,10 +656,12 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	//}
 
 	if err = setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
 		return err
 	}
 
 	if err = setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
@@ -667,6 +670,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	}
 
 	if err = launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to launch ECS tasks: " + err.Error())
 	}
 
@@ -689,18 +693,26 @@ func validateRegion(d *Deployment) bool {
 func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	var errMsg string
 
-	for _, mapping := range deployedCluster.Deployment.NodeMapping {
+	params := &ecs.ListTasksInput{
+		Cluster: aws.String(deployedCluster.Name),
+	}
+	resp, err := svc.ListTasks(params)
+	if err != nil {
+		glog.Errorln("Failed to list tasks.")
+		return err
+	}
+
+	for _, task := range resp.TaskArns {
 		stopTaskParams := &ecs.StopTaskInput{
-			Task:    aws.String(mapping.Task), // Required
-			Cluster: aws.String(deployedCluster.Name),
-			Reason:  aws.String("Gracefully stop by hyperpilot/deployer."),
+			Task:   task,
+			Reason: aws.String("Gracefully stop by hyperpilot/deployer."),
 		}
 
 		// NOTE Should we store the output of svc.StopTask ?
 		// https://docs.aws.amazon.com/sdk-for-go/api/service/ecs/#StopTaskOutput
 		_, err := svc.StopTask(stopTaskParams)
 		if err != nil {
-			errMsg = fmt.Sprintf("%sFailed to stop task %s\nMessage %s\n", errMsg, mapping.Task, err.Error())
+			errMsg = fmt.Sprintf("%sFailed to stop task %s\nMessage %s\n", errMsg, *task, err.Error())
 		}
 	}
 
@@ -714,14 +726,27 @@ func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	var errStriing string
 	var tasks []*string
+
 	for _, taskDefinition := range deployedCluster.Deployment.TaskDefinitions {
 		for _, container := range taskDefinition.ContainerDefinitions {
-			tasks = append(tasks, container.Name)
+			if container.Name == nil {
+				continue
+			}
+			params := &ecs.DescribeTaskDefinitionInput{
+				TaskDefinition: container.Name,
+			}
+			resp, err := ecsSvc.DescribeTaskDefinition(params)
+			if err != nil {
+				errStriing = fmt.Sprintf("%sUnable to describe task : %v\n\n", errStriing, err.Error())
+				continue
+			}
+			tasks = append(tasks, resp.TaskDefinition.TaskDefinitionArn)
 		}
 	}
+
 	for _, task := range tasks {
 		if _, err := ecsSvc.DeregisterTaskDefinition(&ecs.DeregisterTaskDefinitionInput{TaskDefinition: task}); err != nil {
-			errStriing = fmt.Sprintf("Unable to register task definition: %v\n\n", err.Error())
+			errStriing = fmt.Sprintf("%sUnable to register task definition: %v\n\n", errStriing, err.Error())
 		}
 	}
 
@@ -805,7 +830,7 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) erro
 func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 
 	params := &ec2.DeleteVpcInput{
-		VpcId: deployedCluster.VpcId,
+		VpcId: aws.String(deployedCluster.VpcId),
 	}
 
 	if _, err := ec2Svc.DeleteVpc(params); err != nil {
@@ -818,7 +843,7 @@ func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 
 	params := &ecs.DeleteClusterInput{
-		Cluster: deployedCluster.Name,
+		Cluster: aws.String(deployedCluster.Name),
 	}
 
 	if _, err := ecsSvc.DeleteCluster(params); err != nil {
