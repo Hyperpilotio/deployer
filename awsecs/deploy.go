@@ -302,15 +302,24 @@ weave launch`, deployment.Name)))
 		},
 	}
 
+	describeInstancesInput := &ec2.DescribeInstancesInput{
+		InstanceIds: ids,
+	}
+
+	glog.V(1).Infof("Waitng for %d EC2 instances to exist", len(ids))
+	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
+		return errors.New("Unable to wait for ec2 instances to exist: " + err.Error())
+	}
+
 	if err := createTags(ec2Svc, ids, tags); err != nil {
 		DeleteDeployment(deployedCluster)
 		return errors.New("Unable to create tags for instances: " + err.Error())
 	}
 
 	glog.V(1).Infof("Waitng for %d EC2 instances to launch", len(ids))
-	ec2Svc.WaitUntilInstanceRunning(&ec2.DescribeInstancesInput{
-		InstanceIds: ids,
-	})
+	if err := ec2Svc.WaitUntilInstanceRunning(describeInstancesInput); err != nil {
+		return errors.New("Unable to wait for ec2 instances be running: " + err.Error())
+	}
 
 	return nil
 }
