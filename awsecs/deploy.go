@@ -762,6 +762,7 @@ func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) er
 	}
 
 	if errStriing != "" {
+		glog.Errorf(errStriing)
 		return errors.New(errStriing)
 	}
 
@@ -887,8 +888,13 @@ func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		}
 		_, err := ec2Svc.DeleteSubnet(params)
 		if err != nil {
-			errMsg = fmt.Sprintf("%sFailed to delete security group (%s) %s\n\n", errMsg, *subnet.ResourceId, err.Error())
+			errMsg = fmt.Sprintf("%sFailed to delete subnet (%s) %s\n\n", errMsg, *subnet.ResourceId, err.Error())
 		}
+	}
+
+	if errMsg != "" {
+		glog.Errorf("%s", errMsg)
+		return errors.New(errMsg)
 	}
 
 	return nil
@@ -901,7 +907,7 @@ func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 				{
 					Name: aws.String("resource-type"),
 					Values: []*string{
-						aws.String("vpc"), // Required
+						aws.String("vpc"),
 					},
 				},
 				{
@@ -928,7 +934,6 @@ func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 }
 
 func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-
 	params := &ec2.DescribeTagsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -948,11 +953,13 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 
 	resp, err := ec2Svc.DescribeTags(params)
 	if err != nil {
-		return err
+		glog.Errorf("Unable to describe tags: " + err.Error())
+		return errors.New("Unable to describe tags: " + err.Error())
+
 	}
 
 	if len(resp.Tags) == 0 {
-		return errors.New("Can not find the internet gateway")
+		return errors.New("Unable to find the internet gateway")
 	}
 
 	detachGatewayParams := &ec2.DetachInternetGatewayInput{
@@ -960,6 +967,7 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 		VpcId:             aws.String(deployedCluster.VpcId),
 	}
 	if _, err := ec2Svc.DetachInternetGateway(detachGatewayParams); err != nil {
+		glog.Errorf("Unable to detach InternetGateway: " + err.Error())
 		return err
 	}
 
@@ -967,7 +975,7 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 		InternetGatewayId: resp.Tags[0].ResourceId,
 	}
 	if _, err := ec2Svc.DeleteInternetGateway(deleteGatewayParams); err != nil {
-		glog.Errorf("Failed to delete internet gateway: %s", err.Error())
+		glog.Errorf("Unable to delete internet gateway: %s", err.Error())
 		return err
 	}
 
@@ -975,7 +983,6 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 }
 
 func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-
 	params := &ec2.DeleteVpcInput{
 		VpcId: aws.String(deployedCluster.VpcId),
 	}
@@ -999,7 +1006,7 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	if _, err := ec2Svc.TerminateInstances(params); err != nil {
-		glog.Errorf("Failed to terminate EC2 instance: %s", err.Error())
+		glog.Errorf("Unable to terminate EC2 instance: %s", err.Error())
 		return err
 	}
 
@@ -1008,13 +1015,13 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
+		glog.Errorf("Unable to wait until EC2 instance terminated: %s", err.Error())
 		return err
 	}
 	return nil
 }
 
 func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-
 	params := &ecs.DeleteClusterInput{
 		Cluster: aws.String(deployedCluster.Name),
 	}
@@ -1066,7 +1073,10 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) erro
 	}
 
 	// Terminate EC2 instance
-	deleteEC2(ec2Svc, deployedCluster)
+	err = deleteEC2(ec2Svc, deployedCluster)
+	if err != nil {
+		glog.Errorf("Failed to delete task definitions: %s", err)
+	}
 
 	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
 	// Delete the launch configuration
@@ -1111,6 +1121,8 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) erro
 	err = deleteCluster(ecsSvc, deployedCluster)
 	if err != nil {
 		glog.Errorf("Failed to delete ECS cluster: %s", err)
+		return err
 	}
+
 	return nil
 }
