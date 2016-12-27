@@ -220,12 +220,21 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		defer server.mutex.Unlock()
 
 		// TODO create a batch job to delete the deployment
-		_ = awsecs.DeleteDeployment(server.Config, data)
+		err := awsecs.DeleteDeployment(server.Config, data)
 
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  "Deleting " + data.Name,
-		})
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  err.Error(),
+			})
+
+		} else {
+			c.JSON(http.StatusAccepted, gin.H{
+				"error": false,
+				"data":  "Deleting " + data.Name,
+			})
+		}
+
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
