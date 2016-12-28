@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 
+	"github.com/golang/glog"
+
 	"github.com/spf13/viper"
 )
 
@@ -31,5 +33,7 @@ func main() {
 	configPath := flag.String("config", "", "The file path to a config file")
 	flag.Parse()
 
-	Run(*configPath)
+	err := Run(*configPath)
+	glog.Errorln(err)
+
 }

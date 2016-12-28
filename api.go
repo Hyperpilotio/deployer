@@ -36,6 +36,10 @@ func NewServer(config *viper.Viper) *Server {
 
 // StartServer start a web server
 func (server *Server) StartServer() error {
+	if server.Config.GetString("filesPath") == "" {
+		return errors.New("filesPath is not specified in the configuration file.")
+	}
+
 	if err := os.Mkdir(server.Config.GetString("filesPath"), 0755); err != nil {
 		if !os.IsExist(err) {
 			return errors.New("Unable to create filesPath directory: " + err.Error())
@@ -177,7 +181,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if err := c.BindJSON(&deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Error deserializing deployment: " + string(err.Error()),
+			"data":  "Error deserializing deployment: " + err.Error(),
 		})
 		return
 	}
@@ -200,7 +204,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to create deployment: " + string(err.Error()),
+			"data":  "Unable to create deployment: " + err.Error(),
 		})
 		return
 	}
@@ -214,15 +218,27 @@ func (server *Server) createDeployment(c *gin.Context) {
 }
 
 func (server *Server) deleteDeployment(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 
 		// TODO create a batch job to delete the deployment
-		awsecs.DeleteDeployment(data)
+		err := awsecs.DeleteDeployment(server.Config, data)
 
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  "Deleting " + data.Name,
-		})
+		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  err.Error(),
+			})
+		} else {
+			delete(server.DeployedClusters, c.Param("deployment"))
+			c.JSON(http.StatusAccepted, gin.H{
+				"error": false,
+				"data":  "Deleting " + data.Name,
+			})
+		}
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,

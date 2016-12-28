@@ -15,8 +15,8 @@ type ClusterDefinition struct {
 
 // Deployment storing the information of a deployment
 type Deployment struct {
-	Name   string `json:"name"`
-	Region string `json:"region"`
+	Name   string `form:"name" json:"name" binding:"required"`
+	Region string `form:"region" json:"region" binding:"required"`
 	Scale  int64  `json:"scale"`
 	Files  []struct {
 		FileId string `json:"fileId"`

@@ -10,8 +10,17 @@ var trustDocument = `{
 }`
 
 // aws-region:weave-ami
-// FIXME fild in records of weave ami
-var amiCollection = map[string]string{}
+var amiCollection = map[string]string{
+	"us-east-1":      "ami-c63709d1",
+	"us-east-2":      "ami-4788d222",
+	"us-west-1":      "ami-28e7b348",
+	"us-west-2":      "ami-c62f81a6",
+	"eu-west-1":      "ami-25adf356",
+	"eu-central-1":   "ami-7fd31410",
+	"ap-northeast-1": "ami-cb1eafaa",
+	"ap-southeast-1": "ami-35822f56",
+	"ap-southeast-2": "ami-06300965",
+}
 
 var defaultRolePolicy = `{
     "Version": "2012-10-17",
