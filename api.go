@@ -214,27 +214,27 @@ func (server *Server) createDeployment(c *gin.Context) {
 }
 
 func (server *Server) deleteDeployment(c *gin.Context) {
-	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 
-		server.mutex.Lock()
-		defer server.mutex.Unlock()
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 
 		// TODO create a batch job to delete the deployment
 		err := awsecs.DeleteDeployment(server.Config, data)
 
+		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
 				"data":  err.Error(),
 			})
-
 		} else {
+			delete(server.DeployedClusters, c.Param("deployment"))
 			c.JSON(http.StatusAccepted, gin.H{
 				"error": false,
 				"data":  "Deleting " + data.Name,
 			})
 		}
-
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
