@@ -393,7 +393,6 @@ weave launch`, deployment.Name)))
 	// We are trying to tag before it's running as weave requires the tag to function,
 	// so the earlier we tag the better chance we have to see the cluster ready in ECS
 	if err := createTags(ec2Svc, deployedCluster.InstanceIds, tags); err != nil {
-		DeleteDeployment(deployedCluster)
 		return errors.New("Unable to create tags for instances: " + err.Error())
 	}
 
@@ -609,7 +608,6 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 			startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
 			if err != nil {
 				startTaskErr := fmt.Sprintf("Unable to start task %v\nError: %v", mapping.Task, err)
-				DeleteDeployment(deployedCluster)
 				return errors.New(startTaskErr)
 			}
 
@@ -847,7 +845,10 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) erro
 		},
 	}
 
-	resp, _ := ec2Svc.DescribeSecurityGroups(describeParams)
+	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
+	}
 
 	for _, group := range resp.SecurityGroups {
 		params := &ec2.DeleteSecurityGroupInput{
@@ -995,7 +996,7 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	var instanceIds []*string
 
 	for _, id := range deployedCluster.InstanceIds {
-		instanceIds = append(instanceIds, aws.String(id))
+		instanceIds = append(instanceIds, id)
 	}
 
 	params := &ec2.TerminateInstancesInput{
