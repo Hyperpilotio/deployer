@@ -151,6 +151,8 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 		CidrBlock: aws.String("172.31.0.0/28"),
 	}
 
+	// NOTE Unhandled case:
+	// 1. if subnet created successfuly but aws sdk connection broke or request reached timeout
 	if subnetResponse, err := ec2Svc.CreateSubnet(createSubnetInput); err != nil {
 		return errors.New("Unable to create subnet: " + err.Error())
 	} else {
@@ -416,7 +418,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 	// create IAM role
 	if _, err := iamSvc.CreateRole(roleParams); err != nil {
-		glog.Errorf("Failed to create IAM role: %s", err)
+		glog.Errorf("Unable to create IAM role: %s", err)
 		return err
 	}
 
@@ -435,7 +437,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.PutRolePolicy(rolePolicyParams); err != nil {
-		glog.Errorf("Failed to put role policy: %s", err)
+		glog.Errorf("Unable to put role policy: %s", err)
 		return err
 	}
 
@@ -444,7 +446,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.CreateInstanceProfile(iamParams); err != nil {
-		glog.Errorf("Failed to create instance profile: %s", err)
+		glog.Errorf("Unable to create instance profile: %s", err)
 		return err
 	}
 
@@ -454,7 +456,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.AddRoleToInstanceProfile(roleInstanceProfileParams); err != nil {
-		glog.Errorf("Failed to add role to instance profile: %s", err)
+		glog.Errorf("Unable to add role to instance profile: %s", err)
 		return err
 	}
 
@@ -613,7 +615,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 
 			if len(startTaskOutput.Failures) > 0 {
 				errorMessage := fmt.Sprintf(
-					"Failed to start task %v\nMessage: %v",
+					"Unable to start task %v\nMessage: %v",
 					mapping.Task,
 					errorMessageFromFailures(startTaskOutput.Failures))
 				glog.Errorf(errorMessage)
@@ -671,7 +673,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 
 	if err = setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
-		return err
+		return errors.New("Unable to setup Network: " + err.Error())
 	}
 
 	if err = setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
@@ -700,19 +702,18 @@ func validateRegion(d *Deployment) bool {
 	for key := range amiCollection {
 		keys = append(keys, key)
 	}
-	glog.Errorf("The region of deployment is using %s, which doesn't offer ECS yet, please set it to one from: %v", d.Region, keys)
+	glog.Warningf("The region of deployment is using %s, which doesn't offer ECS yet, please set it to one from: %v", d.Region, keys)
 	return false
 }
 
 func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	var errMsg string
-
+	errMsg := false
 	params := &ecs.ListTasksInput{
 		Cluster: aws.String(deployedCluster.Name),
 	}
 	resp, err := svc.ListTasks(params)
 	if err != nil {
-		glog.Errorln("Failed to list tasks.")
+		glog.Errorln("Unable to list tasks: ", err.Error())
 		return err
 	}
 
@@ -727,20 +728,20 @@ func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 		// https://docs.aws.amazon.com/sdk-for-go/api/service/ecs/#StopTaskOutput
 		_, err := svc.StopTask(stopTaskParams)
 		if err != nil {
-			errMsg = fmt.Sprintf("%sFailed to stop task %s\nMessage %s\n", errMsg, *task, err.Error())
+			glog.Errorf("Unable to stop task (%s) %s\n", *task, err.Error())
+			errMsg = true
 		}
 	}
 
-	if errMsg != "" {
-		glog.Errorf(errMsg)
-		return errors.New(errMsg)
+	if errMsg {
+		return errors.New("Unable to clean up all the tasks.")
 	}
 	return nil
 }
 
 func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	var errStriing string
 	var tasks []*string
+	var errBool bool
 
 	for _, taskDefinition := range deployedCluster.Deployment.TaskDefinitions {
 		params := &ecs.DescribeTaskDefinitionInput{
@@ -748,7 +749,7 @@ func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) er
 		}
 		resp, err := ecsSvc.DescribeTaskDefinition(params)
 		if err != nil {
-			errStriing = fmt.Sprintf("%sUnable to describe task (%s) : %v\n\n", errStriing, *taskDefinition.Family, err.Error())
+			glog.Warningf("Unable to describe task (%s) : %s\n", *taskDefinition.Family, err.Error())
 			continue
 		}
 
@@ -757,63 +758,67 @@ func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) er
 
 	for _, task := range tasks {
 		if _, err := ecsSvc.DeregisterTaskDefinition(&ecs.DeregisterTaskDefinitionInput{TaskDefinition: task}); err != nil {
-			errStriing = fmt.Sprintf("%sUnable to de-register task definition: %s\n\n", errStriing, err.Error())
+			glog.Warningf("Unable to de-register task definition: %s\n", err.Error())
+			errBool = true
 		}
 	}
 
-	if errStriing != "" {
-		glog.Errorf(errStriing)
-		return errors.New(errStriing)
+	if errBool {
+		return errors.New("Unable to clean up task definitions")
 	}
 
 	return nil
 }
 
 func deleteIAM(sess *session.Session, deployedCluster *DeployedCluster) error {
-	iamSvc := iam.New(sess)
-	var errMsg string
+	// NOTE For now (2016/12/28), we don't know how to handle the error of request timeout from AWS SDK.
+	// Ignore all the errors and log them as error messages into log file. deleteIAM has different severity,
+	//in contrast to other functions. Since the error of deleteIAM causes next time deployment's failure .
 
+	errBool := false
+	iamSvc := iam.New(sess)
+
+	// remove role from instance profile
 	roleInstanceProfileParam := &iam.RemoveRoleFromInstanceProfileInput{
 		InstanceProfileName: aws.String(deployedCluster.Name),
 		RoleName:            aws.String(deployedCluster.RoleName()),
 	}
-
 	if _, err := iamSvc.RemoveRoleFromInstanceProfile(roleInstanceProfileParam); err != nil {
-		glog.Errorf("Failed to delete role %s from instance profile: %s",
-			deployedCluster.RoleName(), err)
-		errMsg = fmt.Sprintf("%s %s\n\n", errMsg, err.Error())
+		glog.Errorf("Unable to delete role %s from instance profile: %s\n",
+			deployedCluster.RoleName(), err.Error())
+		errBool = true
 	}
 
+	// delete instance profile
 	instanceProfile := &iam.DeleteInstanceProfileInput{
 		InstanceProfileName: aws.String(deployedCluster.Name),
 	}
-
 	if _, err := iamSvc.DeleteInstanceProfile(instanceProfile); err != nil {
-		glog.Errorf("Failed to delete instance profile: %s", err)
-		errMsg = fmt.Sprintf("%s %s\n\n", errMsg, err.Error())
+		glog.Errorf("Unable to delete instance profile: %s\n", err.Error())
+		errBool = true
 	}
 
+	// delete role policy
 	rolePolicyParams := &iam.DeleteRolePolicyInput{
 		PolicyName: aws.String(deployedCluster.PolicyName()),
 		RoleName:   aws.String(deployedCluster.RoleName()),
 	}
-
 	if _, err := iamSvc.DeleteRolePolicy(rolePolicyParams); err != nil {
-		glog.Errorf("Failed to delete role policy IAM role: %s", err)
-		errMsg = fmt.Sprintf("%s %s\n\n", errMsg, err.Error())
+		glog.Errorf("Unable to delete role policy IAM role: %s\n", err.Error())
+		errBool = true
 	}
 
+	// delete role
 	roleParams := &iam.DeleteRoleInput{
-		RoleName: aws.String(deployedCluster.RoleName()), // Required
+		RoleName: aws.String(deployedCluster.RoleName()),
 	}
-
 	if _, err := iamSvc.DeleteRole(roleParams); err != nil {
-		glog.Errorf("Failed to create IAM role: %s", err)
-		errMsg = fmt.Sprintf("%s %s\n\n", errMsg, err.Error())
+		glog.Errorf("Unable to create IAM role: %s", err.Error())
+		errBool = true
 	}
 
-	if errMsg != "" {
-		return errors.New(errMsg)
+	if errBool {
+		return errors.New("Unable to clean up AWS IAM")
 	}
 
 	return nil
@@ -824,13 +829,13 @@ func deleteKeyPair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		KeyName: aws.String(deployedCluster.KeyName()),
 	}
 	if _, err := ec2Svc.DeleteKeyPair(params); err != nil {
-		glog.Errorf("Failed to delete key pair: %s", err.Error())
-		return err
+		return fmt.Errorf("Unable to delete key pair: %s", err.Error())
 	}
 	return nil
 }
 
 func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -849,16 +854,20 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) erro
 			GroupId: group.GroupId,
 		}
 		if _, err := ec2Svc.DeleteSecurityGroup(params); err != nil {
-			return err
+			glog.Warningf("Unable to delete security group: %s\n", err.Error())
+			errBool = true
 		}
+	}
+
+	if errBool {
+		return errors.New("Unable to delete all the relative security groups")
 	}
 
 	return nil
 }
 
 func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	var errMsg string
-
+	errBool := false
 	params := &ec2.DescribeTagsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -879,7 +888,7 @@ func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	resp, err := ec2Svc.DescribeTags(params)
 
 	if err != nil {
-		return err
+		return fmt.Errorf("Unable to describe tags of subnet: %s\n", err.Error())
 	}
 
 	for _, subnet := range resp.Tags {
@@ -888,15 +897,14 @@ func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		}
 		_, err := ec2Svc.DeleteSubnet(params)
 		if err != nil {
-			errMsg = fmt.Sprintf("%sFailed to delete subnet (%s) %s\n\n", errMsg, *subnet.ResourceId, err.Error())
+			glog.Warningf("Unable to delete subnet (%s) %s\n", *subnet.ResourceId, err.Error())
+			errBool = true
 		}
 	}
 
-	if errMsg != "" {
-		glog.Errorf("%s", errMsg)
-		return errors.New(errMsg)
+	if errBool {
+		return errors.New("Unable to clan up subnet")
 	}
-
 	return nil
 }
 
@@ -919,14 +927,10 @@ func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 			},
 		}
 		resp, err := ec2Svc.DescribeTags(params)
-		errMsg := "Can not find VPC "
 		if err != nil {
-			errMsg = fmt.Sprintf("%s %s", errMsg, err.Error())
-			glog.Errorln(errMsg)
-			return err
+			return fmt.Errorf("Unable to describe tags for VPC: %s\n", err.Error())
 		} else if len(resp.Tags) <= 0 {
-			glog.Errorln(errMsg)
-			return errors.New(errMsg)
+			return errors.New("Can not find VPC")
 		}
 		deployedCluster.VpcId = *resp.Tags[0].ResourceId
 	}
@@ -953,30 +957,24 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 
 	resp, err := ec2Svc.DescribeTags(params)
 	if err != nil {
-		glog.Errorf("Unable to describe tags: " + err.Error())
-		return errors.New("Unable to describe tags: " + err.Error())
+		glog.Warningf("Unable to describe tags: %s\n", err.Error())
+	} else if len(resp.Tags) == 0 {
+		glog.Warningf("Unable to find the internet gateway (%s)\n", deployedCluster.Name)
+	} else {
+		detachGatewayParams := &ec2.DetachInternetGatewayInput{
+			InternetGatewayId: resp.Tags[0].ResourceId,
+			VpcId:             aws.String(deployedCluster.VpcId),
+		}
+		if _, err := ec2Svc.DetachInternetGateway(detachGatewayParams); err != nil {
+			glog.Warningf("Unable to detach InternetGateway: %s\n", err.Error())
+		}
 
-	}
-
-	if len(resp.Tags) == 0 {
-		return errors.New("Unable to find the internet gateway")
-	}
-
-	detachGatewayParams := &ec2.DetachInternetGatewayInput{
-		InternetGatewayId: resp.Tags[0].ResourceId,
-		VpcId:             aws.String(deployedCluster.VpcId),
-	}
-	if _, err := ec2Svc.DetachInternetGateway(detachGatewayParams); err != nil {
-		glog.Errorf("Unable to detach InternetGateway: " + err.Error())
-		return err
-	}
-
-	deleteGatewayParams := &ec2.DeleteInternetGatewayInput{
-		InternetGatewayId: resp.Tags[0].ResourceId,
-	}
-	if _, err := ec2Svc.DeleteInternetGateway(deleteGatewayParams); err != nil {
-		glog.Errorf("Unable to delete internet gateway: %s", err.Error())
-		return err
+		deleteGatewayParams := &ec2.DeleteInternetGatewayInput{
+			InternetGatewayId: resp.Tags[0].ResourceId,
+		}
+		if _, err := ec2Svc.DeleteInternetGateway(deleteGatewayParams); err != nil {
+			glog.Warningf("Unable to delete internet gateway: %s\n", err.Error())
+		}
 	}
 
 	return nil
@@ -988,8 +986,7 @@ func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	if _, err := ec2Svc.DeleteVpc(params); err != nil {
-		glog.Errorf("Failed to delete VPC: %s", err.Error())
-		return err
+		return errors.New("Unable to delete VPC: " + err.Error())
 	}
 	return nil
 }
@@ -1006,8 +1003,7 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	if _, err := ec2Svc.TerminateInstances(params); err != nil {
-		glog.Errorf("Unable to terminate EC2 instance: %s", err.Error())
-		return err
+		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error())
 	}
 
 	terminatedInstanceParams := &ec2.DescribeInstancesInput{
@@ -1015,8 +1011,7 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
-		glog.Errorf("Unable to wait until EC2 instance terminated: %s", err.Error())
-		return err
+		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
 	}
 	return nil
 }
@@ -1027,14 +1022,16 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	}
 
 	if _, err := ecsSvc.DeleteCluster(params); err != nil {
-		glog.Errorf("Failed to delete cluster: %s", err.Error())
-		return err
+		return fmt.Errorf("Unable to delete cluster: %s", err.Error())
 	}
 	return nil
 }
 
 // DeleteDeployment clean up the cluster from AWS ECS.
 func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) error {
+	// errBool is a flag to show if this deleteDeployment successed or not. If this action failed,
+	// return error.
+	errBool := false
 	awsId := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
 	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
@@ -1049,7 +1046,7 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) erro
 	config = config.WithCredentials(creds)
 	sess, err := session.NewSession(config)
 	if err != nil {
-		glog.Errorf("Failed to create session: %s", err)
+		glog.Errorln("Unable to create session: ", err.Error())
 	}
 
 	ec2Svc := ec2.New(sess)
@@ -1057,25 +1054,29 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) erro
 
 	err = checkVPC(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to find VPC: %s", err)
+		glog.Errorln("Unable to find VPC: ", err.Error())
+		errBool = true
 	}
 
 	// Stop all running tasks
 	err = stopECSTasks(ecsSvc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to stop ECS tasks: %s", err)
+		glog.Errorln("Unable to stop ECS tasks: ", err.Error())
+		errBool = true
 	}
 
 	// delete all the task definitions
 	err = deleteTaskDefinitions(ecsSvc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete task definitions: %s", err)
+		glog.Errorln("Unable to delete task definitions: %s", err.Error())
+		errBool = true
 	}
 
 	// Terminate EC2 instance
 	err = deleteEC2(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete task definitions: %s", err)
+		glog.Errorln("Unable to delete task definitions: %s", err.Error())
+		errBool = true
 	}
 
 	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
@@ -1084,45 +1085,54 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) erro
 	// delete IAM role
 	err = deleteIAM(sess, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete IAM: %s", err.Error())
+		glog.Errorln("Unable to delete IAM: %s", err.Error())
+		errBool = true
 	}
 
 	// delete key pair
 	err = deleteKeyPair(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete key pair: %s", err.Error())
+		glog.Errorln("Unable to delete key pair: ", err.Error())
+		errBool = true
 	}
 
 	// delete security group
 	err = deleteSecurityGroup(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete security group: %s", err.Error())
+		glog.Errorln("Unable to delete security group: ", err.Error())
+		errBool = true
 	}
 
 	// delete internet gateway.
 	err = deleteInternetGateway(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete internet gateway: %s", err.Error())
+		glog.Errorln("Unable to delete internet gateway: ", err.Error())
+		errBool = true
 	}
 
 	// delete subnet.
 	err = deleteSubnet(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete subnet: %s", err.Error())
+		glog.Errorln("Unable to delete subnet: ", err.Error())
+		errBool = true
 	}
 
 	// Delete VPC
 	err = deleteVPC(ec2Svc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete VPC: %s", err)
+		glog.Errorln("Unable to delete VPC: ", err)
+		errBool = true
 	}
 
 	// Delete ecs cluster
 	err = deleteCluster(ecsSvc, deployedCluster)
 	if err != nil {
-		glog.Errorf("Failed to delete ECS cluster: %s", err)
-		return err
+		glog.Errorln("Unable to delete ECS cluster: ", err)
+		errBool = true
 	}
 
+	if errBool {
+		return errors.New("Unable to clean up whole deployment.")
+	}
 	return nil
 }
