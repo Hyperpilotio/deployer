@@ -81,7 +81,7 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 	}
 
 	if _, err := ecsSvc.CreateCluster(clusterParams); err != nil {
-		return errors.New("Failed to create cluster: " + err.Error())
+		return errors.New("Unable to create cluster: " + err.Error())
 	}
 
 	for _, taskDefinition := range deployment.TaskDefinitions {
@@ -189,7 +189,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	if createRouteOutput, err := ec2Svc.CreateRoute(createRouteInput); err != nil {
 		return errors.New("Unable to create route: " + err.Error())
 	} else if !*createRouteOutput.Return {
-		return errors.New("Failed to create route")
+		return errors.New("Unable to create route")
 	}
 
 	securityGroupParams := &ec2.CreateSecurityGroupInput{
@@ -295,7 +295,7 @@ func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[stri
 			defer f.Close()
 
 			if err := scpClient.CopyFile(f, deployFile.Path, "0644"); err != nil {
-				errorMsg := fmt.Sprintf("Failed to upload file %s to server %s: %s",
+				errorMsg := fmt.Sprintf("Unable to upload file %s to server %s: %s",
 					deployFile.FileId, address, err.Error())
 				return errors.New(errorMsg)
 			}
@@ -403,7 +403,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 	// create IAM role
 	if _, err := iamSvc.CreateRole(roleParams); err != nil {
-		glog.Errorf("Failed to create IAM role: %s", err)
+		glog.Errorf("Unable to create IAM role: %s", err)
 		DeleteDeployment(deployedCluster)
 		return err
 	}
@@ -423,7 +423,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.PutRolePolicy(rolePolicyParams); err != nil {
-		glog.Errorf("Failed to put role policy: %s", err)
+		glog.Errorf("Unable to put role policy: %s", err)
 		DeleteDeployment(deployedCluster)
 		return err
 	}
@@ -433,7 +433,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.CreateInstanceProfile(iamParams); err != nil {
-		glog.Errorf("Failed to create instance profile: %s", err)
+		glog.Errorf("Unable to create instance profile: %s", err)
 		DeleteDeployment(deployedCluster)
 		return err
 	}
@@ -444,7 +444,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 
 	if _, err := iamSvc.AddRoleToInstanceProfile(roleInstanceProfileParams); err != nil {
-		glog.Errorf("Failed to add role to instance profile: %s", err)
+		glog.Errorf("Unable to add role to instance profile: %s", err)
 		DeleteDeployment(deployedCluster)
 		return err
 	}
@@ -531,7 +531,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 
 		if len(describeOutput.Failures) > 0 {
 			return errors.New(
-				"Failed to list ECS clusters: " + errorMessageFromFailures(describeOutput.Failures))
+				"Unable to list ECS clusters: " + errorMessageFromFailures(describeOutput.Failures))
 		}
 
 		registeredCount := *describeOutput.Clusters[0].RegisteredContainerInstancesCount
@@ -551,7 +551,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	var containerInstances []*string
 	nodeIdToArn := make(map[int]string)
 	if listInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput); err != nil {
-		return errors.New("Failed to list container instances: " + err.Error())
+		return errors.New("Unable to list container instances: " + err.Error())
 	} else {
 		containerInstances = listInstancesOutput.ContainerInstanceArns
 	}
@@ -562,7 +562,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	}
 
 	if describeInstancesOutput, err := ecsSvc.DescribeContainerInstances(describeInstancesInput); err != nil {
-		return errors.New("Failed to describe container instances: " + err.Error())
+		return errors.New("Unable to describe container instances: " + err.Error())
 	} else {
 		for _, instance := range describeInstancesOutput.ContainerInstances {
 			for key, value := range deployedCluster.Instances {
@@ -605,7 +605,7 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 
 			if len(startTaskOutput.Failures) > 0 {
 				errorMessage := fmt.Sprintf(
-					"Failed to start task %v\nMessage: %v",
+					"Unable to start task %v\nMessage: %v",
 					mapping.Task,
 					errorMessageFromFailures(startTaskOutput.Failures))
 				glog.Errorf(errorMessage)
@@ -638,17 +638,17 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	config = config.WithCredentials(creds)
 	sess, err := session.NewSession(config)
 	if err != nil {
-		glog.Errorf("Failed to create session: %s", err)
+		glog.Errorf("Unable to create session: %s", err)
 		return err
 	}
 	ecsSvc := ecs.New(sess)
 	ec2Svc := ec2.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
-		return errors.New("Failed to setup ECS: " + err.Error())
+		return errors.New("Unable to setup ECS: " + err.Error())
 	}
 
 	if err = setupIAM(deployment, sess, deployedCluster); err != nil {
-		return errors.New("Failed to setup IAM: " + err.Error())
+		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
 	//if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
@@ -660,7 +660,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	}
 
 	if err = setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
-		return errors.New("Failed to setup EC2: " + err.Error())
+		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
 	if err = uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
@@ -668,7 +668,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	}
 
 	if err = launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
-		return errors.New("Failed to launch ECS tasks: " + err.Error())
+		return errors.New("Unable to launch ECS tasks: " + err.Error())
 	}
 
 	return nil
