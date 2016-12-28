@@ -1,19 +1,28 @@
 package main
 
 import (
+	"errors"
+	"io"
+	"os"
+	"path"
+	"sync"
+
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/spf13/viper"
 
 	"net/http"
-	"sync"
 )
 
 // Server store the stats / data of every deployment
 type Server struct {
-	Config           *viper.Viper
+	Config *viper.Viper
+	// Maps deployment name to deployed cluster struct
 	DeployedClusters map[string]*awsecs.DeployedCluster
-	mutex            sync.Mutex
+
+	// Maps file id to location on disk
+	UploadedFiles map[string]string
+	mutex         sync.Mutex
 }
 
 // NewServer return an instance of Server struct.
@@ -21,11 +30,18 @@ func NewServer(config *viper.Viper) *Server {
 	return &Server{
 		Config:           config,
 		DeployedClusters: make(map[string]*awsecs.DeployedCluster),
+		UploadedFiles:    make(map[string]string),
 	}
 }
 
 // StartServer start a web server
 func (server *Server) StartServer() error {
+	if err := os.Mkdir(server.Config.GetString("filesPath"), 0755); err != nil {
+		if !os.IsExist(err) {
+			return errors.New("Unable to create filesPath directory: " + err.Error())
+		}
+	}
+
 	//gin.SetMode("release")
 	router := gin.New()
 
@@ -42,20 +58,99 @@ func (server *Server) StartServer() error {
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 	}
 
+	filesGroup := router.Group("/v1/files")
+	{
+		filesGroup.GET("", server.getFiles)
+		filesGroup.POST("/:fileId", server.uploadFile)
+		filesGroup.DELETE("/:fileId", server.deleteFile)
+	}
+
 	return router.Run(":" + server.Config.GetString("port"))
+}
+
+func (server *Server) storeUploadedFile(fileId string, c *gin.Context) (*string, error) {
+	file, _, err := c.Request.FormFile("upload")
+	tempFile := "/tmp/" + fileId + ".tmp"
+	destination := path.Join(server.Config.GetString("filesPath"), fileId)
+	out, err := os.Create(tempFile)
+	defer func() {
+		out.Close()
+		os.Remove(tempFile)
+	}()
+	if err != nil {
+		return nil, errors.New("Unable to create temporary file: " + err.Error())
+	}
+	_, err = io.Copy(out, file)
+	if err != nil {
+		return nil, errors.New("Unable to write to temporary file: " + err.Error())
+	}
+
+	if err := os.Rename(tempFile, destination); err != nil {
+		return nil, errors.New("Unable to rename file: " + err.Error())
+	}
+
+	return &destination, nil
+}
+
+func (server *Server) getFiles(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  server.UploadedFiles,
+	})
+}
+
+func (server *Server) uploadFile(c *gin.Context) {
+	fileId := c.Param("fileId")
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	if _, ok := server.UploadedFiles[fileId]; ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "File already uploaded",
+		})
+		return
+	}
+
+	file, err := server.storeUploadedFile(fileId, c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": true,
+			"data":  err.Error(),
+		})
+		return
+	}
+
+	server.UploadedFiles[fileId] = *file
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
+func (server *Server) deleteFile(c *gin.Context) {
+	// TODO implement function to delete file upload
+
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": false,
+		"data":  "",
+	})
 }
 
 func (server *Server) updateDeployment(c *gin.Context) {
 	// TODO Implement function to update deployment
 
-	c.JSON(http.StatusNotFound, gin.H{
+	c.JSON(http.StatusNotImplemented, gin.H{
 		"error": false,
 		"data":  "",
 	})
 }
 
 func (server *Server) getAllDeployments(c *gin.Context) {
-
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
 		"data":  server.DeployedClusters,
@@ -101,7 +196,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
 	// Move this after succesfuly deployment when things are working...
 	server.DeployedClusters[deployment.Name] = deployedCluster
-	err := awsecs.CreateDeployment(server.Config, &deployment, deployedCluster)
+	err := awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,

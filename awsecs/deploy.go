@@ -4,11 +4,16 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"github.com/golang/glog"
+
+	"github.com/hyperpilotio/deployer/common"
 
 	"github.com/spf13/viper"
 
@@ -30,7 +35,8 @@ type DeployedCluster struct {
 	SecurityGroupId   string
 	SubnetId          string
 	InternetGatewayId string
-	InstanceIds       map[int]string
+	Instances         map[int]*ec2.Instance
+	InstanceIds       []*string
 }
 
 func (deployedCluster *DeployedCluster) KeyName() string {
@@ -232,13 +238,74 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	return nil
 }
 
-func setupEC2(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
-	ec2Svc := ec2.New(sess)
-
-	if err := setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
-		return err
+func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
+	if len(deployment.Files) == 0 {
+		return nil
 	}
 
+	// We need to describe instances again to obtain the PublicDnsAddresses for ssh.
+	describeInstanceOutput, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
+		InstanceIds: deployedCluster.InstanceIds,
+	})
+	if err != nil {
+		return errors.New("Unable to describe instances: " + err.Error())
+	}
+
+	publicAddresses := make([]*string, 0)
+	for _, reservation := range describeInstanceOutput.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.PublicDnsName != nil && *instance.PublicDnsName != "" {
+				publicAddresses = append(publicAddresses, instance.PublicDnsName)
+			}
+		}
+	}
+
+	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	if err != nil {
+		return errors.New("Unable to parse private key: " + err.Error())
+	}
+
+	clientConfig := ssh.ClientConfig{
+		User: "ec2-user",
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		}}
+
+	for _, publicAddress := range publicAddresses {
+		address := *publicAddress + ":22"
+		scpClient := common.NewScpClient(address, &clientConfig)
+		if err := scpClient.Connect(); err != nil {
+			return errors.New("Unable to connect to server " + address + ": " + err.Error())
+		}
+
+		for _, deployFile := range deployment.Files {
+			location, ok := uploadedFiles[deployFile.FileId]
+			if !ok {
+				return errors.New("Unable to find uploaded file " + deployFile.FileId)
+			}
+
+			f, fileErr := os.Open(location)
+			if fileErr != nil {
+				return errors.New(
+					"Unable to open uploaded file " + deployFile.FileId +
+						": " + fileErr.Error())
+			}
+			defer f.Close()
+
+			if err := scpClient.CopyFile(f, deployFile.Path, "0644"); err != nil {
+				errorMsg := fmt.Sprintf("Failed to upload file %s to server %s: %s",
+					deployFile.FileId, address, err.Error())
+				return errors.New(errorMsg)
+			}
+		}
+	}
+
+	return nil
+}
+
+func setupEC2(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	keyPairParams := &ec2.CreateKeyPairInput{
 		KeyName: aws.String(deployedCluster.KeyName()),
 	}
@@ -282,13 +349,8 @@ weave launch`, deployment.Name)))
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
-		deployedCluster.InstanceIds[node.Id] = *runResult.Instances[0].InstanceId
-	}
-
-	ids := make([]*string, 0, len(deployedCluster.InstanceIds))
-
-	for _, value := range deployedCluster.InstanceIds {
-		ids = append(ids, &value)
+		deployedCluster.Instances[node.Id] = runResult.Instances[0]
+		deployedCluster.InstanceIds = append(deployedCluster.InstanceIds, runResult.Instances[0].InstanceId)
 	}
 
 	tags := []*ec2.Tag{
@@ -302,23 +364,31 @@ weave launch`, deployment.Name)))
 		},
 	}
 
+	nodeCount := len(deployedCluster.InstanceIds)
+	glog.V(1).Infof("Waitng for %d EC2 instances to exist", nodeCount)
+
 	describeInstancesInput := &ec2.DescribeInstancesInput{
-		InstanceIds: ids,
+		InstanceIds: deployedCluster.InstanceIds,
 	}
 
-	glog.V(1).Infof("Waitng for %d EC2 instances to exist", len(ids))
 	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
 		return errors.New("Unable to wait for ec2 instances to exist: " + err.Error())
 	}
 
-	if err := createTags(ec2Svc, ids, tags); err != nil {
+	// We are trying to tag before it's running as weave requires the tag to function,
+	// so the earlier we tag the better chance we have to see the cluster ready in ECS
+	if err := createTags(ec2Svc, deployedCluster.InstanceIds, tags); err != nil {
 		DeleteDeployment(deployedCluster)
 		return errors.New("Unable to create tags for instances: " + err.Error())
 	}
 
-	glog.V(1).Infof("Waitng for %d EC2 instances to launch", len(ids))
-	if err := ec2Svc.WaitUntilInstanceRunning(describeInstancesInput); err != nil {
-		return errors.New("Unable to wait for ec2 instances be running: " + err.Error())
+	describeInstanceStatusInput := &ec2.DescribeInstanceStatusInput{
+		InstanceIds: deployedCluster.InstanceIds,
+	}
+
+	glog.V(1).Infof("Waitng for %d EC2 instances to be status ok", nodeCount)
+	if err := ec2Svc.WaitUntilInstanceStatusOk(describeInstanceStatusInput); err != nil {
+		return errors.New("Unable to wait for ec2 instances be status ok: " + err.Error())
 	}
 
 	return nil
@@ -437,6 +507,13 @@ func errorMessageFromFailures(failures []*ecs.Failure) string {
 	return failureMessage
 }
 
+func Max(x, y int) int {
+	if x > y {
+		return x
+	}
+	return y
+}
+
 func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// Wait for ECS instances to be ready
 	clusterReady := false
@@ -488,15 +565,16 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 		return errors.New("Failed to describe container instances: " + err.Error())
 	} else {
 		for _, instance := range describeInstancesOutput.ContainerInstances {
-			for key, value := range deployedCluster.InstanceIds {
-				if *instance.Ec2InstanceId == value {
+			for key, value := range deployedCluster.Instances {
+				if *instance.Ec2InstanceId == *value.InstanceId {
 					nodeIdToArn[key] = *instance.ContainerInstanceArn
+					break
 				}
 			}
 		}
 	}
 
-	glog.V(1).Infof("Node mapping: %v", deployment.NodeMapping)
+	glog.V(1).Infof("Node Id to Arn: %v", nodeIdToArn)
 	for _, mapping := range deployment.NodeMapping {
 		instanceId, ok := nodeIdToArn[mapping.Id]
 		if !ok {
@@ -506,27 +584,34 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 			return errors.New(err)
 		}
 
-		glog.Infof("Starting task %s on node %d", mapping.Task, mapping.Id)
-		startTaskOutput, err := ecsSvc.StartTask(&ecs.StartTaskInput{
+		startTaskInput := &ecs.StartTaskInput{
 			Cluster:            aws.String(deployment.Name),
 			TaskDefinition:     aws.String(mapping.Task),
 			ContainerInstances: []*string{&instanceId},
-		})
-
-		if err != nil {
-			startTaskErr := fmt.Sprintf("Unable to start task %v\nError: %v", mapping.Task, err)
-			DeleteDeployment(deployedCluster)
-			return errors.New(startTaskErr)
 		}
 
-		if len(startTaskOutput.Failures) > 0 {
-			errorMessage := fmt.Sprintf(
-				"Failed to start task %v\nMessage: %v",
-				mapping.Task,
-				errorMessageFromFailures(startTaskOutput.Failures))
-			glog.Errorf(errorMessage)
-			DeleteDeployment(deployedCluster)
-			return errors.New(errorMessage)
+		glog.Infof("Starting task %s on node %d with count %d", mapping.Task, mapping.Id, mapping.Count)
+		var count int = mapping.Count
+		if count <= 0 {
+			count = 1
+		}
+		for i := count; i <= Max(mapping.Count, 1); i++ {
+			startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
+			if err != nil {
+				startTaskErr := fmt.Sprintf("Unable to start task %v\nError: %v", mapping.Task, err)
+				DeleteDeployment(deployedCluster)
+				return errors.New(startTaskErr)
+			}
+
+			if len(startTaskOutput.Failures) > 0 {
+				errorMessage := fmt.Sprintf(
+					"Failed to start task %v\nMessage: %v",
+					mapping.Task,
+					errorMessageFromFailures(startTaskOutput.Failures))
+				glog.Errorf(errorMessage)
+				DeleteDeployment(deployedCluster)
+				return errors.New(errorMessage)
+			}
 		}
 	}
 
@@ -537,12 +622,13 @@ func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
 	return &DeployedCluster{
 		Name:        deployment.Name,
 		Deployment:  deployment,
-		InstanceIds: make(map[int]string),
+		Instances:   make(map[int]*ec2.Instance),
+		InstanceIds: make([]*string, 0),
 	}
 }
 
 // CreateDeployment start a deployment
-func CreateDeployment(viper *viper.Viper, deployment *Deployment, deployedCluster *DeployedCluster) error {
+func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
 	awsId := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
 	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
@@ -556,6 +642,7 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, deployedCluste
 		return err
 	}
 	ecsSvc := ecs.New(sess)
+	ec2Svc := ec2.New(sess)
 	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
 		return errors.New("Failed to setup ECS: " + err.Error())
 	}
@@ -568,9 +655,18 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, deployedCluste
 	//	return nil, err
 	//}
 
-	if err = setupEC2(deployment, sess, deployedCluster); err != nil {
+	if err = setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
+		return err
+	}
+
+	if err = setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
 		return errors.New("Failed to setup EC2: " + err.Error())
 	}
+
+	if err = uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
+		return errors.New("Unable to upload files to EC2: " + err.Error())
+	}
+
 	if err = launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
 		return errors.New("Failed to launch ECS tasks: " + err.Error())
 	}

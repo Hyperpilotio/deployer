@@ -22,6 +22,7 @@ func Run(fileConfig string) error {
 	if err != nil {
 		return err
 	}
+
 	server := NewServer(viper)
 	return server.StartServer()
 }

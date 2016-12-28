@@ -4,7 +4,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecs"
 )
 
-// ClusterDefinition store the information of cluster
+// ClusterDefinition storing the information of a cluster
 type ClusterDefinition struct {
 	Nodes []struct {
 		Id           int    `form:"id" json:"id" binding:"required"`
@@ -13,11 +13,15 @@ type ClusterDefinition struct {
 	} `form:"nodes" json:"nodes" binding:"required"`
 }
 
-// Deployment store the information of a deployment
+// Deployment storing the information of a deployment
 type Deployment struct {
-	Name              string                            `json:"name"`
-	Region            string                            `json:"region"`
-	Scale             int64                             `json:"scale"`
+	Name   string `json:"name"`
+	Region string `json:"region"`
+	Scale  int64  `json:"scale"`
+	Files  []struct {
+		FileId string `json:"fileId"`
+		Path   string `json:"path"`
+	} `form:"files" json:"files"`
 	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
 	AllowedPorts      []int                             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
