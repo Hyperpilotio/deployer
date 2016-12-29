@@ -60,6 +60,8 @@ func (server *Server) StartServer() error {
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
+
+		daemonsGroup.POST("/:deployment/task", server.startTask)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -217,28 +219,59 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 }
 
+func (server *Server) startTask(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deployment, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
+
+	var nodeMapping awsecs.NodeMapping
+	if err := c.BindJSON(&nodeMapping); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error deserializing nodeMapping: " + err.Error(),
+		})
+		return
+	}
+
+	if err := awsecs.StartTaskOnNode(server.Config, deployment, &nodeMapping); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": true,
+			"data":  "Unable to start task: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
 func (server *Server) deleteDeployment(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-
 		// TODO create a batch job to delete the deployment
-		err := awsecs.DeleteDeployment(server.Config, data)
+		awsecs.DeleteDeployment(server.Config, data)
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  err.Error(),
-			})
-		} else {
-			delete(server.DeployedClusters, c.Param("deployment"))
-			c.JSON(http.StatusAccepted, gin.H{
-				"error": false,
-				"data":  "Deleting " + data.Name,
-			})
-		}
+		delete(server.DeployedClusters, c.Param("deployment"))
+		c.JSON(http.StatusAccepted, gin.H{
+			"error": false,
+			"data":  "",
+		})
+
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,

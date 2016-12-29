@@ -36,6 +36,7 @@ type DeployedCluster struct {
 	SubnetId          string
 	InternetGatewayId string
 	Instances         map[int]*ec2.Instance
+	NodeIdToArn       map[int]string
 	InstanceIds       []*string
 	VpcId             string
 }
@@ -63,6 +64,26 @@ func (deployedCluster DeployedCluster) VPCName() string {
 // SubnetName return a key name according to the Deployment.Name with suffix "-vpc"
 func (deployedCluster DeployedCluster) SubnetName() string {
 	return deployedCluster.Name + "-subnet"
+}
+
+func createSession(viper *viper.Viper, deployment *Deployment) (*session.Session, error) {
+	awsId := viper.GetString("awsId")
+	awsSecret := viper.GetString("awsSecret")
+	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
+	if !isRegionValid(deployment.Region) {
+		return nil, errors.New("Region is invalidate.")
+	}
+	config := &aws.Config{
+		Region: aws.String(deployment.Region),
+	}
+	config = config.WithCredentials(creds)
+	sess, err := session.NewSession(config)
+	if err != nil {
+		glog.Errorf("Unable to create session: %s", err)
+		return nil, err
+	}
+
+	return sess, nil
 }
 
 func createTags(ec2Svc *ec2.EC2, resources []*string, tags []*ec2.Tag) error {
@@ -524,6 +545,46 @@ func Max(x, y int) int {
 	return y
 }
 
+func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *NodeMapping) error {
+	sess, err := createSession(viper, deployedCluster.Deployment)
+	if err != nil {
+		return errors.New("Unable to create session: " + err.Error())
+	}
+
+	ecsSvc := ecs.New(sess)
+	return startTask(deployedCluster, nodeMapping, ecsSvc)
+}
+
+func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *ecs.ECS) error {
+	instanceId, ok := deployedCluster.NodeIdToArn[mapping.Id]
+	if !ok {
+		return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
+	}
+
+	startTaskInput := &ecs.StartTaskInput{
+		Cluster:            aws.String(deployedCluster.Deployment.Name),
+		TaskDefinition:     aws.String(mapping.Task),
+		ContainerInstances: []*string{&instanceId},
+	}
+
+	glog.Infof("Starting task %v", mapping)
+	for i := 0; i < mapping.Count; i++ {
+		startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
+		if err != nil {
+			return fmt.Errorf("Unable to start task %v\nError: %v", mapping.Task, err)
+		}
+
+		if len(startTaskOutput.Failures) > 0 {
+			return fmt.Errorf(
+				"Unable to start task %v\nMessage: %v",
+				mapping.Task,
+				errorMessageFromFailures(startTaskOutput.Failures))
+		}
+	}
+
+	return nil
+}
+
 func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// Wait for ECS instances to be ready
 	clusterReady := false
@@ -559,7 +620,6 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	}
 
 	var containerInstances []*string
-	nodeIdToArn := make(map[int]string)
 	if listInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput); err != nil {
 		return errors.New("Unable to list container instances: " + err.Error())
 	} else {
@@ -577,49 +637,20 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 		for _, instance := range describeInstancesOutput.ContainerInstances {
 			for key, value := range deployedCluster.Instances {
 				if *instance.Ec2InstanceId == *value.InstanceId {
-					nodeIdToArn[key] = *instance.ContainerInstanceArn
+					deployedCluster.NodeIdToArn[key] = *instance.ContainerInstanceArn
 					break
 				}
 			}
 		}
 	}
 
-	glog.V(1).Infof("Node Id to Arn: %v", nodeIdToArn)
+	glog.V(1).Infof("Node Id to Arn: %v", deployedCluster.NodeIdToArn)
 	for _, mapping := range deployment.NodeMapping {
-		instanceId, ok := nodeIdToArn[mapping.Id]
-		if !ok {
-			err := fmt.Sprintf("Unable to find Node id %d in instance map", mapping.Id)
-			glog.Error(err)
-			return errors.New(err)
+		// If user didn't specify a count (defaults to 0), we at least run one task.
+		if mapping.Count <= 0 {
+			mapping.Count = 1
 		}
-
-		startTaskInput := &ecs.StartTaskInput{
-			Cluster:            aws.String(deployment.Name),
-			TaskDefinition:     aws.String(mapping.Task),
-			ContainerInstances: []*string{&instanceId},
-		}
-
-		glog.Infof("Starting task %s on node %d with count %d", mapping.Task, mapping.Id, mapping.Count)
-		var count int = mapping.Count
-		if count <= 0 {
-			count = 1
-		}
-		for i := count; i <= Max(mapping.Count, 1); i++ {
-			startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
-			if err != nil {
-				startTaskErr := fmt.Sprintf("Unable to start task %v\nError: %v", mapping.Task, err)
-				return errors.New(startTaskErr)
-			}
-
-			if len(startTaskOutput.Failures) > 0 {
-				errorMessage := fmt.Sprintf(
-					"Unable to start task %v\nMessage: %v",
-					mapping.Task,
-					errorMessageFromFailures(startTaskOutput.Failures))
-				glog.Errorf(errorMessage)
-				return errors.New(errorMessage)
-			}
-		}
+		startTask(deployedCluster, &mapping, ecsSvc)
 	}
 
 	return nil
@@ -632,58 +663,44 @@ func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
 		Deployment:  deployment,
 		Instances:   make(map[int]*ec2.Instance),
 		InstanceIds: make([]*string, 0),
+		NodeIdToArn: make(map[int]string),
 	}
 }
 
 // CreateDeployment start a deployment
 func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
-	awsId := viper.GetString("awsId")
-	awsSecret := viper.GetString("awsSecret")
-	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
-	if !validateRegion(deployment) {
-		return errors.New("Region is invalidate.")
+	sess, sessionErr := createSession(viper, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
-	config := &aws.Config{
-		Region: aws.String(deployment.Region),
-	}
-	config = config.WithCredentials(creds)
-	sess, err := session.NewSession(config)
-	if err != nil {
-		glog.Errorf("Unable to create session: %s", err)
-		return err
-	}
+
 	ecsSvc := ecs.New(sess)
 	ec2Svc := ec2.New(sess)
-	if err = setupECS(deployment, ecsSvc, deployedCluster); err != nil {
+	if err := setupECS(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup ECS: " + err.Error())
 	}
 
-	if err = setupIAM(deployment, sess, deployedCluster); err != nil {
+	if err := setupIAM(deployment, sess, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
-	//if err = setupAutoScaling(deployment, sess, deployedCluster); err != nil {
-	// DeleteDeployment(viper, deployedCluster)
-	//	return nil, err
-	//}
-
-	if err = setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
+	if err := setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup Network: " + err.Error())
 	}
 
-	if err = setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
+	if err := setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
-	if err = uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
+	if err := uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
 		return errors.New("Unable to upload files to EC2: " + err.Error())
 	}
 
-	if err = launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
+	if err := launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to launch ECS tasks: " + err.Error())
 	}
@@ -691,17 +708,9 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	return nil
 }
 
-func validateRegion(d *Deployment) bool {
-	if _, ok := amiCollection[d.Region]; ok {
-		return true
-	}
-
-	keys := []string{}
-	for key := range amiCollection {
-		keys = append(keys, key)
-	}
-	glog.Warningf("The region of deployment is using %s, which doesn't offer ECS yet, please set it to one from: %v", d.Region, keys)
-	return false
+func isRegionValid(region string) bool {
+	_, ok := amiCollection[region]
+	return ok
 }
 
 func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
@@ -1025,115 +1034,75 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	if _, err := ecsSvc.DeleteCluster(params); err != nil {
 		return fmt.Errorf("Unable to delete cluster: %s", err.Error())
 	}
+
 	return nil
 }
 
 // DeleteDeployment clean up the cluster from AWS ECS.
-func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) error {
-	// errBool is a flag to show if this deleteDeployment successed or not. If this action failed,
-	// return error.
-	errBool := false
-	awsId := viper.GetString("awsId")
-	awsSecret := viper.GetString("awsSecret")
-	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
-	if !validateRegion(deployedCluster.Deployment) {
-		return errors.New("Region is invalidate.")
-	}
-
-	config := &aws.Config{
-		Region: aws.String(deployedCluster.Deployment.Region),
-	}
-
-	config = config.WithCredentials(creds)
-	sess, err := session.NewSession(config)
-	if err != nil {
-		glog.Errorln("Unable to create session: ", err.Error())
+func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
+	sess, sessionErr := createSession(viper, deployedCluster.Deployment)
+	if sessionErr != nil {
+		glog.Errorln("Unable to create session: " + sessionErr.Error())
+		return
 	}
 
 	ec2Svc := ec2.New(sess)
 	ecsSvc := ecs.New(sess)
 
-	err = checkVPC(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to find VPC: ", err.Error())
-		errBool = true
 	}
 
 	// Stop all running tasks
-	err = stopECSTasks(ecsSvc, deployedCluster)
-	if err != nil {
+	if err := stopECSTasks(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to stop ECS tasks: ", err.Error())
-		errBool = true
 	}
 
 	// delete all the task definitions
-	err = deleteTaskDefinitions(ecsSvc, deployedCluster)
-	if err != nil {
+	if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete task definitions: %s", err.Error())
-		errBool = true
 	}
 
 	// Terminate EC2 instance
-	err = deleteEC2(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteEC2(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete task definitions: %s", err.Error())
-		errBool = true
 	}
 
 	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
 	// Delete the launch configuration
 
 	// delete IAM role
-	err = deleteIAM(sess, deployedCluster)
-	if err != nil {
+	if err := deleteIAM(sess, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete IAM: %s", err.Error())
-		errBool = true
 	}
 
 	// delete key pair
-	err = deleteKeyPair(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete key pair: ", err.Error())
-		errBool = true
 	}
 
 	// delete security group
-	err = deleteSecurityGroup(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteSecurityGroup(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete security group: ", err.Error())
-		errBool = true
 	}
 
 	// delete internet gateway.
-	err = deleteInternetGateway(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteInternetGateway(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete internet gateway: ", err.Error())
-		errBool = true
 	}
 
 	// delete subnet.
-	err = deleteSubnet(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteSubnet(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete subnet: ", err.Error())
-		errBool = true
 	}
 
 	// Delete VPC
-	err = deleteVPC(ec2Svc, deployedCluster)
-	if err != nil {
+	if err := deleteVPC(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete VPC: ", err)
-		errBool = true
 	}
 
 	// Delete ecs cluster
-	err = deleteCluster(ecsSvc, deployedCluster)
-	if err != nil {
+	if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete ECS cluster: ", err)
-		errBool = true
 	}
-
-	if errBool {
-		return errors.New("Unable to clean up whole deployment.")
-	}
-	return nil
 }

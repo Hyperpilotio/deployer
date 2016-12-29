@@ -13,6 +13,12 @@ type ClusterDefinition struct {
 	} `form:"nodes" json:"nodes" binding:"required"`
 }
 
+type NodeMapping struct {
+	Count int    `json:"count"`
+	Id    int    `json:"id"`
+	Task  string `json:"task"`
+}
+
 // Deployment storing the information of a deployment
 type Deployment struct {
 	Name   string `form:"name" json:"name" binding:"required"`
@@ -25,12 +31,8 @@ type Deployment struct {
 	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
 	AllowedPorts      []int                             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
-	NodeMapping       []struct {
-		Count int    `json:"count"`
-		Id    int    `json:"id"`
-		Task  string `json:"task"`
-	} `form:"nodeMapping" json:"nodeMapping" binding:"required"`
-	IamRole `form:"iamRole" json:"iamRole" binding:"required"`
+	NodeMapping       []NodeMapping                     `form:"nodeMapping" json:"nodeMapping" binding:"required"`
+	IamRole           `form:"iamRole" json:"iamRole" binding:"required"`
 }
 
 // IamRole store the information of iam role
