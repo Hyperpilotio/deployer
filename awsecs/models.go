@@ -9,7 +9,6 @@ type ClusterDefinition struct {
 	Nodes []struct {
 		Id           int    `form:"id" json:"id" binding:"required"`
 		InstanceType string `form:"instanceType" json:"instanceType" binding:"required"`
-		ImageId      string `form:"imageId" json:"imageId" binding:"required"`
 	} `form:"nodes" json:"nodes" binding:"required"`
 }
 

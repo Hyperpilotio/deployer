@@ -362,7 +362,7 @@ weave launch`, deployment.Name)))
 	for _, node := range deployment.ClusterDefinition.Nodes {
 		runResult, runErr := ec2Svc.RunInstances(&ec2.RunInstancesInput{
 			KeyName: aws.String(*keyOutput.KeyName),
-			ImageId: aws.String(node.ImageId),
+			ImageId: aws.String(amiCollection[deployment.Region]),
 			NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{
 				&ec2.InstanceNetworkInterfaceSpecification{
 					AssociatePublicIpAddress: &associatePublic,
