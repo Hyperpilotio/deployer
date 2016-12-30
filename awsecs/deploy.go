@@ -27,6 +27,12 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 )
 
+type NodeInfo struct {
+	Instance      *ec2.Instance
+	Arn           string
+	PublicDnsName string
+}
+
 // DeployedCluster stores the data of a cluster
 type DeployedCluster struct {
 	Name              string
@@ -35,8 +41,7 @@ type DeployedCluster struct {
 	SecurityGroupId   string
 	SubnetId          string
 	InternetGatewayId string
-	Instances         map[int]*ec2.Instance
-	NodeIdToArn       map[int]string
+	NodeInfos         map[int]*NodeInfo
 	InstanceIds       []*string
 	VpcId             string
 }
@@ -281,23 +286,6 @@ func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[stri
 		return nil
 	}
 
-	// We need to describe instances again to obtain the PublicDnsAddresses for ssh.
-	describeInstanceOutput, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
-		InstanceIds: deployedCluster.InstanceIds,
-	})
-	if err != nil {
-		return errors.New("Unable to describe instances: " + err.Error())
-	}
-
-	publicAddresses := make([]*string, 0)
-	for _, reservation := range describeInstanceOutput.Reservations {
-		for _, instance := range reservation.Instances {
-			if instance.PublicDnsName != nil && *instance.PublicDnsName != "" {
-				publicAddresses = append(publicAddresses, instance.PublicDnsName)
-			}
-		}
-	}
-
 	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
 
 	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
@@ -311,8 +299,8 @@ func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[stri
 			ssh.PublicKeys(signer),
 		}}
 
-	for _, publicAddress := range publicAddresses {
-		address := *publicAddress + ":22"
+	for _, nodeInfo := range deployedCluster.NodeInfos {
+		address := nodeInfo.PublicDnsName + ":22"
 		scpClient := common.NewScpClient(address, &clientConfig)
 		if err := scpClient.Connect(); err != nil {
 			return errors.New("Unable to connect to server " + address + ": " + err.Error())
@@ -385,7 +373,9 @@ weave launch`, deployment.Name)))
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
-		deployedCluster.Instances[node.Id] = runResult.Instances[0]
+		deployedCluster.NodeInfos[node.Id] = &NodeInfo{
+			Instance: runResult.Instances[0],
+		}
 		deployedCluster.InstanceIds = append(deployedCluster.InstanceIds, runResult.Instances[0].InstanceId)
 	}
 
@@ -556,7 +546,7 @@ func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeM
 }
 
 func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *ecs.ECS) error {
-	instanceId, ok := deployedCluster.NodeIdToArn[mapping.Id]
+	nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
 	if !ok {
 		return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
 	}
@@ -564,7 +554,7 @@ func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *e
 	startTaskInput := &ecs.StartTaskInput{
 		Cluster:            aws.String(deployedCluster.Deployment.Name),
 		TaskDefinition:     aws.String(mapping.Task),
-		ContainerInstances: []*string{&instanceId},
+		ContainerInstances: []*string{nodeInfo.Instance.InstanceId},
 	}
 
 	glog.Infof("Starting task %v", mapping)
@@ -585,36 +575,62 @@ func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *e
 	return nil
 }
 
-func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func waitUntilECSClusterReady(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// Wait for ECS instances to be ready
 	clusterReady := false
 	totalCount := int64(len(deployment.ClusterDefinition.Nodes))
-	var describeOutput *ecs.DescribeClustersOutput
-	var err error
-	for !clusterReady {
-		describeOutput, err = ecsSvc.DescribeClusters(&ecs.DescribeClustersInput{
-			Clusters: []*string{&deployment.Name},
-		})
-
-		if err != nil {
-			return errors.New("Unable to list ECS clusters: " + err.Error())
-		}
-
-		if len(describeOutput.Failures) > 0 {
-			return errors.New(
-				"Unable to list ECS clusters: " + errorMessageFromFailures(describeOutput.Failures))
-		}
-
-		registeredCount := *describeOutput.Clusters[0].RegisteredContainerInstancesCount
-
-		if registeredCount == totalCount {
-			break
-		}
-
-		glog.Infof("Cluster not ready. registered %d, total %v", registeredCount, totalCount)
-		time.Sleep(time.Duration(3) * time.Second)
+	describeClustersInput := &ecs.DescribeClustersInput{
+		Clusters: []*string{&deployment.Name},
 	}
 
+	for !clusterReady {
+		if describeOutput, err := ecsSvc.DescribeClusters(describeClustersInput); err != nil {
+			return errors.New("Unable to list ECS clusters: " + err.Error())
+		} else if len(describeOutput.Failures) > 0 {
+			return errors.New(
+				"Unable to list ECS clusters: " + errorMessageFromFailures(describeOutput.Failures))
+		} else {
+			registeredCount := *describeOutput.Clusters[0].RegisteredContainerInstancesCount
+
+			if registeredCount >= totalCount {
+				break
+			} else {
+				glog.Infof("Cluster not ready. registered %d, total %v", registeredCount, totalCount)
+				time.Sleep(time.Duration(3) * time.Second)
+			}
+		}
+	}
+
+	return nil
+}
+
+func populatePublicDnsNames(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+	// We need to describe instances again to obtain the PublicDnsAddresses for ssh.
+	describeInstanceOutput, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
+		InstanceIds: deployedCluster.InstanceIds,
+	})
+	if err != nil {
+		return errors.New("Unable to describe instances: " + err.Error())
+	}
+
+	for _, reservation := range describeInstanceOutput.Reservations {
+		for _, instance := range reservation.Instances {
+			if instance.PublicDnsName != nil && *instance.PublicDnsName != "" {
+				for nodeId, nodeInfo := range deployedCluster.NodeInfos {
+					glog.V(2).Infof("Comparing instance ids, %s to %s", *nodeInfo.Instance.InstanceId, *instance.InstanceId)
+					if *nodeInfo.Instance.InstanceId == *instance.InstanceId {
+						glog.V(2).Infof("Assigning public dns name %s to node %d", *instance.PublicDnsName, nodeId)
+						nodeInfo.PublicDnsName = *instance.PublicDnsName
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	listInstancesInput := &ecs.ListContainerInstancesInput{
 		Cluster: aws.String(deployment.Name),
 	}
@@ -635,16 +651,15 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 		return errors.New("Unable to describe container instances: " + err.Error())
 	} else {
 		for _, instance := range describeInstancesOutput.ContainerInstances {
-			for key, value := range deployedCluster.Instances {
-				if *instance.Ec2InstanceId == *value.InstanceId {
-					deployedCluster.NodeIdToArn[key] = *instance.ContainerInstanceArn
+			for _, nodeInfo := range deployedCluster.NodeInfos {
+				if *instance.Ec2InstanceId == *nodeInfo.Instance.InstanceId {
+					nodeInfo.Arn = *instance.ContainerInstanceArn
 					break
 				}
 			}
 		}
 	}
 
-	glog.V(1).Infof("Node Id to Arn: %v", deployedCluster.NodeIdToArn)
 	for _, mapping := range deployment.NodeMapping {
 		// If user didn't specify a count (defaults to 0), we at least run one task.
 		if mapping.Count <= 0 {
@@ -661,9 +676,8 @@ func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
 	return &DeployedCluster{
 		Name:        deployment.Name,
 		Deployment:  deployment,
-		Instances:   make(map[int]*ec2.Instance),
+		NodeInfos:   make(map[int]*NodeInfo),
 		InstanceIds: make([]*string, 0),
-		NodeIdToArn: make(map[int]string),
 	}
 }
 
@@ -694,6 +708,16 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 	if err := setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup EC2: " + err.Error())
+	}
+
+	if err := waitUntilECSClusterReady(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to wait until ECS cluster ready: " + err.Error())
+	}
+
+	if err := populatePublicDnsNames(deployment, ec2Svc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to populate public dns names: " + err.Error())
 	}
 
 	if err := uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
