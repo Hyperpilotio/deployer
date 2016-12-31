@@ -428,8 +428,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	}
 	// create IAM role
 	if _, err := iamSvc.CreateRole(roleParams); err != nil {
-		glog.Errorf("Unable to create IAM role: %s", err)
-		return err
+		return errors.New("Unable to create IAM role: " + err.Error())
 	}
 
 	var policyDocument *string
@@ -458,6 +457,14 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	if _, err := iamSvc.CreateInstanceProfile(iamParams); err != nil {
 		glog.Errorf("Unable to create instance profile: %s", err)
 		return err
+	}
+
+	getProfileInput := &iam.GetInstanceProfileInput{
+		InstanceProfileName: aws.String(deployment.Name),
+	}
+
+	if err := iamSvc.WaitUntilInstanceProfileExists(getProfileInput); err != nil {
+		return errors.New("Unable to wait for instance profile to exist: " + err.Error())
 	}
 
 	roleInstanceProfileParams := &iam.AddRoleToInstanceProfileInput{
@@ -690,40 +697,48 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 
 	ecsSvc := ecs.New(sess)
 	ec2Svc := ec2.New(sess)
+	glog.V(1).Infof("Setting up ECS cluster")
 	if err := setupECS(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup ECS: " + err.Error())
 	}
 
+	glog.V(1).Infof("Setting up IAM Role")
 	if err := setupIAM(deployment, sess, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
+	glog.V(1).Infof("Setting up Network")
 	if err := setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup Network: " + err.Error())
 	}
 
+	glog.V(1).Infof("Launching EC2 instances")
 	if err := setupEC2(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
+	glog.V(1).Infof("Waiting for ECS cluster to be ready")
 	if err := waitUntilECSClusterReady(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to wait until ECS cluster ready: " + err.Error())
 	}
 
+	glog.V(1).Infof("Populating public dns names")
 	if err := populatePublicDnsNames(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to populate public dns names: " + err.Error())
 	}
 
+	glog.V(1).Infof("Uploading files to EC2 Instances")
 	if err := uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
 		return errors.New("Unable to upload files to EC2: " + err.Error())
 	}
 
+	glog.V(1).Infof("Launching ECS Tasks")
 	if err := launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to launch ECS tasks: " + err.Error())
