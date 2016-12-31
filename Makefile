@@ -21,4 +21,4 @@ build:
 	${GO_EXECUTABLE} build .
 
 dev-test: build
-	./deployer --config ./documents/dev.config
+	./deployer --config ./documents/dev.config -logtostderr=true -v=2
