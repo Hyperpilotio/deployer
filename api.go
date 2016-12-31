@@ -62,6 +62,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
+		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -72,6 +73,16 @@ func (server *Server) StartServer() error {
 	}
 
 	return router.Run(":" + server.Config.GetString("port"))
+}
+
+func (server *Server) getNodeAddressForTask(c *gin.Context) {
+	//deploymentName := c.Param("deployment")
+	//taskName := c.Param("task")
+
+	c.JSON(http.StatusNotImplemented, gin.H{
+		"error": false,
+		"data":  "",
+	})
 }
 
 func (server *Server) storeUploadedFile(fileId string, c *gin.Context) (*string, error) {

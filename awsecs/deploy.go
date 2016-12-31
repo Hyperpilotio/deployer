@@ -561,10 +561,10 @@ func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *e
 	startTaskInput := &ecs.StartTaskInput{
 		Cluster:            aws.String(deployedCluster.Deployment.Name),
 		TaskDefinition:     aws.String(mapping.Task),
-		ContainerInstances: []*string{nodeInfo.Instance.InstanceId},
+		ContainerInstances: []*string{&nodeInfo.Arn},
 	}
 
-	glog.Infof("Starting task %v", mapping)
+	glog.Infof("Starting task %v with count %d", startTaskInput, mapping.Count)
 	for i := 0; i < mapping.Count; i++ {
 		startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
 		if err != nil {
@@ -624,9 +624,9 @@ func populatePublicDnsNames(deployment *Deployment, ec2Svc *ec2.EC2, deployedClu
 		for _, instance := range reservation.Instances {
 			if instance.PublicDnsName != nil && *instance.PublicDnsName != "" {
 				for nodeId, nodeInfo := range deployedCluster.NodeInfos {
-					glog.V(2).Infof("Comparing instance ids, %s to %s", *nodeInfo.Instance.InstanceId, *instance.InstanceId)
 					if *nodeInfo.Instance.InstanceId == *instance.InstanceId {
-						glog.V(2).Infof("Assigning public dns name %s to node %d", *instance.PublicDnsName, nodeId)
+						glog.V(2).Infof("Assigning public dns name %s to node %d",
+							*instance.PublicDnsName, nodeId)
 						nodeInfo.PublicDnsName = *instance.PublicDnsName
 					}
 				}
@@ -1088,21 +1088,25 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 	ec2Svc := ec2.New(sess)
 	ecsSvc := ecs.New(sess)
 
+	glog.V(1).Infof("Checking VPC for deletion")
 	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to find VPC: ", err.Error())
 	}
 
 	// Stop all running tasks
+	glog.V(1).Infof("Stopping all ECS tasks")
 	if err := stopECSTasks(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to stop ECS tasks: ", err.Error())
 	}
 
 	// delete all the task definitions
+	glog.V(1).Infof("Deleting task definitions")
 	if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete task definitions: %s", err.Error())
 	}
 
 	// Terminate EC2 instance
+	glog.V(1).Infof("Deleting EC2 instances")
 	if err := deleteEC2(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete task definitions: %s", err.Error())
 	}
@@ -1111,36 +1115,43 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 	// Delete the launch configuration
 
 	// delete IAM role
+	glog.V(1).Infof("Deleting IAM role")
 	if err := deleteIAM(sess, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete IAM: %s", err.Error())
 	}
 
 	// delete key pair
+	glog.V(1).Infof("Deleting key pair")
 	if err := deleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete key pair: ", err.Error())
 	}
 
 	// delete security group
+	glog.V(1).Infof("Deleting security group")
 	if err := deleteSecurityGroup(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete security group: ", err.Error())
 	}
 
 	// delete internet gateway.
+	glog.V(1).Infof("Deleting internet gateway")
 	if err := deleteInternetGateway(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete internet gateway: ", err.Error())
 	}
 
 	// delete subnet.
+	glog.V(1).Infof("Deleting subnet")
 	if err := deleteSubnet(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete subnet: ", err.Error())
 	}
 
 	// Delete VPC
+	glog.V(1).Infof("Deleting VPC")
 	if err := deleteVPC(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete VPC: ", err)
 	}
 
 	// Delete ecs cluster
+	glog.V(1).Infof("Deleting ECS cluster")
 	if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete ECS cluster: ", err)
 	}
