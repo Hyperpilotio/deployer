@@ -1,6 +1,8 @@
 package awsecs
 
 import (
+	"fmt"
+
 	"github.com/aws/aws-sdk-go/service/ecs"
 )
 
@@ -16,6 +18,16 @@ type NodeMapping struct {
 	Count int    `json:"count"`
 	Id    int    `json:"id"`
 	Task  string `json:"task"`
+}
+
+// Service return a string with suffix "-service"
+func (mapping NodeMapping) Service() string {
+	return mapping.Task + "-service"
+}
+
+// ImageIdAttribute return imageId for putAttribute function
+func (mapping NodeMapping) ImageIdAttribute() string {
+	return fmt.Sprintf("imageId-%d", mapping.Id)
 }
 
 // Deployment storing the information of a deployment

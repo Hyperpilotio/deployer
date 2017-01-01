@@ -676,47 +676,6 @@ func populatePublicDnsNames(deployment *Deployment, ec2Svc *ec2.EC2, deployedClu
 	return nil
 }
 
-func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	listInstancesInput := &ecs.ListContainerInstancesInput{
-		Cluster: aws.String(deployment.Name),
-	}
-
-	var containerInstances []*string
-	if listInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput); err != nil {
-		return errors.New("Unable to list container instances: " + err.Error())
-	} else {
-		containerInstances = listInstancesOutput.ContainerInstanceArns
-	}
-
-	describeInstancesInput := &ecs.DescribeContainerInstancesInput{
-		Cluster:            aws.String(deployment.Name),
-		ContainerInstances: containerInstances,
-	}
-
-	if describeInstancesOutput, err := ecsSvc.DescribeContainerInstances(describeInstancesInput); err != nil {
-		return errors.New("Unable to describe container instances: " + err.Error())
-	} else {
-		for _, instance := range describeInstancesOutput.ContainerInstances {
-			for _, nodeInfo := range deployedCluster.NodeInfos {
-				if *instance.Ec2InstanceId == *nodeInfo.Instance.InstanceId {
-					nodeInfo.Arn = *instance.ContainerInstanceArn
-					break
-				}
-			}
-		}
-	}
-
-	for _, mapping := range deployment.NodeMapping {
-		// If user didn't specify a count (defaults to 0), we at least run one task.
-		if mapping.Count <= 0 {
-			mapping.Count = 1
-		}
-		startTask(deployedCluster, &mapping, ecsSvc)
-	}
-
-	return nil
-}
-
 func setupInstanceAttribute(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	var containerInstances []*string
 	listInstancesInput := &ecs.ListContainerInstancesInput{
