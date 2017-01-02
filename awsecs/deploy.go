@@ -535,6 +535,7 @@ func errorMessageFromFailures(failures []*ecs.Failure) string {
 	return failureMessage
 }
 
+// Max compare two inputs and return bigger one
 func Max(x, y int) int {
 	if x > y {
 		return x
@@ -542,6 +543,7 @@ func Max(x, y int) int {
 	return y
 }
 
+// StartTaskOnNode call startTask function
 func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *NodeMapping) error {
 	sess, err := createSession(viper, deployedCluster.Deployment)
 	if err != nil {
@@ -577,6 +579,43 @@ func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *e
 				mapping.Task,
 				errorMessageFromFailures(startTaskOutput.Failures))
 		}
+	}
+
+	return nil
+}
+
+func startService(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *ecs.ECS) error {
+	serviceInput := &ecs.CreateServiceInput{
+		DesiredCount:   aws.Int64(int64(mapping.Count)),
+		ServiceName:    aws.String(mapping.Service()),
+		TaskDefinition: aws.String(mapping.Task),
+		Cluster:        aws.String(deployedCluster.Deployment.Name),
+		PlacementConstraints: []*ecs.PlacementConstraint{
+			{
+				Expression: aws.String(fmt.Sprintf("attribute:imageId == %d", mapping.Id)),
+				Type:       aws.String("memberOf"),
+			},
+		},
+	}
+
+	glog.Infof("Starting service %v\n", serviceInput)
+	startServiceOutput, err := ecsSvc.CreateService(serviceInput)
+	glog.V(2).Infof("Service information: %v\n", startServiceOutput.Service)
+
+	if err != nil {
+		return fmt.Errorf("Unable to start service %v\nError: %v\n", mapping.Service(), err)
+	}
+
+	return nil
+}
+
+func createServices(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+	for _, mapping := range deployment.NodeMapping {
+		// If user didn't specify a count (defaults to 0), we at least run one task.
+		if mapping.Count <= 0 {
+			mapping.Count = 1
+		}
+		startService(deployedCluster, &mapping, ecsSvc)
 	}
 
 	return nil
@@ -678,6 +717,67 @@ func launchECSTasks(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	return nil
 }
 
+func setupInstanceAttribute(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+	var containerInstances []*string
+	listInstancesInput := &ecs.ListContainerInstancesInput{
+		Cluster: aws.String(deployment.Name),
+	}
+
+	listInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
+
+	if err != nil {
+		return errors.New("Unable to list container instances: " + err.Error())
+	}
+
+	containerInstances = listInstancesOutput.ContainerInstanceArns
+
+	describeInstancesInput := &ecs.DescribeContainerInstancesInput{
+		Cluster:            aws.String(deployment.Name),
+		ContainerInstances: containerInstances,
+	}
+
+	describeInstancesOutput, err := ecsSvc.DescribeContainerInstances(describeInstancesInput)
+
+	if err != nil {
+		return errors.New("Unable to describe container instances: " + err.Error())
+	}
+
+	for _, instance := range describeInstancesOutput.ContainerInstances {
+		for _, nodeInfo := range deployedCluster.NodeInfos {
+			if *instance.Ec2InstanceId == *nodeInfo.Instance.InstanceId {
+				nodeInfo.Arn = *instance.ContainerInstanceArn
+				break
+			}
+		}
+	}
+
+	for _, mapping := range deployment.NodeMapping {
+		nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
+		if !ok {
+			return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
+		}
+
+		params := &ecs.PutAttributesInput{
+			Attributes: []*ecs.Attribute{
+				{
+					Name:       aws.String("imageId"),
+					TargetId:   aws.String(nodeInfo.Arn),
+					TargetType: aws.String("container-instance"),
+					Value:      aws.String(mapping.ImageIdAttribute()),
+				},
+			},
+			Cluster: aws.String(deployment.Name),
+		}
+
+		_, err := ecsSvc.PutAttributes(params)
+
+		if err != nil {
+			return fmt.Errorf("Unable to put attribute on ECS instance: %v\nMessage:%s\n", params, err.Error())
+		}
+	}
+	return nil
+}
+
 // NewDeployedCluster return the instance of DeployedCluster
 func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
 	return &DeployedCluster{
@@ -738,8 +838,14 @@ func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles 
 		return errors.New("Unable to upload files to EC2: " + err.Error())
 	}
 
-	glog.V(1).Infof("Launching ECS Tasks")
-	if err := launchECSTasks(deployment, ecsSvc, deployedCluster); err != nil {
+	glog.V(1).Infoln("Add attribute on ECS instances")
+	if err := setupInstanceAttribute(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to setup instance attribute: " + err.Error())
+	}
+
+	glog.V(1).Infoln("Launching ECS services")
+	if err := createServices(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to launch ECS tasks: " + err.Error())
 	}
@@ -781,6 +887,51 @@ func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 
 	if errMsg {
 		return errors.New("Unable to clean up all the tasks.")
+	}
+	return nil
+}
+
+func updateECSService(svc *ecs.ECS, nodemapping *NodeMapping, cluster string, count int) error {
+	params := &ecs.UpdateServiceInput{
+		Service:      aws.String(nodemapping.Service()),
+		Cluster:      aws.String(cluster),
+		DesiredCount: aws.Int64(int64(count)),
+	}
+
+	if _, err := svc.UpdateService(params); err != nil {
+		return fmt.Errorf("Unable to update ECS service: %s\n", err.Error())
+	}
+	return nil
+}
+
+func deleteECSService(svc *ecs.ECS, nodemapping *NodeMapping, cluster string) error {
+	params := &ecs.DeleteServiceInput{
+		Service: aws.String(nodemapping.Service()),
+		Cluster: aws.String(cluster),
+	}
+
+	if _, err := svc.DeleteService(params); err != nil {
+		return fmt.Errorf("Unable to delete ECS service (%s): %s\n", nodemapping.Service(), err.Error())
+	}
+	return nil
+}
+
+func stopECSServices(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
+	errMsg := false
+	for _, nodemapping := range deployedCluster.Deployment.NodeMapping {
+		if err := updateECSService(svc, &nodemapping, deployedCluster.Name, 0); err != nil {
+			errMsg = true
+			glog.Warningf("Unable to update ECS service service %s to 0:\nMessage:%v\n", nodemapping.Service(), err.Error())
+		}
+
+		if err := deleteECSService(svc, &nodemapping, deployedCluster.Name); err != nil {
+			errMsg = true
+			glog.Warningf("Unable to delete ECS service (%s):\nMessage:%v\n", nodemapping.Service(), err.Error())
+		}
+	}
+
+	if errMsg {
+		return errors.New("Unable to clean up all the services.")
 	}
 	return nil
 }
@@ -1094,9 +1245,9 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 	}
 
 	// Stop all running tasks
-	glog.V(1).Infof("Stopping all ECS tasks")
-	if err := stopECSTasks(ecsSvc, deployedCluster); err != nil {
-		glog.Errorln("Unable to stop ECS tasks: ", err.Error())
+	glog.V(1).Infoln("Stopping all ECS services")
+	if err := stopECSServices(ecsSvc, deployedCluster); err != nil {
+		glog.Errorln("Unable to stop ECS services: ", err.Error())
 	}
 
 	// delete all the task definitions
