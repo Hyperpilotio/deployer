@@ -592,17 +592,14 @@ func startService(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc
 		Cluster:        aws.String(deployedCluster.Deployment.Name),
 		PlacementConstraints: []*ecs.PlacementConstraint{
 			{
-				Expression: aws.String(fmt.Sprintf("attribute:imageId == %d", mapping.Id)),
+				Expression: aws.String(fmt.Sprintf("attribute:imageId == %s", mapping.ImageIdAttribute())),
 				Type:       aws.String("memberOf"),
 			},
 		},
 	}
 
-	glog.Infof("Starting service %v\n", serviceInput)
-	startServiceOutput, err := ecsSvc.CreateService(serviceInput)
-	glog.V(2).Infof("Service information: %v\n", startServiceOutput.Service)
-
-	if err != nil {
+	glog.V(2).Infof("Starting service %v\n", serviceInput)
+	if _, err := ecsSvc.CreateService(serviceInput); err != nil {
 		return fmt.Errorf("Unable to start service %v\nError: %v\n", mapping.Service(), err)
 	}
 
