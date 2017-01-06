@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 	"path"
-	"sync"
 	"strings"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/awsecs"
@@ -295,18 +295,16 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 }
 
 func (server *Server) getPemFile(c *gin.Context) {
-	deployment := c.Param("deployment")
-	keyNmae := deployment + "-key.pem"
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 
-	privateKey := strings.Replace(*server.DeployedClusters[deployment].KeyPair.KeyMaterial, "\\n", "\n", -1)
-
-	out, _ := os.Create(keyNmae)
-	out.WriteString(privateKey)
-	defer out.Close()
-
-	c.Header("Content-Description", "SSH_KEY")
-	c.Header("Content-Transfer-Encoding", "binary")
-	c.Header("Content-Disposition", "attachment; filename="+keyNmae)
-	c.Header("Content-Type", "application/octet-stream")
-	c.File(keyNmae)
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		privateKey := strings.Replace(*data.KeyPair.KeyMaterial, "\\n", "\n", -1)
+		c.String(http.StatusOK, privateKey)
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
 }
