@@ -6,6 +6,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/awsecs"
@@ -60,6 +61,8 @@ func (server *Server) StartServer() error {
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
+
+		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
@@ -289,4 +292,21 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			"data":  c.Param("deployment") + " not found.",
 		})
 	}
+}
+
+func (server *Server) getPemFile(c *gin.Context) {
+	deployment := c.Param("deployment")
+	keyNmae := deployment + "-key.pem"
+
+	privateKey := strings.Replace(*server.DeployedClusters[deployment].KeyPair.KeyMaterial, "\\n", "\n", -1)
+
+	out, _ := os.Create(keyNmae)
+	out.WriteString(privateKey)
+	defer out.Close()
+
+	c.Header("Content-Description", "SSH_KEY")
+	c.Header("Content-Transfer-Encoding", "binary")
+	c.Header("Content-Disposition", "attachment; filename="+keyNmae)
+	c.Header("Content-Type", "application/octet-stream")
+	c.File(keyNmae)
 }
