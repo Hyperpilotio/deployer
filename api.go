@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -60,6 +61,8 @@ func (server *Server) StartServer() error {
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
+
+		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
@@ -283,6 +286,21 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			"data":  "",
 		})
 
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
+}
+
+func (server *Server) getPemFile(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		privateKey := strings.Replace(*data.KeyPair.KeyMaterial, "\\n", "\n", -1)
+		c.String(http.StatusOK, privateKey)
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
