@@ -21,6 +21,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -517,8 +518,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		DefaultCooldown:         aws.Int64(1),
 		DesiredCapacity:         aws.Int64(deployment.Scale),
 		LaunchConfigurationName: aws.String(deployment.Name),
-		// NOTE this fiedl is required once we have the function of setupVpc
-		// VPCZoneIdentifier: aws.String("XmlStringMaxLen2047"),
+		VPCZoneIdentifier:       deployedCluster.SubnetId,
 	}
 
 	if _, err = svc.CreateAutoScalingGroup(autoScalingGroupParams); err != nil {
@@ -735,6 +735,54 @@ func setupInstanceAttribute(deployment *apis.Deployment, ecsSvc *ecs.ECS, deploy
 	return nil
 }
 
+func createAWSLogsGroup(groupName string, svc *cloudwatchlogs.CloudWatchLogs) error {
+	params := &cloudwatchlogs.CreateLogGroupInput{
+		LogGroupName: aws.String(groupName),
+	}
+	_, err := svc.CreateLogGroup(params)
+
+	if err != nil {
+		errMsg := fmt.Sprintf("Unable to create the AWS log group of %s.\nException Message: %s\n", groupName, err.Error())
+		glog.Warning(errMsg)
+		return errors.New(errMsg)
+	}
+
+	return nil
+}
+
+func setupAWSLogsGroup(sess *session.Session, deployment *Deployment) error {
+	svc := cloudwatchlogs.New(sess)
+	for _, task := range deployment.TaskDefinitions {
+		for _, container := range task.ContainerDefinitions {
+			// NOTE assume the log group does not exist and ignore any error.
+			// Error types:
+			// * InvalidParameterException
+			// A parameter is specified incorrectly.
+			// 	* ResourceAlreadyExistsException
+			// The specified resource already exists.
+			// 	* LimitExceededException
+			// You have reached the maximum number of resources that can be created.
+			// 	* OperationAbortedException
+			// Multiple requests to update the same resource were in conflict.
+			// 	* ServiceUnavailableException
+			// The service cannot complete the request.
+			// https://docs.aws.amazon.com/sdk-for-go/api/service/cloudwatchlogs/#example_CloudWatchLogs_CreateLogGroup
+			createAWSLogsGroup(*container.Name, svc)
+
+			// NOTE ensure each container definition containing logConfiguration field.
+			container.LogConfiguration = &ecs.LogConfiguration{
+				LogDriver: aws.String("awslogs"),
+				Options: map[string]*string{
+					"awslogs-group":         container.Name,
+					"awslogs-region":        aws.String(deployment.Region),
+					"awslogs-stream-prefix": aws.String("awslogs"),
+				},
+			}
+		}
+	}
+	return nil
+}
+
 // NewDeployedCluster return the instance of DeployedCluster
 func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
 	return &DeployedCluster{
@@ -754,6 +802,13 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 
 	ecsSvc := ecs.New(sess)
 	ec2Svc := ec2.New(sess)
+
+	glog.V(1).Infoln("Creating AWS Log Group")
+	if err := setupAWSLogsGroup(sess, deployment); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to setup AWS Log Group for container: " + err.Error())
+	}
+
 	glog.V(1).Infof("Setting up ECS cluster")
 	if err := setupECS(deployment, ecsSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)

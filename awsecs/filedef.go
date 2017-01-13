@@ -43,7 +43,9 @@ var defaultRolePolicy = `{
                 "ecs:DescribeServices",
                 "ec2:DescribeInstances",
                 "ec2:DescribeTags",
-                "autoscaling:DescribeAutoScalingInstances"
+                "autoscaling:DescribeAutoScalingInstances",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
             ],
             "Resource": [
                 "*"
