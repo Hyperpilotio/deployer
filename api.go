@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/spf13/viper"
 
@@ -79,12 +80,49 @@ func (server *Server) StartServer() error {
 }
 
 func (server *Server) getNodeAddressForTask(c *gin.Context) {
-	//deploymentName := c.Param("deployment")
-	//taskName := c.Param("task")
+	deploymentName := c.Param("deployment")
+	taskName := c.Param("task")
 
-	c.JSON(http.StatusNotImplemented, gin.H{
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deployedCluster, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find deployment",
+		})
+		return
+	}
+
+	nodeId := -1
+	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
+		if nodeMapping.Task == taskName {
+			nodeId = nodeMapping.Id
+			break
+		}
+	}
+
+	if nodeId == -1 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find task in deployment node mappings",
+		})
+		return
+	}
+
+	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
+	if !nodeOk {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find node in cluster",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "",
+		"data":  nodeInfo.PublicDnsName,
 	})
 }
 
@@ -193,7 +231,7 @@ func (server *Server) getDeployment(c *gin.Context) {
 
 func (server *Server) createDeployment(c *gin.Context) {
 	// FIXME document the structure of deployment in the doc file
-	var deployment awsecs.Deployment
+	var deployment apis.Deployment
 	if err := c.BindJSON(&deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -214,8 +252,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
-	// Move this after succesfuly deployment when things are working...
-	server.DeployedClusters[deployment.Name] = deployedCluster
 	err := awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -224,7 +260,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
-	//server.DeployedClusters[deployment.Name] = deployedCluster
+
+	server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
@@ -248,7 +285,7 @@ func (server *Server) startTask(c *gin.Context) {
 		return
 	}
 
-	var nodeMapping awsecs.NodeMapping
+	var nodeMapping apis.NodeMapping
 	if err := c.BindJSON(&nodeMapping); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,

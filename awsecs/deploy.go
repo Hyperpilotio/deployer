@@ -13,6 +13,7 @@ import (
 
 	"github.com/golang/glog"
 
+	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/common"
 
 	"github.com/spf13/viper"
@@ -37,7 +38,7 @@ type NodeInfo struct {
 type DeployedCluster struct {
 	Name              string
 	KeyPair           *ec2.CreateKeyPairOutput
-	Deployment        *Deployment
+	Deployment        *apis.Deployment
 	SecurityGroupId   string
 	SubnetId          string
 	InternetGatewayId string
@@ -71,7 +72,7 @@ func (deployedCluster DeployedCluster) SubnetName() string {
 	return deployedCluster.Name + "-subnet"
 }
 
-func createSession(viper *viper.Viper, deployment *Deployment) (*session.Session, error) {
+func createSession(viper *viper.Viper, deployment *apis.Deployment) (*session.Session, error) {
 	awsId := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
 	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
@@ -114,7 +115,7 @@ func createTag(ec2Svc *ec2.EC2, resources []*string, key string, value string) e
 	return createTags(ec2Svc, resources, tags)
 }
 
-func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func setupECS(deployment *apis.Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// FIXME check if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
 		ClusterName: aws.String(deployment.Name),
@@ -133,7 +134,7 @@ func setupECS(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *Deployed
 	return nil
 }
 
-func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func setupNetwork(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	glog.V(1).Infoln("Creating VPC")
 	createVpcInput := &ec2.CreateVpcInput{
 		CidrBlock: aws.String("172.31.0.0/28"),
@@ -281,7 +282,7 @@ func setupNetwork(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *Depl
 	return nil
 }
 
-func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
+func uploadFiles(deployment *apis.Deployment, ec2Svc *ec2.EC2, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
 	if len(deployment.Files) == 0 {
 		return nil
 	}
@@ -331,7 +332,7 @@ func uploadFiles(deployment *Deployment, ec2Svc *ec2.EC2, uploadedFiles map[stri
 	return nil
 }
 
-func setupEC2(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func setupEC2(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	keyPairParams := &ec2.CreateKeyPairInput{
 		KeyName: aws.String(deployedCluster.KeyName()),
 	}
@@ -419,7 +420,7 @@ weave launch`, deployment.Name)))
 	return nil
 }
 
-func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+func setupIAM(deployment *apis.Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	iamSvc := iam.New(sess)
 
 	roleParams := &iam.CreateRoleInput{
@@ -480,7 +481,7 @@ func setupIAM(deployment *Deployment, sess *session.Session, deployedCluster *De
 	return nil
 }
 
-func setupAutoScaling(deployment *Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+func setupAutoScaling(deployment *apis.Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	svc := autoscaling.New(sess)
 
 	userData := base64.StdEncoding.EncodeToString([]byte(
@@ -544,7 +545,7 @@ func Max(x, y int) int {
 }
 
 // StartTaskOnNode call startTask function
-func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *NodeMapping) error {
+func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *apis.NodeMapping) error {
 	sess, err := createSession(viper, deployedCluster.Deployment)
 	if err != nil {
 		return errors.New("Unable to create session: " + err.Error())
@@ -554,7 +555,7 @@ func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeM
 	return startTask(deployedCluster, nodeMapping, ecsSvc)
 }
 
-func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *ecs.ECS) error {
+func startTask(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
 	nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
 	if !ok {
 		return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
@@ -584,7 +585,7 @@ func startTask(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *e
 	return nil
 }
 
-func startService(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc *ecs.ECS) error {
+func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
 	serviceInput := &ecs.CreateServiceInput{
 		DesiredCount:   aws.Int64(int64(mapping.Count)),
 		ServiceName:    aws.String(mapping.Service()),
@@ -606,7 +607,7 @@ func startService(deployedCluster *DeployedCluster, mapping *NodeMapping, ecsSvc
 	return nil
 }
 
-func createServices(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func createServices(deployment *apis.Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	for _, mapping := range deployment.NodeMapping {
 		// If user didn't specify a count (defaults to 0), we at least run one task.
 		if mapping.Count <= 0 {
@@ -618,7 +619,7 @@ func createServices(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *De
 	return nil
 }
 
-func waitUntilECSClusterReady(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func waitUntilECSClusterReady(deployment *apis.Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	// Wait for ECS instances to be ready
 	clusterReady := false
 	totalCount := int64(len(deployment.ClusterDefinition.Nodes))
@@ -647,7 +648,7 @@ func waitUntilECSClusterReady(deployment *Deployment, ecsSvc *ecs.ECS, deployedC
 	return nil
 }
 
-func populatePublicDnsNames(deployment *Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func populatePublicDnsNames(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	// We need to describe instances again to obtain the PublicDnsAddresses for ssh.
 	describeInstanceOutput, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
 		InstanceIds: deployedCluster.InstanceIds,
@@ -673,7 +674,7 @@ func populatePublicDnsNames(deployment *Deployment, ec2Svc *ec2.EC2, deployedClu
 	return nil
 }
 
-func setupInstanceAttribute(deployment *Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func setupInstanceAttribute(deployment *apis.Deployment, ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	var containerInstances []*string
 	listInstancesInput := &ecs.ListContainerInstancesInput{
 		Cluster: aws.String(deployment.Name),
@@ -735,7 +736,7 @@ func setupInstanceAttribute(deployment *Deployment, ecsSvc *ecs.ECS, deployedClu
 }
 
 // NewDeployedCluster return the instance of DeployedCluster
-func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
+func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
 	return &DeployedCluster{
 		Name:        deployment.Name,
 		Deployment:  deployment,
@@ -745,7 +746,7 @@ func NewDeployedCluster(deployment *Deployment) *DeployedCluster {
 }
 
 // CreateDeployment start a deployment
-func CreateDeployment(viper *viper.Viper, deployment *Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
+func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
 	sess, sessionErr := createSession(viper, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
@@ -847,7 +848,7 @@ func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func updateECSService(svc *ecs.ECS, nodemapping *NodeMapping, cluster string, count int) error {
+func updateECSService(svc *ecs.ECS, nodemapping *apis.NodeMapping, cluster string, count int) error {
 	params := &ecs.UpdateServiceInput{
 		Service:      aws.String(nodemapping.Service()),
 		Cluster:      aws.String(cluster),
@@ -860,7 +861,7 @@ func updateECSService(svc *ecs.ECS, nodemapping *NodeMapping, cluster string, co
 	return nil
 }
 
-func deleteECSService(svc *ecs.ECS, nodemapping *NodeMapping, cluster string) error {
+func deleteECSService(svc *ecs.ECS, nodemapping *apis.NodeMapping, cluster string) error {
 	params := &ecs.DeleteServiceInput{
 		Service: aws.String(nodemapping.Service()),
 		Cluster: aws.String(cluster),
