@@ -25,4 +25,5 @@ make dev-test
 * [ ]Sent a request to BloxAws to create snap daemon
 * [ ]Sent a request to AWS ECS to create a influxdb daemon
 * [ ]Design the error log
-* [ ]Implement the worker of createDeployment and deleteDeployment
+* [X]Implement the worker of createDeployment and deleteDeployment
+* [X]Add logger (aws cloudwatch) for the sack of debugging.
