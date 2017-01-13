@@ -517,8 +517,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		DefaultCooldown:         aws.Int64(1),
 		DesiredCapacity:         aws.Int64(deployment.Scale),
 		LaunchConfigurationName: aws.String(deployment.Name),
-		// NOTE this field is required once we have the function of setupVpc
-		// VPCZoneIdentifier: aws.String("XmlStringMaxLen2047"),
+		VPCZoneIdentifier:       deployedCluster.SubnetId,
 	}
 
 	if _, err = svc.CreateAutoScalingGroup(autoScalingGroupParams); err != nil {
@@ -736,7 +735,6 @@ func setupInstanceAttribute(deployment *Deployment, ecsSvc *ecs.ECS, deployedClu
 }
 
 func createAWSLogsGroup(groupName string, svc *cloudwatchlogs.CloudWatchLogs) error {
-
 	params := &cloudwatchlogs.CreateLogGroupInput{
 		LogGroupName: aws.String(groupName),
 	}
