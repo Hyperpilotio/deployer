@@ -68,7 +68,7 @@ func (server *Server) StartServer() error {
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
-		daemonsGroup.GET("/:deployment/tasks/:task/url", server.getTaskUrl)
+		daemonsGroup.GET("/:deployment/containers/:container/url", server.getContainerUrl)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -348,80 +348,66 @@ func (server *Server) getPemFile(c *gin.Context) {
 	}
 }
 
-func (server *Server) getTaskUrl(c *gin.Context) {
+func (server *Server) getContainerUrl(c *gin.Context) {
 	deploymentName := c.Param("deployment")
-	taskName := c.Param("task")
+	containerName := c.Param("container")
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if data, ok := server.DeployedClusters[deploymentName]; ok {
+	deployedCluster, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find deployment",
+		})
+		return
+	}
 
-		nodeId := -1
-		nodePort := ""
-		publicDnsName := ""
-
-		if c.Param("task") == "benchmark-agent" {
-			for _, task := range data.Deployment.TaskDefinitions {
-				for _, container := range task.ContainerDefinitions {
-					if *container.Name == taskName {
-						nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
-						taskName = *task.Family
-						break
-					}
-				}
-			}
-		}
-
-		for _, nodeMapping := range data.Deployment.NodeMapping {
-			if nodeMapping.Task == taskName {
-				nodeId = nodeMapping.Id
+	nodePort := ""
+	taskFamilyName := ""
+	for _, task := range deployedCluster.Deployment.TaskDefinitions {
+		for _, container := range task.ContainerDefinitions {
+			if *container.Name == containerName {
+				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+				taskFamilyName = *task.Family
 				break
 			}
 		}
+	}
 
-		if nodeId == -1 {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Unable to find task in deployment node mappings",
-			})
-			return
-		}
-
-		nodeInfo, nodeOk := data.NodeInfos[nodeId]
-		if !nodeOk {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Unable to find node in cluster",
-			})
-			return
-		}
-		publicDnsName = nodeInfo.PublicDnsName
-
-		if c.Param("task") != "benchmark-agent" {
-			for _, task := range data.Deployment.TaskDefinitions {
-				for _, container := range task.ContainerDefinitions {
-					if *container.Name == taskName {
-						nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
-						break
-					}
-				}
-			}
-
-			if nodePort == "" {
-				c.JSON(http.StatusNotFound, gin.H{
-					"error": true,
-					"data":  "Unable to find task in deployment port mappings",
-				})
-				return
-			}
-		}
-
-		c.String(http.StatusOK, publicDnsName+":"+nodePort)
-	} else {
+	if nodePort == "" {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " not found.",
+			"data":  "Unable to find task in deployment port mappings",
 		})
+		return
 	}
+
+	nodeId := -1
+	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
+		if nodeMapping.Task == taskFamilyName {
+			nodeId = nodeMapping.Id
+			break
+		}
+	}
+
+	if nodeId == -1 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find task in deployment node mappings",
+		})
+		return
+	}
+
+	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
+	if !nodeOk {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find node in cluster",
+		})
+		return
+	}
+
+	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
 }
