@@ -357,9 +357,22 @@ func (server *Server) getTaskUrl(c *gin.Context) {
 
 	if data, ok := server.DeployedClusters[deploymentName]; ok {
 
-		// TODO benchmark-agent
-
 		nodeId := -1
+		nodePort := ""
+		publicDnsName := ""
+
+		if c.Param("task") == "benchmark-agent" {
+			for _, task := range data.Deployment.TaskDefinitions {
+				for _, container := range task.ContainerDefinitions {
+					if *container.Name == taskName {
+						nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+						taskName = *task.Family
+						break
+					}
+				}
+			}
+		}
+
 		for _, nodeMapping := range data.Deployment.NodeMapping {
 			if nodeMapping.Task == taskName {
 				nodeId = nodeMapping.Id
@@ -383,26 +396,28 @@ func (server *Server) getTaskUrl(c *gin.Context) {
 			})
 			return
 		}
+		publicDnsName = nodeInfo.PublicDnsName
 
-		nodePort := ""
-		for _, task := range data.Deployment.TaskDefinitions {
-			for _, container := range task.ContainerDefinitions {
-				if *container.Name == taskName {
-					nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
-					break
+		if c.Param("task") != "benchmark-agent" {
+			for _, task := range data.Deployment.TaskDefinitions {
+				for _, container := range task.ContainerDefinitions {
+					if *container.Name == taskName {
+						nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+						break
+					}
 				}
+			}
+
+			if nodePort == "" {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error": true,
+					"data":  "Unable to find task in deployment port mappings",
+				})
+				return
 			}
 		}
 
-		if nodePort == "" {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Unable to find task in deployment port mappings",
-			})
-			return
-		}
-
-		c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
+		c.String(http.StatusOK, publicDnsName+":"+nodePort)
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
