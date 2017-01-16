@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -67,6 +68,7 @@ func (server *Server) StartServer() error {
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
+		daemonsGroup.GET("/:deployment/tasks/:task/url", server.getTaskUrl)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -338,6 +340,69 @@ func (server *Server) getPemFile(c *gin.Context) {
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		privateKey := strings.Replace(*data.KeyPair.KeyMaterial, "\\n", "\n", -1)
 		c.String(http.StatusOK, privateKey)
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
+}
+
+func (server *Server) getTaskUrl(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+	taskName := c.Param("task")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	if data, ok := server.DeployedClusters[deploymentName]; ok {
+
+		// TODO benchmark-agent
+
+		nodeId := -1
+		for _, nodeMapping := range data.Deployment.NodeMapping {
+			if nodeMapping.Task == taskName {
+				nodeId = nodeMapping.Id
+				break
+			}
+		}
+
+		if nodeId == -1 {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Unable to find task in deployment node mappings",
+			})
+			return
+		}
+
+		nodeInfo, nodeOk := data.NodeInfos[nodeId]
+		if !nodeOk {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Unable to find node in cluster",
+			})
+			return
+		}
+
+		nodePort := ""
+		for _, task := range data.Deployment.TaskDefinitions {
+			for _, container := range task.ContainerDefinitions {
+				if *container.Name == taskName {
+					nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+					break
+				}
+			}
+		}
+
+		if nodePort == "" {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Unable to find task in deployment port mappings",
+			})
+			return
+		}
+
+		c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
