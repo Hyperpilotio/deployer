@@ -346,6 +346,7 @@ func setupEC2(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster *Dep
 	userData := base64.StdEncoding.EncodeToString([]byte(
 		fmt.Sprintf(`#!/bin/bash
 echo ECS_CLUSTER=%s >> /etc/ecs/ecs.config
+echo manual > /etc/weave/scope.override
 weave launch`, deployment.Name)))
 
 	associatePublic := true
@@ -742,6 +743,11 @@ func createAWSLogsGroup(groupName string, svc *cloudwatchlogs.CloudWatchLogs) er
 	_, err := svc.CreateLogGroup(params)
 
 	if err != nil {
+		if strings.Contains(err.Error(), "ResourceAlreadyExistsException") {
+			glog.Infof("Skip creating log group %s as it has already been created", groupName)
+			return nil
+		}
+
 		errMsg := fmt.Sprintf("Unable to create the AWS log group of %s.\nException Message: %s\n", groupName, err.Error())
 		glog.Warning(errMsg)
 		return errors.New(errMsg)

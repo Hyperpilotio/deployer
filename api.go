@@ -379,7 +379,7 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	if nodePort == "" {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Unable to find task in deployment port mappings",
+			"data":  "Unable to find container in deployment container defintiions",
 		})
 		return
 	}
