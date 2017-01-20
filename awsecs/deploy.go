@@ -186,6 +186,15 @@ func setupNetwork(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster 
 	} else {
 		deployedCluster.SubnetId = *subnetResponse.Subnet.SubnetId
 	}
+
+	describeSubnetsInput := &ec2.DescribeSubnetsInput{
+		SubnetIds: []*string{aws.String(deployedCluster.SubnetId)},
+	}
+
+	if err := ec2Svc.WaitUntilSubnetAvailable(describeSubnetsInput); err != nil {
+		return errors.New("Unable to wait until subnet available: " + err.Error())
+	}
+
 	if err := createTag(ec2Svc, []*string{&deployedCluster.SubnetId}, "Name", deployedCluster.SubnetName()); err != nil {
 		return errors.New("Unable to tag subnet: " + err.Error())
 	}
@@ -195,6 +204,9 @@ func setupNetwork(deployment *apis.Deployment, ec2Svc *ec2.EC2, deployedCluster 
 	} else {
 		deployedCluster.InternetGatewayId = *gatewayResponse.InternetGateway.InternetGatewayId
 	}
+
+	// We have to sleep as sometimes the internet gateway won't be available yet. And sadly aws-sdk-go has no function to wait for it.
+	time.Sleep(time.Second * 5)
 
 	if err := createTag(ec2Svc, []*string{&deployedCluster.InternetGatewayId}, "Name", deployment.Name); err != nil {
 		return errors.New("Unable to tag internet gateway: " + err.Error())
