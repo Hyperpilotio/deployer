@@ -23,7 +23,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 
-	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"github.com/aws/aws-sdk-go/service/iam"
@@ -33,6 +32,7 @@ type NodeInfo struct {
 	Instance      *ec2.Instance
 	Arn           string
 	PublicDnsName string
+	PrivateIp     string
 }
 
 // DeployedCluster stores the data of a cluster
@@ -73,7 +73,7 @@ func (deployedCluster DeployedCluster) SubnetName() string {
 	return deployedCluster.Name + "-subnet"
 }
 
-func createSession(viper *viper.Viper, deployment *apis.Deployment) (*session.Session, error) {
+func CreateSession(viper *viper.Viper, deployment *apis.Deployment) (*session.Session, error) {
 	awsId := viper.GetString("awsId")
 	awsSecret := viper.GetString("awsSecret")
 	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
@@ -126,7 +126,7 @@ func setupECS(deployment *apis.Deployment, ecsSvc *ecs.ECS, deployedCluster *Dep
 		return errors.New("Unable to create cluster: " + err.Error())
 	}
 
-	for _, taskDefinition := range deployment.TaskDefinitions {
+	for _, taskDefinition := range deployment.ECSDeployment.TaskDefinitions {
 		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
 			return errors.New("Unable to register task definition: " + err.Error())
 		}
@@ -315,7 +315,7 @@ func uploadFiles(deployment *apis.Deployment, ec2Svc *ec2.EC2, uploadedFiles map
 
 	for _, nodeInfo := range deployedCluster.NodeInfos {
 		address := nodeInfo.PublicDnsName + ":22"
-		scpClient := common.NewScpClient(address, &clientConfig)
+		scpClient := common.NewSshClient(address, &clientConfig)
 		if err := scpClient.Connect(); err != nil {
 			return errors.New("Unable to connect to server " + address + ": " + err.Error())
 		}
@@ -365,7 +365,7 @@ weave launch`, deployment.Name)))
 	for _, node := range deployment.ClusterDefinition.Nodes {
 		runResult, runErr := ec2Svc.RunInstances(&ec2.RunInstancesInput{
 			KeyName: aws.String(*keyOutput.KeyName),
-			ImageId: aws.String(amiCollection[deployment.Region]),
+			ImageId: aws.String(ecsAmis[deployment.Region]),
 			NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{
 				&ec2.InstanceNetworkInterfaceSpecification{
 					AssociatePublicIpAddress: &associatePublic,
@@ -434,9 +434,7 @@ weave launch`, deployment.Name)))
 	return nil
 }
 
-func setupIAM(deployment *apis.Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
-	iamSvc := iam.New(sess)
-
+func setupIAM(deployment *apis.Deployment, iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	roleParams := &iam.CreateRoleInput{
 		AssumeRolePolicyDocument: aws.String(trustDocument),
 		RoleName:                 aws.String(deployedCluster.RoleName()),
@@ -495,6 +493,7 @@ func setupIAM(deployment *apis.Deployment, sess *session.Session, deployedCluste
 	return nil
 }
 
+/*
 func setupAutoScaling(deployment *apis.Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
 	svc := autoscaling.New(sess)
 
@@ -507,7 +506,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		AssociatePublicIpAddress: aws.Bool(true),
 		EbsOptimized:             aws.Bool(true),
 		IamInstanceProfile:       aws.String(deployment.Name),
-		ImageId:                  aws.String(amiCollection[deployment.Region]),
+		ImageId:                  aws.String(ecsAmis[deployment.Region]),
 		InstanceMonitoring: &autoscaling.InstanceMonitoring{
 			Enabled: aws.Bool(false),
 		},
@@ -539,6 +538,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 	}
 	return nil
 }
+*/
 
 func errorMessageFromFailures(failures []*ecs.Failure) string {
 	var failureMessage = ""
@@ -559,7 +559,7 @@ func Max(x, y int) int {
 
 // StartTaskOnNode call startTask function
 func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *apis.NodeMapping) error {
-	sess, err := createSession(viper, deployedCluster.Deployment)
+	sess, err := CreateSession(viper, deployedCluster.Deployment)
 	if err != nil {
 		return errors.New("Unable to create session: " + err.Error())
 	}
@@ -678,6 +678,7 @@ func populatePublicDnsNames(deployment *apis.Deployment, ec2Svc *ec2.EC2, deploy
 						glog.V(2).Infof("Assigning public dns name %s to node %d",
 							*instance.PublicDnsName, nodeId)
 						nodeInfo.PublicDnsName = *instance.PublicDnsName
+						nodeInfo.PrivateIp = *instance.PrivateIp
 					}
 				}
 			}
@@ -811,30 +812,9 @@ func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
 	}
 }
 
-// CreateDeployment start a deployment
-func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
-	sess, sessionErr := createSession(viper, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return errors.New("Unable to create session: " + sessionErr.Error())
-	}
-
-	ecsSvc := ecs.New(sess)
-	ec2Svc := ec2.New(sess)
-
-	glog.V(1).Infoln("Creating AWS Log Group")
-	if err := setupAWSLogsGroup(sess, deployment); err != nil {
-		DeleteDeployment(viper, deployedCluster)
-		return errors.New("Unable to setup AWS Log Group for container: " + err.Error())
-	}
-
-	glog.V(1).Infof("Setting up ECS cluster")
-	if err := setupECS(deployment, ecsSvc, deployedCluster); err != nil {
-		DeleteDeployment(viper, deployedCluster)
-		return errors.New("Unable to setup ECS: " + err.Error())
-	}
-
+func SetupEC2Infra(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, ec2Svc *ec2.EC2, iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	glog.V(1).Infof("Setting up IAM Role")
-	if err := setupIAM(deployment, sess, deployedCluster); err != nil {
+	if err := setupIAM(deployment, iamSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
@@ -851,12 +831,6 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
-	glog.V(1).Infof("Waiting for ECS cluster to be ready")
-	if err := waitUntilECSClusterReady(deployment, ecsSvc, deployedCluster); err != nil {
-		DeleteDeployment(viper, deployedCluster)
-		return errors.New("Unable to wait until ECS cluster ready: " + err.Error())
-	}
-
 	glog.V(1).Infof("Populating public dns names")
 	if err := populatePublicDnsNames(deployment, ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
@@ -866,6 +840,43 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 	glog.V(1).Infof("Uploading files to EC2 Instances")
 	if err := uploadFiles(deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
 		return errors.New("Unable to upload files to EC2: " + err.Error())
+	}
+
+	return nil
+}
+
+// CreateDeployment start a deployment
+func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
+	sess, sessionErr := CreateSession(viper, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create session: " + sessionErr.Error())
+	}
+
+	ecsSvc := ecs.New(sess)
+	ec2Svc := ec2.New(sess)
+	iamSvc := iam.New(sess)
+
+	glog.V(1).Infoln("Creating AWS Log Group")
+	if err := setupAWSLogsGroup(sess, deployment); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to setup AWS Log Group for container: " + err.Error())
+	}
+
+	glog.V(1).Infof("Setting up ECS cluster")
+	if err := setupECS(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to setup ECS: " + err.Error())
+	}
+
+	if err := SetupEC2Infra(viper, deployment, uploadedFiles, ec2Svc, iamSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to setup EC2: " + err.Error())
+	}
+
+	glog.V(1).Infof("Waiting for ECS cluster to be ready")
+	if err := waitUntilECSClusterReady(deployment, ecsSvc, deployedCluster); err != nil {
+		DeleteDeployment(viper, deployedCluster)
+		return errors.New("Unable to wait until ECS cluster ready: " + err.Error())
 	}
 
 	glog.V(1).Infoln("Add attribute on ECS instances")
@@ -884,7 +895,7 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 }
 
 func isRegionValid(region string) bool {
-	_, ok := amiCollection[region]
+	_, ok := ecsAmis[region]
 	return ok
 }
 
@@ -997,13 +1008,12 @@ func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) er
 	return nil
 }
 
-func deleteIAM(sess *session.Session, deployedCluster *DeployedCluster) error {
+func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	// NOTE For now (2016/12/28), we don't know how to handle the error of request timeout from AWS SDK.
 	// Ignore all the errors and log them as error messages into log file. deleteIAM has different severity,
 	//in contrast to other functions. Since the error of deleteIAM causes next time deployment's failure .
 
 	errBool := false
-	iamSvc := iam.New(sess)
 
 	// remove role from instance profile
 	roleInstanceProfileParam := &iam.RemoveRoleFromInstanceProfileInput{
@@ -1296,8 +1306,10 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 	// Delete the launch configuration
 
 	// delete IAM role
+	iamSvc := iam.New(sess)
+
 	glog.V(1).Infof("Deleting IAM role")
-	if err := deleteIAM(sess, deployedCluster); err != nil {
+	if err := deleteIAM(iamSvc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete IAM: %s", err.Error())
 	}
 

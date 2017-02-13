@@ -12,14 +12,14 @@ import (
 	"github.com/golang/glog"
 )
 
-type ScpClient struct {
+type SshClient struct {
 	Host         string
 	ClientConfig *ssh.ClientConfig
 	Client       *ssh.Client
 }
 
 // Connects to the remote SSH server, returns error if it couldn't establish a session to the SSH server
-func (a *ScpClient) Connect() error {
+func (a *SshClient) Connect() error {
 	client, err := ssh.Dial("tcp", a.Host, a.ClientConfig)
 	if err != nil {
 		return err
@@ -30,8 +30,23 @@ func (a *ScpClient) Connect() error {
 	return nil
 }
 
+func (a *SshClient) RunCommand(command string) error {
+	session, err := a.Client.NewSession()
+	if err != nil {
+		return errors.New("Unable to create ssh session: " + err.Error())
+	}
+	err = session.Run(command)
+	if err != nil {
+		return errors.New("Unable to run command: " + err.Error())
+	}
+
+	defer session.Close()
+
+	return nil
+}
+
 // Copies the contents of an io.Reader to a remote location
-func (a *ScpClient) CopyFile(fileReader io.Reader, remotePath string, permissions string) error {
+func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permissions string) error {
 	contents_bytes, _ := ioutil.ReadAll(fileReader)
 	contents := string(contents_bytes)
 	filename := path.Base(remotePath)
@@ -61,18 +76,20 @@ func (a *ScpClient) CopyFile(fileReader io.Reader, remotePath string, permission
 		fmt.Fprintln(w, contents)
 		fmt.Fprintln(w, "\x00")
 		w.Close()
+		session.Close()
 	}()
 
 	// Scp returns non zero exit status even on normal cases,
 	// therefore we need to verify the files are uploaded afterwards
 	session.Run("scp -t " + directory)
 
-	session, err = a.Client.NewSession()
+	newSession, newErr := a.Client.NewSession()
+	defer newSession.Close()
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
 
-	err = session.Run("file " + remotePath)
+	err = newSession.Run("file " + remotePath)
 	if err != nil {
 		return errors.New("Failed to upload file: " + stderrBuf.String())
 	}
@@ -80,8 +97,8 @@ func (a *ScpClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	return nil
 }
 
-func NewScpClient(host string, config *ssh.ClientConfig) ScpClient {
-	return ScpClient{
+func NewSshClient(host string, config *ssh.ClientConfig) SshClient {
+	return SshClient{
 		Host:         host,
 		ClientConfig: config,
 	}

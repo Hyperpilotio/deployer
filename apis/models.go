@@ -30,20 +30,30 @@ func (mapping NodeMapping) ImageIdAttribute() string {
 	return fmt.Sprintf("imageId-%d", mapping.Id)
 }
 
-// Deployment storing the information of a deployment
+// ECSDeployment storing the information of a ECS deployment
+type ECSDeployment struct {
+	TaskDefinitions []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+}
+
+// KubernetesDeployment storing the information of a Kubernetes deployment
+type KubernetesDeployment struct {
+}
+
 type Deployment struct {
-	Name   string `form:"name" json:"name" binding:"required"`
-	Region string `form:"region" json:"region" binding:"required"`
-	Scale  int64  `json:"scale"`
-	Files  []struct {
+	Name           string `form:"name" json:"name" binding:"required"`
+	ClusterManager string `form:"clusterManager" json:"clusterManager" binding:"required"`
+	Region         string `form:"region" json:"region" binding:"required"`
+	Files          []struct {
 		FileId string `json:"fileId"`
 		Path   string `json:"path"`
 	} `form:"files" json:"files"`
-	TaskDefinitions   []ecs.RegisterTaskDefinitionInput `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
-	AllowedPorts      []int                             `form:"allowedPorts" json:"allowedPorts"`
-	ClusterDefinition ClusterDefinition                 `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
-	NodeMapping       []NodeMapping                     `form:"nodeMapping" json:"nodeMapping" binding:"required"`
+	AllowedPorts      []int             `form:"allowedPorts" json:"allowedPorts"`
+	ClusterDefinition ClusterDefinition `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
+	NodeMapping       []NodeMapping     `form:"nodeMapping" json:"nodeMapping" binding:"required"`
 	IamRole           `form:"iamRole" json:"iamRole" binding:"required"`
+
+	ECSDeployment        `form:"ecs" json:"ecs" binding:"ecs"`
+	KubernetesDeployment `form:"kubernetes" json:"kubernetes" binding:"kubernetes"`
 }
 
 // IamRole store the information of iam role

@@ -10,7 +10,7 @@ var trustDocument = `{
 }`
 
 // aws-region:weave-ami
-var amiCollection = map[string]string{
+var ecsAmis = map[string]string{
 	"us-east-1":      "ami-c63709d1",
 	"us-east-2":      "ami-4788d222",
 	"us-west-1":      "ami-28e7b348",
