@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
+	"github.com/hyperpilotio/deployer/kubernetes"
 	"github.com/spf13/viper"
 
 	"net/http"
@@ -253,8 +254,15 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
+	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
-	err := awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	kubernetesDeployment := &apis.KubernetesDeployment{}
+	if deployment.KubernetesDeployment == *kubernetesDeployment {
+		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	} else {
+		err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	}
+
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
