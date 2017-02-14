@@ -85,8 +85,8 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 
 	newSession, newErr := a.Client.NewSession()
 	defer newSession.Close()
-	if err != nil {
-		return errors.New("Unable to create ssh session: " + err.Error())
+	if newErr != nil {
+		return errors.New("Unable to create ssh session: " + newErr.Error())
 	}
 
 	err = newSession.Run("file " + remotePath)
