@@ -678,7 +678,7 @@ func populatePublicDnsNames(deployment *apis.Deployment, ec2Svc *ec2.EC2, deploy
 						glog.V(2).Infof("Assigning public dns name %s to node %d",
 							*instance.PublicDnsName, nodeId)
 						nodeInfo.PublicDnsName = *instance.PublicDnsName
-						nodeInfo.PrivateIp = *instance.PrivateIp
+						nodeInfo.PrivateIp = *instance.PrivateIpAddress
 					}
 				}
 			}
@@ -1270,7 +1270,7 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 
 // DeleteDeployment clean up the cluster from AWS ECS.
 func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
-	sess, sessionErr := createSession(viper, deployedCluster.Deployment)
+	sess, sessionErr := CreateSession(viper, deployedCluster.Deployment)
 	if sessionErr != nil {
 		glog.Errorln("Unable to create session: " + sessionErr.Error())
 		return
