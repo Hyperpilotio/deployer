@@ -35,9 +35,11 @@ func (a *SshClient) RunCommand(command string) error {
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
+	var stderrBuf bytes.Buffer
+	session.Stderr = &stderrBuf
 	err = session.Run(command)
 	if err != nil {
-		return errors.New("Unable to run command: " + err.Error())
+		return errors.New("Unable to run command: " + stderrBuf.String())
 	}
 
 	defer session.Close()
@@ -84,10 +86,10 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	session.Run("scp -t " + directory)
 
 	newSession, newErr := a.Client.NewSession()
-	defer newSession.Close()
 	if newErr != nil {
-		return errors.New("Unable to create ssh session: " + newErr.Error())
+		return errors.New("Unable to create ssh session: " + err.Error())
 	}
+	defer newSession.Close()
 
 	err = newSession.Run("file " + remotePath)
 	if err != nil {
