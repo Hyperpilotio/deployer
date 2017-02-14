@@ -26,13 +26,23 @@ var k8sAmis = map[string]string{
 	"us-east-1": "ami-87705d90",
 }
 
-var masterInstallCommand = `sudo yum install -y git &&
+var masterInstallCommand = `sudo yum update -y && sudo yum install -y git &&
 git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode && sudo ./master.sh`
+cd kube-deploy/docker-multinode && 
+sudo mkdir -p /var/lib/kubelet &&
+sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
+sudo mount --make-shared /var/lib/kubelet &&
+sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
+sudo ./master.sh -n`
 
-var agentInstallCommand = `sudo yum install -y git &&
+var agentInstallCommand = `sudo yum update -y && sudo yum install -y git &&
 git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode && sudo #MASTER_IP# ./worker.sh`
+cd kube-deploy/docker-multinode && 
+sudo mkdir -p /var/lib/kubelet &&
+sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
+sudo mount --make-shared /var/lib/kubelet &&
+sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
+sudo #MASTER_IP# ./worker.sh`
 
 func waitUntilMasterReady() error {
 	// Use client-go to poll kube master until it's ready.
