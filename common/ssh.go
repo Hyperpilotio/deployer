@@ -7,6 +7,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"io"
 	"io/ioutil"
+	"os"
 	"path"
 
 	"github.com/golang/glog"
@@ -35,14 +36,16 @@ func (a *SshClient) RunCommand(command string) error {
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
-	var stderrBuf bytes.Buffer
-	session.Stderr = &stderrBuf
+	defer session.Close()
+
+	//var stderrBuf bytes.Buffer
+	session.Stderr = os.Stderr
+	session.Stdout = os.Stdout
 	err = session.Run(command)
 	if err != nil {
-		return errors.New("Unable to run command: " + stderrBuf.String())
+		//		return errors.New("Unable to run command: " + stderrBuf.String())
+		return err
 	}
-
-	defer session.Close()
 
 	return nil
 }

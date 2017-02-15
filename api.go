@@ -256,12 +256,15 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
-	kubernetesDeployment := &apis.KubernetesDeployment{}
-	if deployment.KubernetesDeployment == *kubernetesDeployment {
-		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
-	} else {
-		err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
-	}
+
+	server.DeployedClusters[deployment.Name] = deployedCluster
+
+	//kubernetesDeployment := &apis.KubernetesDeployment{}
+	//if deployment.KubernetesDeployment == *kubernetesDeployment {
+	//		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	//	} else {
+	err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	//	}
 
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -271,7 +274,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	server.DeployedClusters[deployment.Name] = deployedCluster
+	//server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
@@ -322,9 +325,10 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+	if _, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		// TODO create a batch job to delete the deployment
-		awsecs.DeleteDeployment(server.Config, data)
+		// TODO Delete deployment depending on k8s or awsecs
+		//awsecs.DeleteDeployment(server.Config, data)
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
 		delete(server.DeployedClusters, c.Param("deployment"))

@@ -40,10 +40,9 @@ type KubernetesDeployment struct {
 }
 
 type Deployment struct {
-	Name           string `form:"name" json:"name" binding:"required"`
-	ClusterManager string `form:"clusterManager" json:"clusterManager" binding:"required"`
-	Region         string `form:"region" json:"region" binding:"required"`
-	Files          []struct {
+	Name   string `form:"name" json:"name" binding:"required"`
+	Region string `form:"region" json:"region" binding:"required"`
+	Files  []struct {
 		FileId string `json:"fileId"`
 		Path   string `json:"path"`
 	} `form:"files" json:"files"`

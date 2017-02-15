@@ -6,6 +6,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/common"
@@ -28,21 +29,21 @@ var k8sAmis = map[string]string{
 
 var masterInstallCommand = `sudo yum update -y && sudo yum install -y git &&
 git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode && 
+cd kube-deploy/docker-multinode &&
 sudo mkdir -p /var/lib/kubelet &&
 sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
 sudo mount --make-shared /var/lib/kubelet &&
 sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
-sudo ./master.sh -n`
+sudo ./master.sh`
 
 var agentInstallCommand = `sudo yum update -y && sudo yum install -y git &&
 git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode && 
+cd kube-deploy/docker-multinode &&
 sudo mkdir -p /var/lib/kubelet &&
 sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
 sudo mount --make-shared /var/lib/kubelet &&
 sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
-sudo #MASTER_IP# ./worker.sh`
+sudo MASTER_IP=#MASTER_IP# ./worker.sh`
 
 func waitUntilMasterReady() error {
 	// Use client-go to poll kube master until it's ready.
@@ -50,6 +51,7 @@ func waitUntilMasterReady() error {
 }
 
 func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
+	glog.Info("Install kubernetes on nodes...")
 	// Install Kubernetes via ssh into each instance and run kube-deploy's
 	// docker multi-node install script.
 	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
@@ -68,9 +70,11 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 	for i, nodeInfo := range deployedCluster.NodeInfos {
 		command := ""
 		if i == 1 {
+			glog.Info("Installing kubernetes master..")
 			command = masterInstallCommand
 			masterPrivateIp = nodeInfo.PrivateIp
 		} else {
+			glog.Info("Installing kubernetes kubelet..")
 			command = strings.Replace(agentInstallCommand, "#MASTER_IP#", masterPrivateIp, 1)
 		}
 		address := nodeInfo.PublicDnsName + ":22"
@@ -86,7 +90,7 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 		if i == 1 {
 			// Wait until master is ready before installing kubelets
 			if err := waitUntilMasterReady(); err != nil {
-				return errors.New("Unable to waitl for Master: " + err.Error())
+				return errors.New("Unable to wait for Master: " + err.Error())
 			}
 		}
 	}
@@ -95,7 +99,8 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 }
 
 func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *awsecs.DeployedCluster) error {
-	sess, sessionErr := awsecs.CreateSession(viper, deployedCluster.Deployment)
+	glog.Info("Starting kubernetes deployment")
+	sess, sessionErr := awsecs.CreateSession(viper, deployedCluster.Deployment, k8sAmis)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
@@ -103,11 +108,12 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 	ec2Svc := ec2.New(sess)
 	iamSvc := iam.New(sess)
 
-	if err := awsecs.SetupEC2Infra(viper, deployment, uploadedFiles, ec2Svc, iamSvc, deployedCluster); err != nil {
+	if err := awsecs.SetupEC2Infra(viper, deployment, uploadedFiles, ec2Svc, iamSvc, deployedCluster, k8sAmis); err != nil {
 		return errors.New("Unable to setup ec2: " + err.Error())
 	}
 
 	if err := installKubernetes(deployedCluster); err != nil {
+		//awsecs.DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to install kubernetes: " + err.Error())
 	}
 
