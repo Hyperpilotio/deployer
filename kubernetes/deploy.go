@@ -19,43 +19,22 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 
 	k8s "k8s.io/client-go/kubernetes"
-	k8serrs "k8s.io/client-go/pkg/api/errors"
-	"k8s.io/client-go/pkg/api/resource"
-	"k8s.io/client-go/pkg/api/unversioned"
-	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
-	"k8s.io/client-go/pkg/util/intstr"
 	"k8s.io/client-go/rest"
 )
 
 const namespace string = "default"
 
-type deployOperation struct {
-	image  string
-	name   string
-	port   int
-	cpu    string
-	memory string
-}
-
-type operation interface {
-	Do(c *k8s.Clientset)
-}
-
 // Ubuntu 16.04 with Docker
 var k8sAmis = map[string]string{
 	"us-west-1": "ami-1b1e4b7b",
 	"us-west-2": "ami-3c4dec5c",
-	"us-east-1": "ami-6edd3078",
+	"us-east-1": "ami-e87d8afe",
 }
 
-var kubedeployCommand = `sudo apt-get update -y && sudo apt-get install -y git &&
-sudo apt-get install -y docker.io &&
-git clone https://github.com/kubernetes/kube-deploy &&
+var kubeDeployCommand = `git clone https://github.com/kubernetes/kube-deploy &&
 cd kube-deploy/docker-multinode`
-
-var masterInstallCommand = kubedeployCommand + ` && sudo ./master.sh`
-var agentInstallCommand = kubedeployCommand + ` && sudo MASTER_IP=#MASTER_IP# ./worker.sh`
+var masterInstallCommand = kubeDeployCommand + ` && sudo ./master.sh`
+var agentInstallCommand = kubeDeployCommand + ` && sudo MASTER_IP=#MASTER_IP# ./worker.sh`
 
 func waitUntilMasterReady(publicDNSName string) error {
 	// Use client-go to poll kube master until it's ready.
@@ -166,7 +145,7 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 	}
 
 	if err := setupK8S(deployment, deployedCluster); err != nil {
-		//awsecs.DeleteDeployment(viper, deployedCluster)
+		// TODO delete client-go deployed
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -174,172 +153,49 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 }
 
 func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
-	publicDNSName := ""
-	for i, nodeInfo := range deployedCluster.NodeInfos {
-		if i == 1 {
-			publicDNSName = nodeInfo.PublicDnsName
-		}
-	}
-
 	config := &rest.Config{
-		Host: publicDNSName + ":8080",
+		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
 	}
 
 	if c, err := k8s.NewForConfig(config); err == nil {
-		// test deploy redis-bench
-		// TODO range deployedCluster
-		op := &deployOperation{
-			image:  "hyperpilot/redis-bench",
-			name:   "redis-bench",
-			port:   6001,
-			cpu:    "125.0m",
-			memory: "150Mi",
+		deploy := c.Extensions().Deployments(namespace)
+		for _, Kubernetes := range deployment.KubernetesDeployment.Kubernetes {
+			deploySpec := Kubernetes.Deployment
+			family := Kubernetes.Family
+
+			// Assigning Pods to Nodes
+			nodeSelector := map[string]string{}
+			if nodeIP, err := getNodeIP(family, deployment, deployedCluster); err != nil {
+				return errors.New("Unable to find node ip: " + err.Error())
+			} else if nodeIP != "" {
+				nodeSelector["kubernetes.io/hostname"] = nodeIP
+			}
+			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
+
+			_, err = deploy.Create(&deploySpec)
+			if err != nil {
+				return fmt.Errorf("could not create deployment controller: %s", err)
+			}
+			glog.Info("deployment controller created")
 		}
-		op.Do(c)
 	}
 
 	return nil
 }
 
-func (op *deployOperation) Do(c *k8s.Clientset) error {
-	if err := op.doDeployment(c); err != nil {
-		return errors.New("Unable to deploy kubernetes deployment: " + err.Error())
-	}
-
-	if err := op.doService(c); err != nil {
-		return errors.New("Unable to deploy kubernetes service: " + err.Error())
-	}
-
-	return nil
-}
-
-func (op *deployOperation) doDeployment(c *k8s.Clientset) error {
-	// Define Deployments spec.
-	appName := op.name
-	deploySpec := &v1beta1.Deployment{
-		TypeMeta: unversioned.TypeMeta{
-			Kind:       "Deployment",
-			APIVersion: "extensions/v1beta1",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: appName,
-		},
-		Spec: v1beta1.DeploymentSpec{
-			Replicas: int32p(1),
-			Strategy: v1beta1.DeploymentStrategy{
-				Type: v1beta1.RollingUpdateDeploymentStrategyType,
-				RollingUpdate: &v1beta1.RollingUpdateDeployment{
-					MaxUnavailable: &intstr.IntOrString{
-						Type:   intstr.Int,
-						IntVal: int32(0),
-					},
-					MaxSurge: &intstr.IntOrString{
-						Type:   intstr.Int,
-						IntVal: int32(1),
-					},
-				},
-			},
-			RevisionHistoryLimit: int32p(10),
-			Template: v1.PodTemplateSpec{
-				ObjectMeta: v1.ObjectMeta{
-					Name:   appName,
-					Labels: map[string]string{"app": appName},
-				},
-				Spec: v1.PodSpec{
-					Containers: []v1.Container{
-						v1.Container{
-							Name:  op.name,
-							Image: op.image,
-							Ports: []v1.ContainerPort{
-								v1.ContainerPort{ContainerPort: int32(op.port), Protocol: v1.ProtocolTCP},
-							},
-							Resources: v1.ResourceRequirements{
-								Limits: v1.ResourceList{
-									v1.ResourceCPU:    resource.MustParse(op.cpu),
-									v1.ResourceMemory: resource.MustParse(op.memory),
-								},
-							},
-							ImagePullPolicy: v1.PullIfNotPresent,
-						},
-					},
-					RestartPolicy: v1.RestartPolicyAlways,
-					DNSPolicy:     v1.DNSClusterFirst,
-				},
-			},
-		},
-	}
-
-	// Implement deployment update-or-create semantics.
-	deploy := c.Extensions().Deployments(namespace)
-	_, err := deploy.Update(deploySpec)
-	switch {
-	case err == nil:
-		glog.Info("deployment controller updated")
-	case !k8serrs.IsNotFound(err):
-		return fmt.Errorf("could not update deployment controller: %s", err)
-	default:
-		_, err = deploy.Create(deploySpec)
-		if err != nil {
-			return fmt.Errorf("could not create deployment controller: %s", err)
+func getNodeIP(family string, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) (string, error) {
+	id := -1
+	privateIP := ""
+	for _, node := range deployment.NodeMapping {
+		if node.Task == family {
+			id = node.Id
+			break
 		}
-		glog.Info("deployment controller created")
 	}
 
-	return nil
-}
-
-func (op *deployOperation) doService(c *k8s.Clientset) error {
-	// Define service spec.
-	appName := op.name
-	serviceSpec := &v1.Service{
-		TypeMeta: unversioned.TypeMeta{
-			Kind:       "Service",
-			APIVersion: "v1",
-		},
-		ObjectMeta: v1.ObjectMeta{
-			Name: appName,
-		},
-		Spec: v1.ServiceSpec{
-			Type:     v1.ServiceTypeClusterIP,
-			Selector: map[string]string{"app": appName},
-			Ports: []v1.ServicePort{
-				v1.ServicePort{
-					Protocol: v1.ProtocolTCP,
-					Port:     int32(op.port),
-					TargetPort: intstr.IntOrString{
-						Type:   intstr.Int,
-						IntVal: int32(op.port),
-					},
-				},
-			},
-		},
+	if id == -1 {
+		return privateIP, errors.New("Unable to get node id by family:" + family)
 	}
 
-	// Implement service update-or-create semantics.
-	service := c.Core().Services(namespace)
-	svc, err := service.Get(appName)
-	switch {
-	case err == nil:
-		serviceSpec.ObjectMeta.ResourceVersion = svc.ObjectMeta.ResourceVersion
-		serviceSpec.Spec.ClusterIP = svc.Spec.ClusterIP
-		_, err = service.Update(serviceSpec)
-		if err != nil {
-			return fmt.Errorf("failed to update service: %s", err)
-		}
-		glog.Info("service updated")
-	case k8serrs.IsNotFound(err):
-		_, err = service.Create(serviceSpec)
-		if err != nil {
-			return fmt.Errorf("failed to create service: %s", err)
-		}
-		glog.Info("service created")
-	default:
-		return fmt.Errorf("unexpected error: %s", err)
-	}
-
-	return nil
-}
-
-func int32p(i int32) *int32 {
-	return &i
+	return deployedCluster.NodeInfos[id].PrivateIp, nil
 }
