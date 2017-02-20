@@ -325,10 +325,11 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if _, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		// TODO create a batch job to delete the deployment
 		// TODO Delete deployment depending on k8s or awsecs
 		//awsecs.DeleteDeployment(server.Config, data)
+		kubernetes.DeleteDeployment(data)
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
 		delete(server.DeployedClusters, c.Param("deployment"))
