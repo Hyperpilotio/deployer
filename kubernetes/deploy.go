@@ -69,7 +69,7 @@ func retryConnectSSH(address string, config *ssh.ClientConfig) (*common.SshClien
 		if err := sshClient.Connect(); err != nil {
 			sshError = errors.New("Unable to connect to server: " + err.Error())
 			glog.Infof("retryConnectSSH %d", i)
-			time.Sleep(time.Duration(5) * time.Second)
+			time.Sleep(time.Duration(10) * time.Second)
 		} else if err == nil {
 			return &sshClient, nil
 		}
@@ -151,7 +151,19 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 	}
 
 	if err := setupK8S(deployment, deployedCluster); err != nil {
-		// TODO delete client-go deployed
+		DeleteDeployment(deployedCluster)
+		return errors.New("Unable to setup K8S: " + err.Error())
+	}
+
+	return nil
+}
+
+// UpdateDeployment start a deployment on EC2 is ready
+func UpdateDeployment(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+	glog.Info("Starting kubernetes deployment")
+
+	if err := setupK8S(deployment, deployedCluster); err != nil {
+		DeleteDeployment(deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -210,21 +222,26 @@ func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedClust
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
-			if nodeIP, err := getNodeIP(family, deployment, deployedCluster); err != nil {
-				return errors.New("Unable to find node ip: " + err.Error())
-			} else if nodeIP != "" {
-				nodeSelector["kubernetes.io/hostname"] = nodeIP
+			svcExternalName := ""
+			if node, err := getNode(family, deployment, deployedCluster); err != nil {
+				return errors.New("Unable to find node: " + err.Error())
+			} else if node != nil {
+				svcExternalName = node.PublicDnsName
+				nodeSelector["kubernetes.io/hostname"] = node.PrivateIp
 			}
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
+			// start deploy deployment
 			_, err = deploy.Create(&deploySpec)
 			if err != nil {
-				return fmt.Errorf("could not create deployment controller: %s", err)
+				return fmt.Errorf("could not create deployment: %s", err)
 			}
 			glog.Infof("%s deployment created", family)
 
+			// start deploy service
 			if Kubernetes.Service.Kind == "Service" {
-				service := c.Core().Services(namespace)
+				service := c.CoreV1().Services(namespace)
+				Kubernetes.Service.Spec.ExternalName = svcExternalName
 				_, err = service.Create(&Kubernetes.Service)
 				if err != nil {
 					return fmt.Errorf("failed to create service: %s", err)
@@ -237,9 +254,8 @@ func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedClust
 	return nil
 }
 
-func getNodeIP(family string, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) (string, error) {
+func getNode(family string, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) (*awsecs.NodeInfo, error) {
 	id := -1
-	privateIP := ""
 	for _, node := range deployment.NodeMapping {
 		if node.Task == family {
 			id = node.Id
@@ -248,8 +264,8 @@ func getNodeIP(family string, deployment *apis.Deployment, deployedCluster *awse
 	}
 
 	if id == -1 {
-		return privateIP, errors.New("Unable to get node id by family:" + family)
+		return nil, errors.New("Unable to get node by family:" + family)
 	}
 
-	return deployedCluster.NodeInfos[id].PrivateIp, nil
+	return deployedCluster.NodeInfos[id], nil
 }
