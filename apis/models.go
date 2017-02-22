@@ -3,6 +3,9 @@ package apis
 import (
 	"fmt"
 
+	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
+
 	"github.com/aws/aws-sdk-go/service/ecs"
 )
 
@@ -37,6 +40,11 @@ type ECSDeployment struct {
 
 // KubernetesDeployment storing the information of a Kubernetes deployment
 type KubernetesDeployment struct {
+	Kubernetes []struct {
+		Deployment v1beta1.Deployment `form:"deployment" json:"deployment" binding:"required"`
+		Service    v1.Service         `form:"service" json:"service"`
+		Family     string             `form:"family" json:"family" binding:"required"`
+	} `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
 }
 
 type Deployment struct {

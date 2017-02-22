@@ -2,7 +2,9 @@ package kubernetes
 
 import (
 	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -12,42 +14,68 @@ import (
 	"github.com/hyperpilotio/deployer/common"
 
 	"github.com/spf13/viper"
-	//	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	//	"k8s.io/client-go/kubernetes"
-	//	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/iam"
+
+	k8s "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/rest"
 )
+
+const namespace string = "default"
 
 // Ubuntu 16.04 with Docker
 var k8sAmis = map[string]string{
 	"us-west-1": "ami-1b1e4b7b",
 	"us-west-2": "ami-3c4dec5c",
-	"us-east-1": "ami-87705d90",
+	"us-east-1": "ami-e87d8afe",
 }
 
-var masterInstallCommand = `sudo yum update -y && sudo yum install -y git &&
-git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode &&
-sudo mkdir -p /var/lib/kubelet &&
-sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
-sudo mount --make-shared /var/lib/kubelet &&
-sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
-sudo ./master.sh`
+var kubeDeployCommand = `git clone https://github.com/kubernetes/kube-deploy &&
+cd kube-deploy/docker-multinode`
+var masterInstallCommand = kubeDeployCommand + ` && sudo ./master.sh`
+var agentInstallCommand = kubeDeployCommand + ` && sudo MASTER_IP=#MASTER_IP# ./worker.sh`
 
-var agentInstallCommand = `sudo yum update -y && sudo yum install -y git &&
-git clone https://github.com/kubernetes/kube-deploy &&
-cd kube-deploy/docker-multinode &&
-sudo mkdir -p /var/lib/kubelet &&
-sudo mount --bind /var/lib/kubelet /var/lib/kubelet &&
-sudo mount --make-shared /var/lib/kubelet &&
-sed -i 's/\/var\/lib\/kubelet:\/var\/lib\/kubelet:shared/\/var\/lib\/kubelet:\/var\/lib\/kubelet/g' common.sh &&
-sudo MASTER_IP=#MASTER_IP# ./worker.sh`
-
-func waitUntilMasterReady() error {
+func waitUntilMasterReady(publicDNSName string) error {
 	// Use client-go to poll kube master until it's ready.
-	return nil
+	masterReady := false
+	config := &rest.Config{
+		Host: publicDNSName + ":8080",
+	}
+
+	var k8sError error
+	for !masterReady {
+		if _, err := k8s.NewForConfig(config); err != nil {
+			k8sError = errors.New("Could not connect to Kubernetes API: " + err.Error())
+			time.Sleep(time.Duration(3) * time.Second)
+		} else if err == nil {
+			return nil
+		}
+
+	}
+	glog.Info("Master reading...")
+
+	return k8sError
+}
+
+func retryConnectSSH(address string, config *ssh.ClientConfig) (*common.SshClient, error) {
+	// maxRetries is the number of times a SSH connect.
+	maxRetries := 5
+	sshClient := common.NewSshClient(address, config)
+
+	var sshError error
+	for i := 1; i <= maxRetries; i++ {
+		if err := sshClient.Connect(); err != nil {
+			sshError = errors.New("Unable to connect to server: " + err.Error())
+			glog.Infof("retryConnectSSH %d", i)
+			time.Sleep(time.Duration(10) * time.Second)
+		} else if err == nil {
+			return &sshClient, nil
+		}
+	}
+
+	return &sshClient, sshError
 }
 
 func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
@@ -61,36 +89,40 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 	}
 
 	clientConfig := ssh.ClientConfig{
-		User: "ec2-user",
+		User: "ubuntu",
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		}}
 
-	masterPrivateIp := ""
-	for i, nodeInfo := range deployedCluster.NodeInfos {
-		command := ""
-		if i == 1 {
-			glog.Info("Installing kubernetes master..")
-			command = masterInstallCommand
-			masterPrivateIp = nodeInfo.PrivateIp
-		} else {
-			glog.Info("Installing kubernetes kubelet..")
-			command = strings.Replace(agentInstallCommand, "#MASTER_IP#", masterPrivateIp, 1)
-		}
-		address := nodeInfo.PublicDnsName + ":22"
-		sshClient := common.NewSshClient(address, &clientConfig)
-		if err := sshClient.Connect(); err != nil {
-			return errors.New("Unable to connect to server " + address + ": " + err.Error())
-		}
-
-		if err := sshClient.RunCommand(command); err != nil {
+	glog.Info("Installing kubernetes master..")
+	nodeInfo := deployedCluster.NodeInfos[1]
+	masterPrivateIP := nodeInfo.PrivateIp
+	address := nodeInfo.PublicDnsName + ":22"
+	if sshClient, err := retryConnectSSH(address, &clientConfig); err != nil {
+		return errors.New("Unable to connect to server " + address + ": " + err.Error())
+	} else if sshClient != nil {
+		if err := sshClient.RunCommand(masterInstallCommand); err != nil {
 			return errors.New("Unable to run install command: " + err.Error())
 		}
+	}
 
-		if i == 1 {
-			// Wait until master is ready before installing kubelets
-			if err := waitUntilMasterReady(); err != nil {
-				return errors.New("Unable to wait for Master: " + err.Error())
+	// Wait until master is ready before installing kubelets
+	if err := waitUntilMasterReady(nodeInfo.PublicDnsName); err != nil {
+		return errors.New("Unable to wait for Master: " + err.Error())
+	}
+
+	// key not sorted, key=1 is master node
+	for i, nodeInfo := range deployedCluster.NodeInfos {
+		if i != 1 {
+			glog.Info("Installing kubernetes kubelet..")
+			command := strings.Replace(agentInstallCommand, "#MASTER_IP#", masterPrivateIP, 1)
+			address := nodeInfo.PublicDnsName + ":22"
+			if sshClient, err := retryConnectSSH(address, &clientConfig); err != nil {
+				return errors.New("Unable to connect to server " + address + ": " + err.Error())
+			} else if sshClient != nil {
+				if err := sshClient.RunCommand(command); err != nil {
+					return errors.New("Unable to run install command: " + err.Error())
+				}
 			}
 		}
 	}
@@ -98,6 +130,7 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 	return nil
 }
 
+// CreateDeployment start a deployment
 func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *awsecs.DeployedCluster) error {
 	glog.Info("Starting kubernetes deployment")
 	sess, sessionErr := awsecs.CreateSession(viper, deployedCluster.Deployment, k8sAmis)
@@ -117,5 +150,122 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 		return errors.New("Unable to install kubernetes: " + err.Error())
 	}
 
+	if err := setupK8S(deployment, deployedCluster); err != nil {
+		DeleteDeployment(deployedCluster)
+		return errors.New("Unable to setup K8S: " + err.Error())
+	}
+
 	return nil
+}
+
+// UpdateDeployment start a deployment on EC2 is ready
+func UpdateDeployment(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+	glog.Info("Starting kubernetes deployment")
+
+	if err := setupK8S(deployment, deployedCluster); err != nil {
+		DeleteDeployment(deployedCluster)
+		return errors.New("Unable to setup K8S: " + err.Error())
+	}
+
+	return nil
+}
+
+// DeleteDeployment clean up the cluster from kubenetes.
+func DeleteDeployment(deployedCluster *awsecs.DeployedCluster) error {
+	config := &rest.Config{
+		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
+	}
+
+	if c, err := k8s.NewForConfig(config); err == nil {
+		deploys := c.Extensions().Deployments(namespace)
+		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
+			for _, deployment := range deployLists.Items {
+				deploys.Delete(deployment.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			}
+		}
+
+		replicaSets := c.Extensions().ReplicaSets(namespace)
+		if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
+			for _, replicaSet := range replicaSetLists.Items {
+				replicaSets.Delete(replicaSet.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			}
+		}
+
+		pods := c.CoreV1().Pods(namespace)
+		if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
+			for _, pod := range podLists.Items {
+				pods.Delete(pod.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			}
+		}
+
+		services := c.CoreV1().Services(namespace)
+		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+			for _, service := range serviceLists.Items {
+				services.Delete(service.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			}
+		}
+	}
+
+	return nil
+}
+
+func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+	config := &rest.Config{
+		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
+	}
+
+	if c, err := k8s.NewForConfig(config); err == nil {
+		deploy := c.Extensions().Deployments(namespace)
+		for _, Kubernetes := range deployment.KubernetesDeployment.Kubernetes {
+			deploySpec := Kubernetes.Deployment
+			family := Kubernetes.Family
+
+			// Assigning Pods to Nodes
+			nodeSelector := map[string]string{}
+			svcExternalName := ""
+			if node, err := getNode(family, deployment, deployedCluster); err != nil {
+				return errors.New("Unable to find node: " + err.Error())
+			} else if node != nil {
+				svcExternalName = node.PublicDnsName
+				nodeSelector["kubernetes.io/hostname"] = node.PrivateIp
+			}
+			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
+
+			// start deploy deployment
+			_, err = deploy.Create(&deploySpec)
+			if err != nil {
+				return fmt.Errorf("could not create deployment: %s", err)
+			}
+			glog.Infof("%s deployment created", family)
+
+			// start deploy service
+			if Kubernetes.Service.Kind == "Service" {
+				service := c.CoreV1().Services(namespace)
+				Kubernetes.Service.Spec.ExternalName = svcExternalName
+				_, err = service.Create(&Kubernetes.Service)
+				if err != nil {
+					return fmt.Errorf("failed to create service: %s", err)
+				}
+				glog.Infof("%s service created", Kubernetes.Service.GetObjectMeta().GetName())
+			}
+		}
+	}
+
+	return nil
+}
+
+func getNode(family string, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) (*awsecs.NodeInfo, error) {
+	id := -1
+	for _, node := range deployment.NodeMapping {
+		if node.Task == family {
+			id = node.Id
+			break
+		}
+	}
+
+	if id == -1 {
+		return nil, errors.New("Unable to get node by family:" + family)
+	}
+
+	return deployedCluster.NodeInfos[id], nil
 }

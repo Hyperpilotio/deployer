@@ -203,12 +203,42 @@ func (server *Server) deleteFile(c *gin.Context) {
 }
 
 func (server *Server) updateDeployment(c *gin.Context) {
-	// TODO Implement function to update deployment
+	deploymentName := c.Param("deployment")
 
-	c.JSON(http.StatusNotImplemented, gin.H{
-		"error": false,
-		"data":  "",
-	})
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	data, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
+
+	// TODO Implement function to update deployment
+	var deployment apis.Deployment
+	if err := c.BindJSON(&deployment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error deserializing deployment: " + err.Error(),
+		})
+		return
+	}
+
+	err := kubernetes.UpdateDeployment(&deployment, data)
+	if err != nil {
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error": true,
+			"data":  "Error update deployment: " + err.Error(),
+		})
+	} else {
+		c.JSON(http.StatusNotImplemented, gin.H{
+			"error": false,
+			"data":  "",
+		})
+	}
 }
 
 func (server *Server) getAllDeployments(c *gin.Context) {
@@ -325,13 +355,14 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if _, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		// TODO create a batch job to delete the deployment
 		// TODO Delete deployment depending on k8s or awsecs
 		//awsecs.DeleteDeployment(server.Config, data)
+		kubernetes.DeleteDeployment(data)
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
-		delete(server.DeployedClusters, c.Param("deployment"))
+		// delete(server.DeployedClusters, c.Param("deployment"))
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
 			"data":  "",
