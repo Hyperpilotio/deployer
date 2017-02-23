@@ -231,13 +231,6 @@ func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedClust
 			}
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
-			// start deploy deployment
-			_, err = deploy.Create(&deploySpec)
-			if err != nil {
-				return fmt.Errorf("could not create deployment: %s", err)
-			}
-			glog.Infof("%s deployment created", family)
-
 			// start deploy service
 			if Kubernetes.Service.Kind == "Service" {
 				service := c.CoreV1().Services(namespace)
@@ -248,6 +241,13 @@ func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedClust
 				}
 				glog.Infof("%s service created", Kubernetes.Service.GetObjectMeta().GetName())
 			}
+
+			// start deploy deployment
+			_, err = deploy.Create(&deploySpec)
+			if err != nil {
+				return fmt.Errorf("could not create deployment: %s", err)
+			}
+			glog.Infof("%s deployment created", family)
 		}
 	}
 
