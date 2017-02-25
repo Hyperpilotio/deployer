@@ -68,7 +68,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
-		daemonsGroup.GET("/:deployment/tasks/:task/node-address", server.getNodeAddressForTask)
+		daemonsGroup.GET("/:deployment/tasks/:task/node_address", server.getNodeAddressForTask)
 		daemonsGroup.GET("/:deployment/containers/:container/url", server.getContainerUrl)
 	}
 
