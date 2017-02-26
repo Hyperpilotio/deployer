@@ -287,14 +287,18 @@ func (server *Server) createDeployment(c *gin.Context) {
 	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
 
-	server.DeployedClusters[deployment.Name] = deployedCluster
+	if deployment.ECSDeployment != nil {
+		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+	} else if deployment.KubernetesDeployment != nil {
+		err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
 
-	//kubernetesDeployment := &apis.KubernetesDeployment{}
-	//if deployment.KubernetesDeployment == *kubernetesDeployment {
-	//		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
-	//	} else {
-	err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
-	//	}
+	} else {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": true,
+			"data":  "Unsupported container deployment",
+		})
+		return
+	}
 
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -304,7 +308,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	//server.DeployedClusters[deployment.Name] = deployedCluster
+	server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
@@ -359,7 +363,13 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		// TODO create a batch job to delete the deployment
 		// TODO Delete deployment depending on k8s or awsecs
 		//awsecs.DeleteDeployment(server.Config, data)
-		kubernetes.DeleteDeployment(data)
+		if err := kubernetes.DeleteDeployment(data); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": true,
+				"data":  err.Error(),
+			})
+			return
+		}
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
 		// delete(server.DeployedClusters, c.Param("deployment"))

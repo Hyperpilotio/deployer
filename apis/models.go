@@ -59,8 +59,8 @@ type Deployment struct {
 	NodeMapping       []NodeMapping     `form:"nodeMapping" json:"nodeMapping" binding:"required"`
 	IamRole           `form:"iamRole" json:"iamRole" binding:"required"`
 
-	ECSDeployment        `form:"ecs" json:"ecs" binding:"ecs"`
-	KubernetesDeployment `form:"kubernetes" json:"kubernetes" binding:"kubernetes"`
+	*ECSDeployment        `form:"ecs" json:"ecs,omitempty" binding:"ecs"`
+	*KubernetesDeployment `form:"kubernetes" json:"kubernetes,omitempty" binding:"kubernetes"`
 }
 
 // IamRole store the information of iam role
