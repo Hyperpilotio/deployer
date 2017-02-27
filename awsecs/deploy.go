@@ -1050,7 +1050,7 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 		RoleName: aws.String(deployedCluster.RoleName()),
 	}
 	if _, err := iamSvc.DeleteRole(roleParams); err != nil {
-		glog.Errorf("Unable to create IAM role: %s", err.Error())
+		glog.Errorf("Unable to delete IAM role: %s", err.Error())
 		errBool = true
 	}
 
@@ -1312,7 +1312,7 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster, imag
 
 	glog.V(1).Infof("Deleting IAM role")
 	if err := deleteIAM(iamSvc, deployedCluster); err != nil {
-		glog.Errorln("Unable to delete IAM: %s", err.Error())
+		glog.Errorln("Unable to delete IAM: ", err.Error())
 	}
 
 	// delete key pair
