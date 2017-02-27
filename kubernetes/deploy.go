@@ -23,7 +23,7 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-const namespace string = "default"
+const defaultNamespace string = "default"
 
 // Ubuntu 16.04 with Docker
 var k8sAmis = map[string]string{
@@ -37,26 +37,35 @@ cd kube-deploy/docker-multinode`
 var masterInstallCommand = kubeDeployCommand + ` && sudo ./master.sh`
 var agentInstallCommand = kubeDeployCommand + ` && sudo MASTER_IP=#MASTER_IP# ./worker.sh`
 
-func waitUntilMasterReady(publicDNSName string) error {
+func waitUntilMasterReady(publicDNSName string, timeout time.Duration) error {
 	// Use client-go to poll kube master until it's ready.
-	masterReady := false
 	config := &rest.Config{
 		Host: publicDNSName + ":8080",
 	}
 
-	var k8sError error
-	for !masterReady {
-		if _, err := k8s.NewForConfig(config); err != nil {
-			k8sError = errors.New("Could not connect to Kubernetes API: " + err.Error())
-			time.Sleep(time.Duration(3) * time.Second)
-		} else if err == nil {
-			return nil
+	c := make(chan bool, 1)
+	quit := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-quit:
+				return
+			default:
+				if _, err := k8s.NewForConfig(config); err == nil {
+					c <- true
+				}
+				time.Sleep(time.Second * 2)
+			}
 		}
+	}()
 
+	select {
+	case <-c:
+		return nil
+	case <-time.After(timeout):
+		quit <- true
+		return errors.New("Timed out waiting for master to be ready")
 	}
-	glog.Info("Master reading...")
-
-	return k8sError
 }
 
 func retryConnectSSH(address string, config *ssh.ClientConfig) (*common.SshClient, error) {
@@ -75,7 +84,11 @@ func retryConnectSSH(address string, config *ssh.ClientConfig) (*common.SshClien
 		}
 	}
 
-	return &sshClient, sshError
+	if sshError == nil {
+		return &sshClient, nil
+	} else {
+		return nil, sshError
+	}
 }
 
 func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
@@ -101,15 +114,17 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 	if sshClient, err := retryConnectSSH(address, &clientConfig); err != nil {
 		return errors.New("Unable to connect to server " + address + ": " + err.Error())
 	} else if sshClient != nil {
-		if err := sshClient.RunCommand(masterInstallCommand); err != nil {
+		if err := sshClient.RunCommand(masterInstallCommand, true); err != nil {
 			return errors.New("Unable to run install command: " + err.Error())
 		}
 	}
 
 	// Wait until master is ready before installing kubelets
-	if err := waitUntilMasterReady(nodeInfo.PublicDnsName); err != nil {
+	if err := waitUntilMasterReady(nodeInfo.PublicDnsName, time.Duration(30)*time.Minute); err != nil {
 		return errors.New("Unable to wait for Master: " + err.Error())
 	}
+
+	glog.Info("Kubernetes master is ready")
 
 	// key not sorted, key=1 is master node
 	for i, nodeInfo := range deployedCluster.NodeInfos {
@@ -120,7 +135,7 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 			if sshClient, err := retryConnectSSH(address, &clientConfig); err != nil {
 				return errors.New("Unable to connect to server " + address + ": " + err.Error())
 			} else if sshClient != nil {
-				if err := sshClient.RunCommand(command); err != nil {
+				if err := sshClient.RunCommand(command, true); err != nil {
 					return errors.New("Unable to run install command: " + err.Error())
 				}
 			}
@@ -131,9 +146,9 @@ func installKubernetes(deployedCluster *awsecs.DeployedCluster) error {
 }
 
 // CreateDeployment start a deployment
-func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *awsecs.DeployedCluster) error {
+func CreateDeployment(config *viper.Viper, deployment *apis.Deployment, uploadedFiles map[string]string, deployedCluster *awsecs.DeployedCluster) error {
 	glog.Info("Starting kubernetes deployment")
-	sess, sessionErr := awsecs.CreateSession(viper, deployedCluster.Deployment, k8sAmis)
+	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment, k8sAmis)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
@@ -141,17 +156,17 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 	ec2Svc := ec2.New(sess)
 	iamSvc := iam.New(sess)
 
-	if err := awsecs.SetupEC2Infra(viper, deployment, uploadedFiles, ec2Svc, iamSvc, deployedCluster, k8sAmis); err != nil {
+	if err := awsecs.SetupEC2Infra(config, deployment, uploadedFiles, ec2Svc, iamSvc, deployedCluster, k8sAmis); err != nil {
 		return errors.New("Unable to setup ec2: " + err.Error())
 	}
 
 	if err := installKubernetes(deployedCluster); err != nil {
-		//awsecs.DeleteDeployment(viper, deployedCluster)
+		//awsecs.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to install kubernetes: " + err.Error())
 	}
 
-	if err := setupK8S(deployment, deployedCluster); err != nil {
-		DeleteDeployment(deployedCluster)
+	if err := deployServices(deployment, deployedCluster); err != nil {
+		DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -159,11 +174,11 @@ func CreateDeployment(viper *viper.Viper, deployment *apis.Deployment, uploadedF
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func UpdateDeployment(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+func UpdateDeployment(config *viper.Viper, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
 	glog.Info("Starting kubernetes deployment")
 
-	if err := setupK8S(deployment, deployedCluster); err != nil {
-		DeleteDeployment(deployedCluster)
+	if err := deployServices(deployment, deployedCluster); err != nil {
+		DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -171,34 +186,34 @@ func UpdateDeployment(deployment *apis.Deployment, deployedCluster *awsecs.Deplo
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
-func DeleteDeployment(deployedCluster *awsecs.DeployedCluster) error {
-	config := &rest.Config{
+func DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) error {
+	restConfig := &rest.Config{
 		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
 	}
 
-	if c, err := k8s.NewForConfig(config); err == nil {
-		deploys := c.Extensions().Deployments(namespace)
+	if c, err := k8s.NewForConfig(restConfig); err == nil {
+		deploys := c.Extensions().Deployments(defaultNamespace)
 		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
 			for _, deployment := range deployLists.Items {
 				deploys.Delete(deployment.GetObjectMeta().GetName(), &v1.DeleteOptions{})
 			}
 		}
 
-		replicaSets := c.Extensions().ReplicaSets(namespace)
+		replicaSets := c.Extensions().ReplicaSets(defaultNamespace)
 		if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
 			for _, replicaSet := range replicaSetLists.Items {
 				replicaSets.Delete(replicaSet.GetObjectMeta().GetName(), &v1.DeleteOptions{})
 			}
 		}
 
-		pods := c.CoreV1().Pods(namespace)
+		pods := c.CoreV1().Pods(defaultNamespace)
 		if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
 			for _, pod := range podLists.Items {
 				pods.Delete(pod.GetObjectMeta().GetName(), &v1.DeleteOptions{})
 			}
 		}
 
-		services := c.CoreV1().Services(namespace)
+		services := c.CoreV1().Services(defaultNamespace)
 		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
 			for _, service := range serviceLists.Items {
 				services.Delete(service.GetObjectMeta().GetName(), &v1.DeleteOptions{})
@@ -206,19 +221,21 @@ func DeleteDeployment(deployedCluster *awsecs.DeployedCluster) error {
 		}
 	}
 
+	awsecs.DeleteDeployment(config, deployedCluster, k8sAmis)
+
 	return nil
 }
 
-func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+func deployServices(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
 	config := &rest.Config{
 		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
 	}
 
 	if c, err := k8s.NewForConfig(config); err == nil {
-		deploy := c.Extensions().Deployments(namespace)
-		for _, Kubernetes := range deployment.KubernetesDeployment.Kubernetes {
-			deploySpec := Kubernetes.Deployment
-			family := Kubernetes.Family
+		deploy := c.Extensions().Deployments(defaultNamespace)
+		for _, task := range deployment.KubernetesDeployment.Kubernetes {
+			deploySpec := task.Deployment
+			family := task.Family
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
@@ -231,16 +248,26 @@ func setupK8S(deployment *apis.Deployment, deployedCluster *awsecs.DeployedClust
 			}
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
-			// start deploy service
-			if Kubernetes.Service.Kind == "Service" {
-				service := c.CoreV1().Services(namespace)
-				Kubernetes.Service.Spec.ExternalName = svcExternalName
-				_, err = service.Create(&Kubernetes.Service)
-				if err != nil {
-					return fmt.Errorf("failed to create service: %s", err)
-				}
-				glog.Infof("%s service created", Kubernetes.Service.GetObjectMeta().GetName())
+			// Create service for each task
+			service := c.CoreV1().Services(defaultNamespace)
+
+			labels := map[string]string{"app": family}
+			v1Service := &v1.Service{
+				ObjectMeta: v1.ObjectMeta{
+					Name:      family,
+					Labels:    labels,
+					Namespace: defaultNamespace,
+				},
+				Spec: v1.ServiceSpec{
+					Type:         v1.ServiceTypeExternalName,
+					ExternalName: svcExternalName,
+				},
 			}
+			_, err = service.Create(v1Service)
+			if err != nil {
+				return fmt.Errorf("Unable to create service %s: %s", family, err)
+			}
+			glog.Infof("Created %s service", family)
 
 			// start deploy deployment
 			_, err = deploy.Create(&deploySpec)

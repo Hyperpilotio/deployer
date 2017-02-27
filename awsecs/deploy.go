@@ -1284,16 +1284,18 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster, imag
 		glog.Errorln("Unable to find VPC: ", err.Error())
 	}
 
-	// Stop all running tasks
-	glog.V(1).Infoln("Stopping all ECS services")
-	if err := stopECSServices(ecsSvc, deployedCluster); err != nil {
-		glog.Errorln("Unable to stop ECS services: ", err.Error())
-	}
+	if deployedCluster.Deployment.ECSDeployment != nil {
+		// Stop all running tasks
+		glog.V(1).Infoln("Stopping all ECS services")
+		if err := stopECSServices(ecsSvc, deployedCluster); err != nil {
+			glog.Errorln("Unable to stop ECS services: ", err.Error())
+		}
 
-	// delete all the task definitions
-	glog.V(1).Infof("Deleting task definitions")
-	if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
-		glog.Errorln("Unable to delete task definitions: %s", err.Error())
+		// delete all the task definitions
+		glog.V(1).Infof("Deleting task definitions")
+		if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
+			glog.Errorln("Unable to delete task definitions: %s", err.Error())
+		}
 	}
 
 	// Terminate EC2 instance
@@ -1343,9 +1345,11 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster, imag
 		glog.Errorln("Unable to delete VPC: ", err)
 	}
 
-	// Delete ecs cluster
-	glog.V(1).Infof("Deleting ECS cluster")
-	if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
-		glog.Errorln("Unable to delete ECS cluster: ", err)
+	if deployedCluster.Deployment.ECSDeployment != nil {
+		// Delete ecs cluster
+		glog.V(1).Infof("Deleting ECS cluster")
+		if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
+			glog.Errorln("Unable to delete ECS cluster: ", err)
+		}
 	}
 }

@@ -31,20 +31,28 @@ func (a *SshClient) Connect() error {
 	return nil
 }
 
-func (a *SshClient) RunCommand(command string) error {
+func (a *SshClient) RunCommand(command string, verbose bool) error {
 	session, err := a.Client.NewSession()
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
 	defer session.Close()
 
-	//var stderrBuf bytes.Buffer
-	session.Stderr = os.Stderr
-	session.Stdout = os.Stdout
+	var stderrBuf bytes.Buffer
+	if verbose {
+		session.Stderr = os.Stderr
+		session.Stdout = os.Stdout
+	} else {
+		session.Stderr = &stderrBuf
+	}
+
 	err = session.Run(command)
 	if err != nil {
-		//		return errors.New("Unable to run command: " + stderrBuf.String())
-		return err
+		if verbose {
+			return err
+		} else {
+			return errors.New("Unable to run command: " + stderrBuf.String())
+		}
 	}
 
 	return nil

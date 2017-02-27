@@ -227,7 +227,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		return
 	}
 
-	err := kubernetes.UpdateDeployment(&deployment, data)
+	err := kubernetes.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
 		c.JSON(http.StatusNotImplemented, gin.H{
 			"error": true,
@@ -363,7 +363,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		// TODO create a batch job to delete the deployment
 		// TODO Delete deployment depending on k8s or awsecs
 		//awsecs.DeleteDeployment(server.Config, data)
-		if err := kubernetes.DeleteDeployment(data); err != nil {
+		if err := kubernetes.DeleteDeployment(server.Config, data); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": true,
 				"data":  err.Error(),
