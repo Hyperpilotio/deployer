@@ -99,6 +99,10 @@ func deployKubernetesCluster(sess *session.Session, deployedCluster *awsecs.Depl
 				ParameterKey:   aws.String("QSS3KeyPrefix"),
 				ParameterValue: aws.String("heptio/kubernetes/latest"),
 			},
+			{
+				ParameterKey:   aws.String("AvailabilityZone"),
+				ParameterValue: aws.String(deployedCluster.Deployment.Region + "b"),
+			},
 		},
 		Tags: []*cloudformation.Tag{
 			{
