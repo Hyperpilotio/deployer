@@ -3,7 +3,10 @@ package kubernetes
 import (
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/golang/glog"
@@ -140,8 +143,15 @@ func deployKubernetesCluster(sess *session.Session, deployedCluster *awsecs.Depl
 			getKubeConfigCommand = *output.OutputValue
 		}
 	}
+
 	glog.Infof("sshProxyCommand: %s", sshProxyCommand)
 	glog.Infof("getKubeConfigCommand: %s", getKubeConfigCommand)
+	if kubeconfigPath, err := DownloadKubeConfig(deployedCluster, getKubeConfigCommand); err != nil {
+		return errors.New("Unable to download kubeconfig: " + err.Error())
+	} else if kubeconfigPath != nil {
+		// TODO clientcmd.BuildConfigFromFlags("", *kubeconfig)
+		glog.Infof("kubeconfigPath: %s", kubeconfigPath)
+	}
 
 	return nil
 }
@@ -294,4 +304,64 @@ func getNode(family string, deployedCluster *awsecs.DeployedCluster) (*awsecs.No
 	}
 
 	return deployedCluster.NodeInfos[id], nil
+}
+
+// DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
+func DownloadKubeConfig(deployedCluster *awsecs.DeployedCluster, kubeConfigCommand string) (*string, error) {
+	baseDir := deployedCluster.Deployment.Name + "_kubeconfig"
+	basePath := "/tmp/" + baseDir
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		os.Mkdir(basePath, os.ModePerm)
+	}
+
+	pemFilePath := basePath + "/" + deployedCluster.KeyName() + ".pem"
+	os.Remove(pemFilePath)
+
+	kubeconfigFilePath := basePath + "/kubeconfig"
+	os.Remove(kubeconfigFilePath)
+
+	file, err := os.Create(pemFilePath)
+	if err != nil {
+		return nil, errors.New("Unable to create pem file:" + deployedCluster.KeyName() + ".pem")
+	}
+	defer file.Close()
+
+	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+	file.WriteString(privateKey)
+
+	time.Sleep(time.Duration(3) * time.Second)
+
+	chmodCmd := exec.Command("chmod", "400", pemFilePath)
+	if err := chmodCmd.Start(); err != nil {
+		fmt.Println(err)
+	}
+
+	sshAddCmd := exec.Command("ssh-add", pemFilePath)
+	if err := sshAddCmd.Start(); err != nil {
+		fmt.Println(err)
+	}
+
+	bastionHost := ""
+	targetHost := ""
+	result := strings.Split(kubeConfigCommand, " ")
+	for i := range result {
+		if strings.Contains(result[i], "@") {
+			if strings.Contains(result[i], "kubeconfig") {
+				targetCmd := strings.Split(result[i], ":")
+				targetHost = strings.Split(targetCmd[0], "@")[1]
+			} else {
+				bastionHost = strings.Split(result[i], "@")[1]
+			}
+		}
+	}
+
+	proxyCommand := fmt.Sprintf("ProxyCommand=ssh ubuntu@%s nc %s 22", bastionHost, targetHost)
+	targetRemotePath := fmt.Sprintf("ubuntu@%s:~/kubeconfig", targetHost)
+	KubeConfigCmd := exec.Command("scp", "-o", proxyCommand, targetRemotePath, kubeconfigFilePath)
+	if err := KubeConfigCmd.Start(); err != nil {
+		fmt.Println(err)
+	}
+
+	return &kubeconfigFilePath, nil
 }
