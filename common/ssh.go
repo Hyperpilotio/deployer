@@ -9,30 +9,43 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"time"
 
 	"github.com/golang/glog"
 )
 
 type SshClient struct {
 	Host         string
+	BastionHost  string
 	ClientConfig *ssh.ClientConfig
-	Client       *ssh.Client
 }
 
 // Connects to the remote SSH server, returns error if it couldn't establish a session to the SSH server
-func (a *SshClient) Connect() error {
-	client, err := ssh.Dial("tcp", a.Host, a.ClientConfig)
-	if err != nil {
-		return err
+func (a *SshClient) connect() (*ssh.Client, error) {
+	maxRetries := 5
+	var sshError error
+	// TODO: Check for Bastion and connect to Bastion first!
+	for i := 1; i <= maxRetries; i++ {
+		client, err := ssh.Dial("tcp", a.Host, a.ClientConfig)
+		if err != nil {
+			sshError = errors.New("Unable to connect to server: " + err.Error())
+			glog.Infof("Unable to ssh to %s, retrying %d time", a.Host, i)
+			time.Sleep(time.Duration(10) * time.Second)
+		} else {
+			return client, nil
+		}
 	}
 
-	a.Client = client
-
-	return nil
+	return nil, sshError
 }
 
 func (a *SshClient) RunCommand(command string, verbose bool) error {
-	session, err := a.Client.NewSession()
+	client, connectErr := a.connect()
+	if connectErr != nil {
+		return connectErr
+	}
+
+	session, err := client.NewSession()
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
@@ -60,18 +73,23 @@ func (a *SshClient) RunCommand(command string, verbose bool) error {
 
 // Copies the contents of an io.Reader to a remote location
 func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permissions string) error {
+	client, connectErr := a.connect()
+	if connectErr != nil {
+		return connectErr
+	}
+
 	contents_bytes, _ := ioutil.ReadAll(fileReader)
 	contents := string(contents_bytes)
 	filename := path.Base(remotePath)
 	directory := path.Dir(remotePath)
 
-	session, err := a.Client.NewSession()
+	session, err := client.NewSession()
 	if err != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}
 	session.Run("mkdir -p " + directory)
 
-	session, err = a.Client.NewSession()
+	session, err = client.NewSession()
 	var stderrBuf bytes.Buffer
 	session.Stderr = &stderrBuf
 	if err != nil {
@@ -96,7 +114,7 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	// therefore we need to verify the files are uploaded afterwards
 	session.Run("scp -t " + directory)
 
-	newSession, newErr := a.Client.NewSession()
+	newSession, newErr := client.NewSession()
 	if newErr != nil {
 		return errors.New("Unable to create ssh session: " + err.Error())
 	}

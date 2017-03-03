@@ -287,10 +287,12 @@ func (server *Server) createDeployment(c *gin.Context) {
 	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
 
+	server.DeployedClusters[deployment.Name] = deployedCluster
+
 	if deployment.ECSDeployment != nil {
-		err = awsecs.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 	} else if deployment.KubernetesDeployment != nil {
-		err = kubernetes.CreateDeployment(server.Config, &deployment, server.UploadedFiles, deployedCluster)
+		err = kubernetes.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -308,7 +310,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	server.DeployedClusters[deployment.Name] = deployedCluster
+	//server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
