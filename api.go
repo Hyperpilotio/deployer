@@ -22,7 +22,8 @@ import (
 type Server struct {
 	Config *viper.Viper
 	// Maps deployment name to deployed cluster struct
-	DeployedClusters map[string]*awsecs.DeployedCluster
+	DeployedClusters   map[string]*awsecs.DeployedCluster
+	KubernetesClusters *kubernetes.KubernetesClusters
 
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
@@ -32,9 +33,10 @@ type Server struct {
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:           config,
-		DeployedClusters: make(map[string]*awsecs.DeployedCluster),
-		UploadedFiles:    make(map[string]string),
+		Config:             config,
+		DeployedClusters:   make(map[string]*awsecs.DeployedCluster),
+		KubernetesClusters: kubernetes.NewKubernetesClusters(),
+		UploadedFiles:      make(map[string]string),
 	}
 }
 
@@ -227,7 +229,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		return
 	}
 
-	err := kubernetes.UpdateDeployment(server.Config, &deployment, data)
+	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
 		c.JSON(http.StatusNotImplemented, gin.H{
 			"error": true,
@@ -292,7 +294,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if deployment.ECSDeployment != nil {
 		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 	} else if deployment.KubernetesDeployment != nil {
-		err = kubernetes.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		err = server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -365,13 +367,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		// TODO create a batch job to delete the deployment
 		// TODO Delete deployment depending on k8s or awsecs
 		//awsecs.DeleteDeployment(server.Config, data)
-		if err := kubernetes.DeleteDeployment(server.Config, data); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": true,
-				"data":  err.Error(),
-			})
-			return
-		}
+		server.KubernetesClusters.DeleteDeployment(server.Config, data)
 
 		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
 		// delete(server.DeployedClusters, c.Param("deployment"))

@@ -20,30 +20,73 @@ type SshClient struct {
 	ClientConfig *ssh.ClientConfig
 }
 
-// Connects to the remote SSH server, returns error if it couldn't establish a session to the SSH server
-func (a *SshClient) connect() (*ssh.Client, error) {
-	maxRetries := 5
-	var sshError error
-	// TODO: Check for Bastion and connect to Bastion first!
-	for i := 1; i <= maxRetries; i++ {
-		client, err := ssh.Dial("tcp", a.Host, a.ClientConfig)
-		if err != nil {
-			sshError = errors.New("Unable to connect to server: " + err.Error())
-			glog.Infof("Unable to ssh to %s, retrying %d time", a.Host, i)
-			time.Sleep(time.Duration(10) * time.Second)
-		} else {
-			return client, nil
-		}
+func (a *SshClient) connectViaBastion() (*ssh.Client, *ssh.Client, error) {
+	bastion, err := ssh.Dial("tcp", a.BastionHost, a.ClientConfig)
+	if err != nil {
+		return nil, nil, errors.New("Unable to connect to bastion: " + err.Error())
 	}
 
-	return nil, sshError
+	conn, err := bastion.Dial("tcp", a.Host)
+	if err != nil {
+		bastion.Close()
+		return nil, nil, errors.New("Unable to connect to server from bastion: " + err.Error())
+	}
+
+	// We are assuming bastion doesn't need another key to connect to target
+	targetConfig := &ssh.ClientConfig{
+		User: a.ClientConfig.User,
+	}
+
+	ncc, chans, reqs, err := ssh.NewClientConn(conn, a.Host, targetConfig)
+	if err != nil {
+		conn.Close()
+		bastion.Close()
+		return nil, nil, errors.New("Unable to create new client conn: " + err.Error())
+	}
+
+	client := ssh.NewClient(ncc, chans, reqs)
+
+	return client, bastion, nil
+}
+
+// Connects to the remote SSH server, returns error if it couldn't establish a session to the SSH server
+func (a *SshClient) connect() (*ssh.Client, *ssh.Client, error) {
+	maxRetries := 5
+	var sshError error
+	for i := 1; i <= maxRetries; i++ {
+		if a.BastionHost != "" {
+			client, bastion, err := a.connectViaBastion()
+			if err != nil {
+				sshError = err
+			} else {
+				return client, bastion, nil
+			}
+		} else {
+			client, err := ssh.Dial("tcp", a.Host, a.ClientConfig)
+			if err != nil {
+				sshError = errors.New("Unable to connect to server: " + err.Error())
+				glog.Infof("Unable to ssh to %s, retrying %d time", a.Host, i)
+			} else {
+				return client, nil, nil
+			}
+		}
+
+		time.Sleep(time.Duration(10) * time.Second)
+	}
+
+	return nil, nil, sshError
 }
 
 func (a *SshClient) RunCommand(command string, verbose bool) error {
-	client, connectErr := a.connect()
+	client, bastion, connectErr := a.connect()
 	if connectErr != nil {
 		return connectErr
 	}
+
+	if bastion != nil {
+		defer bastion.Close()
+	}
+	defer client.Close()
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -73,10 +116,15 @@ func (a *SshClient) RunCommand(command string, verbose bool) error {
 
 // Copies the contents of an io.Reader to a remote location
 func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permissions string) error {
-	client, connectErr := a.connect()
+	client, bastion, connectErr := a.connect()
 	if connectErr != nil {
 		return connectErr
 	}
+
+	if bastion != nil {
+		defer bastion.Close()
+	}
+	defer client.Close()
 
 	contents_bytes, _ := ioutil.ReadAll(fileReader)
 	contents := string(contents_bytes)
@@ -128,9 +176,10 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	return nil
 }
 
-func NewSshClient(host string, config *ssh.ClientConfig) SshClient {
+func NewSshClient(host string, config *ssh.ClientConfig, bastionHost string) SshClient {
 	return SshClient{
 		Host:         host,
+		BastionHost:  bastionHost,
 		ClientConfig: config,
 	}
 }

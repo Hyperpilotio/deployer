@@ -317,7 +317,7 @@ func uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string, 
 
 	for _, nodeInfo := range deployedCluster.NodeInfos {
 		address := nodeInfo.PublicDnsName + ":22"
-		scpClient := common.NewSshClient(address, &clientConfig)
+		scpClient := common.NewSshClient(address, &clientConfig, "")
 		for _, deployFile := range deployedCluster.Deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
 			// in the same connection
