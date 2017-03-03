@@ -647,7 +647,7 @@ func waitUntilECSClusterReady(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster)
 	clusterReady := false
 	totalCount := int64(len(deployedCluster.Deployment.ClusterDefinition.Nodes))
 	describeClustersInput := &ecs.DescribeClustersInput{
-		Clusters: []*string{&deployment.Name},
+		Clusters: []*string{&deployedCluster.Deployment.Name},
 	}
 
 	for !clusterReady {
@@ -732,7 +732,7 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 		}
 	}
 
-	for _, mapping := range deployment.NodeMapping {
+	for _, mapping := range deployedCluster.Deployment.NodeMapping {
 		nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
 		if !ok {
 			return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
@@ -747,7 +747,7 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 					Value:      aws.String(mapping.ImageIdAttribute()),
 				},
 			},
-			Cluster: aws.String(deployment.Name),
+			Cluster: aws.String(deployedCluster.Deployment.Name),
 		}
 
 		_, err := ecsSvc.PutAttributes(params)
@@ -824,31 +824,31 @@ func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
 
 func SetupEC2Infra(viper *viper.Viper, user string, uploadedFiles map[string]string, ec2Svc *ec2.EC2, iamSvc *iam.IAM, deployedCluster *DeployedCluster, images map[string]string) error {
 	glog.V(1).Infof("Setting up IAM Role")
-	if err := setupIAM(deployment, iamSvc, deployedCluster); err != nil {
+	if err := setupIAM(iamSvc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
 	glog.V(1).Infof("Setting up Network")
-	if err := setupNetwork(deployment, ec2Svc, deployedCluster); err != nil {
+	if err := setupNetwork(ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup Network: " + err.Error())
 	}
 
 	glog.V(1).Infof("Launching EC2 instances")
-	if err := setupEC2(deployment, ec2Svc, deployedCluster, images); err != nil {
+	if err := setupEC2(ec2Svc, deployedCluster, images); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
 	glog.V(1).Infof("Populating public dns names")
-	if err := populatePublicDnsNames(deployment, ec2Svc, deployedCluster); err != nil {
+	if err := populatePublicDnsNames(ec2Svc, deployedCluster); err != nil {
 		DeleteDeployment(viper, deployedCluster)
 		return errors.New("Unable to populate public dns names: " + err.Error())
 	}
 
 	glog.V(1).Infof("Uploading files to EC2 Instances")
-	if err := uploadFiles(user, deployment, ec2Svc, uploadedFiles, deployedCluster); err != nil {
+	if err := uploadFiles(user, ec2Svc, uploadedFiles, deployedCluster); err != nil {
 		return errors.New("Unable to upload files to EC2: " + err.Error())
 	}
 

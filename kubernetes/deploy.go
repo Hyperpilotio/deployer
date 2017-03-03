@@ -55,7 +55,7 @@ func waitUntilMasterReady(publicDNSName string, timeout time.Duration) error {
 	}
 }
 
-func deployKubernetesCluster(sess *ec2.Session, deployedCluster *awsecs.DeployedCluster) error {
+func deployKubernetesCluster(sess *session.Session, deployedCluster *awsecs.DeployedCluster) error {
 	cfSvc := cloudformation.New(sess)
 	params := &cloudformation.CreateStackInput{
 		StackName: aws.String(deployedCluster.StackName()),
@@ -136,6 +136,8 @@ func deployKubernetesCluster(sess *ec2.Session, deployedCluster *awsecs.Deployed
 			getKubeConfigCommand = *output.OutputValue
 		}
 	}
+	glog.Infof("sshProxyCommand: %s", sshProxyCommand)
+	glog.Infof("getKubeConfigCommand: %s", getKubeConfigCommand)
 
 	return nil
 }
@@ -158,7 +160,7 @@ func CreateDeployment(config *viper.Viper, uploadedFiles map[string]string, depl
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
 
-	if err := deployServices(deployment, deployedCluster); err != nil {
+	if err := deployServices(deployedCluster); err != nil {
 		DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -170,7 +172,7 @@ func CreateDeployment(config *viper.Viper, uploadedFiles map[string]string, depl
 func UpdateDeployment(config *viper.Viper, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
 	glog.Info("Starting kubernetes deployment")
 
-	if err := deployServices(deployment, deployedCluster); err != nil {
+	if err := deployServices(deployedCluster); err != nil {
 		DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -219,21 +221,21 @@ func DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedClust
 	return nil
 }
 
-func deployServices(deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+func deployServices(deployedCluster *awsecs.DeployedCluster) error {
 	config := &rest.Config{
 		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
 	}
 
 	if c, err := k8s.NewForConfig(config); err == nil {
 		deploy := c.Extensions().Deployments(defaultNamespace)
-		for _, task := range deployment.KubernetesDeployment.Kubernetes {
+		for _, task := range deployedCluster.Deployment.KubernetesDeployment.Kubernetes {
 			deploySpec := task.Deployment
 			family := task.Family
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
 			//svcExternalName := ""
-			if node, err := getNode(family, deployment, deployedCluster); err != nil {
+			if node, err := getNode(family, deployedCluster); err != nil {
 				return errors.New("Unable to find node: " + err.Error())
 			} else if node != nil {
 				//svcExternalName = node.PublicDnsName
@@ -274,9 +276,9 @@ func deployServices(deployment *apis.Deployment, deployedCluster *awsecs.Deploye
 	return nil
 }
 
-func getNode(family string, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) (*awsecs.NodeInfo, error) {
+func getNode(family string, deployedCluster *awsecs.DeployedCluster) (*awsecs.NodeInfo, error) {
 	id := -1
-	for _, node := range deployment.NodeMapping {
+	for _, node := range deployedCluster.Deployment.NodeMapping {
 		if node.Task == family {
 			id = node.Id
 			break
