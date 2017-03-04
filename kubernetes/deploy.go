@@ -4,17 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/golang/glog"
 
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/common"
-	"golang.org/x/crypto/ssh"
 
 	"github.com/spf13/viper"
 
@@ -26,6 +23,7 @@ import (
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const defaultNamespace string = "default"
@@ -34,6 +32,7 @@ type KubernetesDeployment struct {
 	BastionIp       string
 	MasterIp        string
 	KubeConfigPath  string
+	KubeConfig      *rest.Config
 	DeployedCluster *awsecs.DeployedCluster
 }
 
@@ -44,37 +43,6 @@ type KubernetesClusters struct {
 func NewKubernetesClusters() *KubernetesClusters {
 	return &KubernetesClusters{
 		Clusters: make(map[string]*KubernetesDeployment),
-	}
-}
-
-func waitUntilMasterReady(publicDNSName string, timeout time.Duration) error {
-	// Use client-go to poll kube master until it's ready.
-	config := &rest.Config{
-		Host: publicDNSName + ":8080",
-	}
-
-	c := make(chan bool, 1)
-	quit := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-quit:
-				return
-			default:
-				if _, err := k8s.NewForConfig(config); err == nil {
-					c <- true
-				}
-				time.Sleep(time.Second * 2)
-			}
-		}
-	}()
-
-	select {
-	case <-c:
-		return nil
-	case <-time.After(timeout):
-		quit <- true
-		return errors.New("Timed out waiting for master to be ready")
 	}
 }
 
@@ -113,22 +81,13 @@ func (k8sDeployment *KubernetesDeployment) uploadFiles(ec2Svc *ec2.EC2, uploaded
 		}
 	}
 
-	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
-
-	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
-	if err != nil {
-		return errors.New("Unable to parse private key: " + err.Error())
-	}
-
-	clientConfig := &ssh.ClientConfig{
-		User: "ubuntu",
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
+	clientConfig, clientConfigErr := deployedCluster.SshConfig("ubuntu")
+	if clientConfigErr != nil {
+		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
 	for _, instanceIp := range instanceIps {
-		sshClient := common.NewSshClient(*instanceIp, clientConfig, k8sDeployment.BastionIp)
+		sshClient := common.NewSshClient(*instanceIp+":22", clientConfig, k8sDeployment.BastionIp+":22")
 		// TODO: Refactor this so can be reused with AWS
 		for _, deployFile := range deployedCluster.Deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
@@ -217,18 +176,21 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetesCluster(sess *session
 		TemplateURL:      aws.String("https://s3.amazonaws.com/quickstart-reference/heptio/latest/templates/kubernetes-cluster-with-new-vpc.template"),
 		TimeoutInMinutes: aws.Int64(30),
 	}
-	if resp, err := cfSvc.CreateStack(params); err != nil {
-		k8sDeployment.DeployedCluster.StackId = *resp.StackId
+	glog.Info("Creating kubernetes stack...")
+	if _, err := cfSvc.CreateStack(params); err != nil {
+		return errors.New("Unable to create stack: " + err.Error())
 	}
 
 	describeStacksInput := &cloudformation.DescribeStacksInput{
 		StackName: aws.String(k8sDeployment.DeployedCluster.StackName()),
 	}
 
+	glog.Info("Waiting until stack is completed...")
 	if err := cfSvc.WaitUntilStackCreateComplete(describeStacksInput); err != nil {
 		return errors.New("Unable to wait until stack complete: " + err.Error())
 	}
 
+	glog.Info("Kuberenete stack completed")
 	describeStacksOutput, describeStacksErr := cfSvc.DescribeStacks(describeStacksInput)
 	if describeStacksErr != nil {
 		return errors.New("Unable to get stack outputs: " + describeStacksErr.Error())
@@ -264,15 +226,22 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetesCluster(sess *session
 		return errors.New("Unexpected ssh proxy command format: " + sshProxyCommand)
 	}
 
-	k8sDeployment.BastionIp = addresses[1]
-	k8sDeployment.MasterIp = addresses[0]
+	k8sDeployment.BastionIp = addresses[0]
+	k8sDeployment.MasterIp = addresses[1]
 
 	if kubeConfigPath, err := k8sDeployment.downloadKubeConfig(); err != nil {
 		return errors.New("Unable to download kubeconfig: " + err.Error())
 	} else if kubeConfigPath == nil {
 		return errors.New("Kubeconfig downloaded path is empty")
 	} else {
+		glog.Infof("Downloaded kube config at %s", *kubeConfigPath)
 		k8sDeployment.KubeConfigPath = *kubeConfigPath
+	}
+
+	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
+		return errors.New("Unable to parse kube config: " + err.Error())
+	} else {
+		k8sDeployment.KubeConfig = kubeConfig
 	}
 
 	return nil
@@ -304,12 +273,12 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sClusters.DeleteDeployment(config, deployedCluster)
+		//k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
 	if err := k8sDeployment.deployServices(); err != nil {
-		k8sClusters.DeleteDeployment(config, deployedCluster)
+		//k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -331,53 +300,77 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
-	restConfig := &rest.Config{
-		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
+	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
+	if !ok {
+		glog.Warningf("Unable to find kubernetes deployment to delete: %s", deployedCluster.Deployment.Name)
+		return
 	}
 
-	if c, err := k8s.NewForConfig(restConfig); err == nil {
-		deploys := c.Extensions().Deployments(defaultNamespace)
-		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
-			for _, deployment := range deployLists.Items {
-				deploys.Delete(deployment.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+	if k8sDeployment.KubeConfig != nil {
+		glog.Infof("Found kube config, deleting kubernetes objects")
+		if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
+			deploys := c.Extensions().Deployments(defaultNamespace)
+			if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
+				for _, deployment := range deployLists.Items {
+					deploys.Delete(deployment.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+				}
 			}
-		}
 
-		replicaSets := c.Extensions().ReplicaSets(defaultNamespace)
-		if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
-			for _, replicaSet := range replicaSetLists.Items {
-				replicaSets.Delete(replicaSet.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			replicaSets := c.Extensions().ReplicaSets(defaultNamespace)
+			if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
+				for _, replicaSet := range replicaSetLists.Items {
+					replicaSets.Delete(replicaSet.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+				}
 			}
-		}
 
-		pods := c.CoreV1().Pods(defaultNamespace)
-		if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
-			for _, pod := range podLists.Items {
-				pods.Delete(pod.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			pods := c.CoreV1().Pods(defaultNamespace)
+			if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
+				for _, pod := range podLists.Items {
+					pods.Delete(pod.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+				}
 			}
-		}
 
-		services := c.CoreV1().Services(defaultNamespace)
-		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
-			for _, service := range serviceLists.Items {
-				services.Delete(service.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+			services := c.CoreV1().Services(defaultNamespace)
+			if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+				for _, service := range serviceLists.Items {
+					services.Delete(service.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+				}
 			}
 		}
 	}
 
-	awsecs.DeleteDeployment(config, deployedCluster)
+	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	if sessionErr != nil {
+		glog.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
+		return
+	}
+
+	cfSvc := cloudformation.New(sess)
+	ec2Svc := ec2.New(sess)
+
+	deleteStackInput := &cloudformation.DeleteStackInput{
+		StackName: aws.String(deployedCluster.StackName()),
+	}
+
+	if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
+		glog.Warning("Unable to delete stack: " + err.Error())
+	}
+
+	if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
+		glog.Warning("Unable to delete key pair: " + err.Error())
+	}
 
 	delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
 }
 
 func (k8sDeployment *KubernetesDeployment) deployServices() error {
-	deployedCluster := k8sDeployment.DeployedCluster
-
-	config := &rest.Config{
-		Host: deployedCluster.NodeInfos[1].PublicDnsName + ":8080",
+	if k8sDeployment.KubeConfig == nil {
+		return errors.New("Unable to find kube config in deployment")
 	}
 
-	if c, err := k8s.NewForConfig(config); err == nil {
+	deployedCluster := k8sDeployment.DeployedCluster
+
+	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
 		deploy := c.Extensions().Deployments(defaultNamespace)
 		for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
 			deploySpec := task.Deployment
@@ -448,41 +441,22 @@ func (k8sDeployment *KubernetesDeployment) downloadKubeConfig() (*string, error)
 	deployedCluster := k8sDeployment.DeployedCluster
 	baseDir := deployedCluster.Deployment.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
+	kubeconfigFilePath := basePath + "/kubeconfig"
 
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
 		os.Mkdir(basePath, os.ModePerm)
 	}
 
-	pemFilePath := basePath + "/" + deployedCluster.KeyName() + ".pem"
-	os.Remove(pemFilePath)
-
-	kubeconfigFilePath := basePath + "/kubeconfig"
 	os.Remove(kubeconfigFilePath)
 
-	file, err := os.Create(pemFilePath)
-	if err != nil {
-		return nil, errors.New("Unable to create pem file:" + deployedCluster.KeyName() + ".pem")
-	}
-	defer file.Close()
-
-	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
-	file.WriteString(privateKey)
-
-	chmodCmd := exec.Command("chmod", "400", pemFilePath)
-	if err := chmodCmd.Start(); err != nil {
-		return nil, errors.New("Unable to chmod pem: " + err.Error())
+	clientConfig, clientConfigErr := k8sDeployment.DeployedCluster.SshConfig("ubuntu")
+	if clientConfigErr != nil {
+		return nil, errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
-	sshAddCmd := exec.Command("ssh-add", pemFilePath)
-	if err := sshAddCmd.Start(); err != nil {
-		return nil, errors.New("Unable to ssh add pem: " + err.Error())
-	}
-
-	proxyCommand := fmt.Sprintf("ProxyCommand=ssh ubuntu@%s nc %s 22", k8sDeployment.BastionIp, k8sDeployment.MasterIp)
-	targetRemotePath := fmt.Sprintf("ubuntu@%s:~/kubeconfig", k8sDeployment.MasterIp)
-	kubeConfigCmd := exec.Command("scp", "-o", proxyCommand, targetRemotePath, kubeconfigFilePath)
-	if err := kubeConfigCmd.Start(); err != nil {
-		return nil, errors.New("Unable to run get kube config command: " + err.Error())
+	sshClient := common.NewSshClient(k8sDeployment.MasterIp+":22", clientConfig, k8sDeployment.BastionIp+":22")
+	if err := sshClient.CopyFileToLocal("/home/ubuntu/kubeconfig", kubeconfigFilePath); err != nil {
+		return nil, errors.New("Unable to copy kubeconfig file to local: " + err.Error())
 	}
 
 	return &kubeconfigFilePath, nil

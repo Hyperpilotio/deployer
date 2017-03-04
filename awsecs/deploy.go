@@ -42,7 +42,6 @@ type DeployedCluster struct {
 	Deployment        *apis.Deployment
 	SecurityGroupId   string
 	SubnetId          string
-	StackId           string
 	InternetGatewayId string
 	NodeInfos         map[int]*NodeInfo
 	InstanceIds       []*string
@@ -76,6 +75,24 @@ func (deployedCluster DeployedCluster) VPCName() string {
 // SubnetName return a key name according to the Deployment.Name with suffix "-vpc"
 func (deployedCluster DeployedCluster) SubnetName() string {
 	return deployedCluster.Name + "-subnet"
+}
+
+func (deployedCluster DeployedCluster) SshConfig(user string) (*ssh.ClientConfig, error) {
+	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	if err != nil {
+		return nil, errors.New("Unable to parse private key: " + err.Error())
+	}
+
+	clientConfig := &ssh.ClientConfig{
+		User: user,
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		},
+	}
+
+	return clientConfig, nil
 }
 
 func CreateSession(viper *viper.Viper, deployment *apis.Deployment) (*session.Session, error) {
@@ -302,22 +319,14 @@ func uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string, 
 		return nil
 	}
 
-	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
-
-	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	clientConfig, err := deployedCluster.SshConfig(user)
 	if err != nil {
-		return errors.New("Unable to parse private key: " + err.Error())
+		return errors.New("Unable to create ssh config: " + err.Error())
 	}
-
-	clientConfig := ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		}}
 
 	for _, nodeInfo := range deployedCluster.NodeInfos {
 		address := nodeInfo.PublicDnsName + ":22"
-		scpClient := common.NewSshClient(address, &clientConfig, "")
+		scpClient := common.NewSshClient(address, clientConfig, "")
 		for _, deployFile := range deployedCluster.Deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
 			// in the same connection
@@ -1071,7 +1080,7 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func deleteKeyPair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func DeleteKeyPair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	params := &ec2.DeleteKeyPairInput{
 		KeyName: aws.String(deployedCluster.KeyName()),
 	}
@@ -1327,7 +1336,7 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 
 	// delete key pair
 	glog.V(1).Infof("Deleting key pair")
-	if err := deleteKeyPair(ec2Svc, deployedCluster); err != nil {
+	if err := DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		glog.Errorln("Unable to delete key pair: ", err.Error())
 	}
 

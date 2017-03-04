@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"golang.org/x/crypto/ssh"
 	"io"
 	"io/ioutil"
 	"os"
@@ -12,6 +11,9 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/pkg/sftp"
+
+	"golang.org/x/crypto/ssh"
 )
 
 type SshClient struct {
@@ -32,12 +34,7 @@ func (a *SshClient) connectViaBastion() (*ssh.Client, *ssh.Client, error) {
 		return nil, nil, errors.New("Unable to connect to server from bastion: " + err.Error())
 	}
 
-	// We are assuming bastion doesn't need another key to connect to target
-	targetConfig := &ssh.ClientConfig{
-		User: a.ClientConfig.User,
-	}
-
-	ncc, chans, reqs, err := ssh.NewClientConn(conn, a.Host, targetConfig)
+	ncc, chans, reqs, err := ssh.NewClientConn(conn, a.Host, a.ClientConfig)
 	if err != nil {
 		conn.Close()
 		bastion.Close()
@@ -172,6 +169,39 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	if err != nil {
 		return errors.New("Failed to upload file: " + stderrBuf.String())
 	}
+
+	return nil
+}
+
+func (a *SshClient) CopyFileToLocal(remotePath string, localPath string) error {
+	client, bastion, connectErr := a.connect()
+	if connectErr != nil {
+		return connectErr
+	}
+
+	if bastion != nil {
+		defer bastion.Close()
+	}
+	defer client.Close()
+
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return errors.New("Unable to create sftp client: " + err.Error())
+	}
+
+	srcFile, err := sftpClient.Open(remotePath)
+	if err != nil {
+		return errors.New("Unable to open remote path: " + err.Error())
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(localPath)
+	if err != nil {
+		return errors.New("Unable to open local path:" + err.Error())
+	}
+	defer dstFile.Close()
+
+	srcFile.WriteTo(dstFile)
 
 	return nil
 }
