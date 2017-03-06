@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"io"
+	"io/ioutil"
 	"os"
 	"path"
 	"strconv"
@@ -68,6 +69,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
+		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 
 		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node_address", server.getNodeAddressForTask)
@@ -393,6 +395,27 @@ func (server *Server) getPemFile(c *gin.Context) {
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		privateKey := strings.Replace(*data.KeyPair.KeyMaterial, "\\n", "\n", -1)
 		c.String(http.StatusOK, privateKey)
+	} else {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  c.Param("deployment") + " not found.",
+		})
+	}
+}
+
+func (server *Server) getKubeConfigFile(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	if data, ok := server.KubernetesClusters.Clusters[c.Param("deployment")]; ok {
+		if b, err := ioutil.ReadFile(data.KubeConfigPath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": true,
+				"data":  "Unable to read kubeConfig file: " + err.Error(),
+			})
+		} else {
+			c.String(http.StatusOK, string(b))
+		}
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
