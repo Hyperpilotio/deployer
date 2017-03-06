@@ -205,19 +205,21 @@ func (server *Server) deleteFile(c *gin.Context) {
 }
 
 func (server *Server) updateDeployment(c *gin.Context) {
-	deploymentName := c.Param("deployment")
+	//deploymentName := c.Param("deployment")
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	data, ok := server.DeployedClusters[deploymentName]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Deployment not found",
-		})
-		return
-	}
+	/*
+		data, ok := server.DeployedClusters[deploymentName]
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Deployment not found",
+			})
+			return
+		}
+	**/
 
 	// TODO Implement function to update deployment
 	var deployment apis.Deployment
@@ -228,6 +230,8 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
+
+	data := awsecs.NewDeployedCluster(&deployment)
 
 	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
@@ -289,8 +293,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
 
-	server.DeployedClusters[deployment.Name] = deployedCluster
-
 	if deployment.ECSDeployment != nil {
 		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 	} else if deployment.KubernetesDeployment != nil {
@@ -312,7 +314,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	//server.DeployedClusters[deployment.Name] = deployedCluster
+	server.DeployedClusters[deployment.Name] = deployedCluster
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
