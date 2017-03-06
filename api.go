@@ -237,12 +237,12 @@ func (server *Server) updateDeployment(c *gin.Context) {
 
 	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
-		c.JSON(http.StatusNotImplemented, gin.H{
+		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
 			"data":  "Error update deployment: " + err.Error(),
 		})
 	} else {
-		c.JSON(http.StatusNotImplemented, gin.H{
+		c.JSON(http.StatusOK, gin.H{
 			"error": false,
 			"data":  "",
 		})

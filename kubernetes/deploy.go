@@ -423,7 +423,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 			if node, err := getNode(family, deployedCluster); err != nil {
 				return errors.New("Unable to find node: " + err.Error())
 			} else if node != nil {
-				nodeSelector["kubernetes.io/hostname"] = *node.Instance.PrivateDnsName
+				nodeSelector["kubernetes.io/hostname"] = strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
 			}
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
@@ -434,11 +434,11 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				}
 
 				service := c.CoreV1().Services(defaultNamespace)
-
+				serviceName := family + "-" + container.Name
 				labels := map[string]string{"app": family}
 				v1Service := &v1.Service{
 					ObjectMeta: v1.ObjectMeta{
-						Name:      family + "-" + container.Name,
+						Name:      serviceName,
 						Labels:    labels,
 						Namespace: defaultNamespace,
 					},
@@ -454,9 +454,9 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				}
 				_, err = service.Create(v1Service)
 				if err != nil {
-					return fmt.Errorf("Unable to create service %s: %s", family, err)
+					return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
 				}
-				glog.Infof("Created %s service", family)
+				glog.Infof("Created %s service", serviceName)
 			}
 
 			// start deploy deployment
