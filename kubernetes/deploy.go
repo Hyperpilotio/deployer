@@ -114,19 +114,10 @@ func (k8sDeployment *KubernetesDeployment) uploadFiles(ec2Svc *ec2.EC2, uploaded
 				return errors.New("Unable to find uploaded file " + deployFile.FileId)
 			}
 
-			f, fileErr := os.Open(location)
-			if fileErr != nil {
-				return errors.New(
-					"Unable to open uploaded file " + deployFile.FileId +
-						": " + fileErr.Error())
-			}
-
-			if err := sshClient.CopyFile(f, deployFile.Path, "0644"); err != nil {
-				f.Close()
+			if err := sshClient.CopyLocalFileToRemote(location, deployFile.Path); err != nil {
 				return fmt.Errorf("Unable to upload file %s to server %s: %s",
 					deployFile.FileId, nodeInfo.PrivateIp, err.Error())
 			}
-			f.Close()
 		}
 	}
 
@@ -297,6 +288,11 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
+	if err := k8sDeployment.tagKubeNodes(); err != nil {
+		//k8sClusters.DeleteDeployment(config, deployedCluster)
+		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
+	}
+
 	if err := k8sDeployment.deployServices(); err != nil {
 		//k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
@@ -352,57 +348,94 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 			deploys := c.Extensions().Deployments(defaultNamespace)
 			if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
 				for _, deployment := range deployLists.Items {
-					deploys.Delete(deployment.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+					deploymentName := deployment.GetObjectMeta().GetName()
+					if err := deploys.Delete(deploymentName, &v1.DeleteOptions{}); err != nil {
+						glog.Warningf("Unable to delete deployment %s: %s", deploymentName, err.Error())
+					}
 				}
+			} else {
+				glog.Warning("Unable to list deployments for deletion: " + listError.Error())
 			}
 
 			replicaSets := c.Extensions().ReplicaSets(defaultNamespace)
 			if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
 				for _, replicaSet := range replicaSetLists.Items {
-					replicaSets.Delete(replicaSet.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+					replicaName := replicaSet.GetObjectMeta().GetName()
+					if err := replicaSets.Delete(replicaName, &v1.DeleteOptions{}); err != nil {
+						glog.Warningf("Unable to delete replica set %s: %s", replicaName, err.Error())
+					}
 				}
+			} else {
+				glog.Warning("Unable to list replica sets for deletion: " + listError.Error())
 			}
 
 			pods := c.CoreV1().Pods(defaultNamespace)
 			if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
 				for _, pod := range podLists.Items {
-					pods.Delete(pod.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+					podName := pod.GetObjectMeta().GetName()
+					if err := pods.Delete(podName, &v1.DeleteOptions{}); err != nil {
+						glog.Warningf("Unable to delete pod %s: %s", podName, err.Error())
+					}
 				}
+			} else {
+				glog.Warning("Unable to list pods for deletion: " + listError.Error())
 			}
 
 			services := c.CoreV1().Services(defaultNamespace)
 			if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
 				for _, service := range serviceLists.Items {
-					services.Delete(service.GetObjectMeta().GetName(), &v1.DeleteOptions{})
+					serviceName := service.GetObjectMeta().GetName()
+					if err := services.Delete(serviceName, &v1.DeleteOptions{}); err != nil {
+						glog.Warningf("Unable to delete service %s: %s", serviceName, err.Error())
+					}
 				}
+			} else {
+				glog.Warning("Unable to list services for deletion: " + listError.Error())
 			}
+		} else {
+			glog.Warning("Unable to connect to kubernetes, skipping delete kubernetes objects")
 		}
 	}
 
 	/*
-		sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
-		if sessionErr != nil {
-			glog.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
-			return
-		}
+				sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+				if sessionErr != nil {
+					glog.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
+					return
+				}
 
-		cfSvc := cloudformation.New(sess)
-		ec2Svc := ec2.New(sess)
+				cfSvc := cloudformation.New(sess)
+				ec2Svc := ec2.New(sess)
 
-		deleteStackInput := &cloudformation.DeleteStackInput{
-			StackName: aws.String(deployedCluster.StackName()),
-		}
+				deleteStackInput := &cloudformation.DeleteStackInput{
+					StackName: aws.String(deployedCluster.StackName()),
+				}
 
-		if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
-			glog.Warning("Unable to delete stack: " + err.Error())
-		}
+				if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
+					glog.Warning("Unable to delete stack: " + err.Error())
+				}
 
-		if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
-			glog.Warning("Unable to delete key pair: " + err.Error())
-		}
+		                describeStacksInput = &cloudFormation.DescribeStacksInput{
+		                        StackName: aws.String(deployedCluster.StackName()),
+		                }
 
-		delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
+		                if err := cfSvc.WaitUntilStackDeleteComplete(describeStacksInput); err != nil {
+		                        glog.Warning("Unable to wait until stack is deleted: " + err.Error())
+		                }
+
+				if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
+					glog.Warning("Unable to delete key pair: " + err.Error())
+				}
+
+				delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
 	*/
+}
+
+func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
+	//TODO: Tag kube nodes with node mapping ids, and then remember the mapping
+	// in a in-memory structure.
+	// We should do this so we know consistently which tasks are running on which nodes.
+	return nil
 }
 
 func (k8sDeployment *KubernetesDeployment) deployServices() error {
@@ -423,7 +456,9 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 			if node, err := getNode(family, deployedCluster); err != nil {
 				return errors.New("Unable to find node: " + err.Error())
 			} else if node != nil {
-				nodeSelector["kubernetes.io/hostname"] = strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
+				nodeName := strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
+				glog.Infof("Selecting node %s for deployment %s", nodeName, family)
+				nodeSelector["kubernetes.io/hostname"] = nodeName
 			}
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
@@ -434,7 +469,10 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				}
 
 				service := c.CoreV1().Services(defaultNamespace)
-				serviceName := family + "-" + container.Name
+				serviceName := family
+				if family != container.Name {
+					serviceName = serviceName + "-" + container.Name
+				}
 				labels := map[string]string{"app": family}
 				v1Service := &v1.Service{
 					ObjectMeta: v1.ObjectMeta{
@@ -511,7 +549,7 @@ func (k8sDeployment *KubernetesDeployment) downloadKubeConfig() error {
 	}
 
 	sshClient := common.NewSshClient(k8sDeployment.MasterIp+":22", clientConfig, k8sDeployment.BastionIp+":22")
-	if err := sshClient.CopyFileToLocal("/home/ubuntu/kubeconfig", kubeconfigFilePath); err != nil {
+	if err := sshClient.CopyRemoteFileToLocal("/home/ubuntu/kubeconfig", kubeconfigFilePath); err != nil {
 		return errors.New("Unable to copy kubeconfig file to local: " + err.Error())
 	}
 

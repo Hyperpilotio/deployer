@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -335,15 +334,7 @@ func uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string, 
 				return errors.New("Unable to find uploaded file " + deployFile.FileId)
 			}
 
-			f, fileErr := os.Open(location)
-			if fileErr != nil {
-				return errors.New(
-					"Unable to open uploaded file " + deployFile.FileId +
-						": " + fileErr.Error())
-			}
-			defer f.Close()
-
-			if err := scpClient.CopyFile(f, deployFile.Path, "0644"); err != nil {
+			if err := scpClient.CopyLocalFileToRemote(location, deployFile.Path); err != nil {
 				errorMsg := fmt.Sprintf("Unable to upload file %s to server %s: %s",
 					deployFile.FileId, address, err.Error())
 				return errors.New(errorMsg)

@@ -3,8 +3,6 @@ package common
 import (
 	"bytes"
 	"errors"
-	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path"
@@ -111,8 +109,8 @@ func (a *SshClient) RunCommand(command string, verbose bool) error {
 	return nil
 }
 
-// Copies the contents of an io.Reader to a remote location
-func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permissions string) error {
+// Copies the contents of an local file to a remote location
+func (a *SshClient) CopyLocalFileToRemote(localPath string, remotePath string) error {
 	client, bastion, connectErr := a.connect()
 	if connectErr != nil {
 		return connectErr
@@ -123,57 +121,32 @@ func (a *SshClient) CopyFile(fileReader io.Reader, remotePath string, permission
 	}
 	defer client.Close()
 
-	contents_bytes, _ := ioutil.ReadAll(fileReader)
-	contents := string(contents_bytes)
-	filename := path.Base(remotePath)
-	directory := path.Dir(remotePath)
-
-	session, err := client.NewSession()
+	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		return errors.New("Unable to create ssh session: " + err.Error())
-	}
-	session.Run("mkdir -p " + directory)
-
-	session, err = client.NewSession()
-	var stderrBuf bytes.Buffer
-	session.Stderr = &stderrBuf
-	if err != nil {
-		return errors.New("Unable to create ssh session: " + err.Error())
+		return errors.New("Unable to create sftp client: " + err.Error())
 	}
 
-	go func() {
-		w, err := session.StdinPipe()
-		if err != nil {
-			glog.Errorf("Unable to create stdin pipe", err)
-			return
-		}
+	sftpClient.Mkdir(path.Dir(remotePath))
 
-		fmt.Fprintln(w, "C"+permissions, len(contents), filename)
-		fmt.Fprintln(w, contents)
-		fmt.Fprintln(w, "\x00")
-		w.Close()
-		session.Close()
-	}()
-
-	// Scp returns non zero exit status even on normal cases,
-	// therefore we need to verify the files are uploaded afterwards
-	session.Run("scp -t " + directory)
-
-	newSession, newErr := client.NewSession()
-	if newErr != nil {
-		return errors.New("Unable to create ssh session: " + err.Error())
-	}
-	defer newSession.Close()
-
-	err = newSession.Run("file " + remotePath)
+	dstFile, err := sftpClient.Create(remotePath)
 	if err != nil {
-		return errors.New("Failed to upload file: " + stderrBuf.String())
+		return errors.New("Unable to open remote path: " + err.Error())
+	}
+	defer dstFile.Close()
+
+	bytes, readError := ioutil.ReadFile(localPath)
+	if readError != nil {
+		return errors.New("Unable to read local file: " + readError.Error())
+	}
+
+	if _, err := dstFile.Write(bytes); err != nil {
+		return errors.New("Unable to write to remote file: " + err.Error())
 	}
 
 	return nil
 }
 
-func (a *SshClient) CopyFileToLocal(remotePath string, localPath string) error {
+func (a *SshClient) CopyRemoteFileToLocal(remotePath string, localPath string) error {
 	client, bastion, connectErr := a.connect()
 	if connectErr != nil {
 		return connectErr
