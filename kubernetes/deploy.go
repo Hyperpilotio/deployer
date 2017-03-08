@@ -183,7 +183,7 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetesCluster(sess *session
 				Value: aws.String(k8sDeployment.DeployedCluster.Deployment.Name),
 			},
 		},
-		TemplateURL:      aws.String("https://s3.amazonaws.com/quickstart-reference/heptio/latest/templates/kubernetes-cluster-with-new-vpc.template"),
+		TemplateURL:      aws.String("https://hyperpilot-k8s.s3.amazonaws.com/kubernetes-cluster-with-new-vpc.template"),
 		TimeoutInMinutes: aws.Int64(30),
 	}
 	glog.Info("Creating kubernetes stack...")
@@ -453,13 +453,17 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
-			if node, err := getNode(family, deployedCluster); err != nil {
+			node, nodeErr := getNode(family, deployedCluster)
+			if nodeErr != nil {
 				return errors.New("Unable to find node: " + err.Error())
-			} else if node != nil {
-				nodeName := strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
-				glog.Infof("Selecting node %s for deployment %s", nodeName, family)
-				nodeSelector["kubernetes.io/hostname"] = nodeName
 			}
+
+			//publicDnsName := *node.Instance.PublicDnsName
+			//nodeName := strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
+			nodeName := *node.Instance.PrivateDnsName
+			glog.Infof("Selecting node %s for deployment %s", nodeName, family)
+			nodeSelector["kubernetes.io/hostname"] = nodeName
+
 			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
 			// Create service for each container that opens a port
@@ -474,6 +478,16 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 					serviceName = serviceName + "-" + container.Name
 				}
 				labels := map[string]string{"app": family}
+				servicePorts := []v1.ServicePort{}
+				for i, port := range container.Ports {
+					newPort := v1.ServicePort{
+						Port:       port.HostPort,
+						TargetPort: intstr.FromInt(int(port.ContainerPort)),
+						Name:       "port" + strconv.Itoa(i),
+					}
+					servicePorts = append(servicePorts, newPort)
+				}
+
 				v1Service := &v1.Service{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      serviceName,
@@ -481,13 +495,8 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 						Namespace: defaultNamespace,
 					},
 					Spec: v1.ServiceSpec{
-						Type: v1.ServiceTypeLoadBalancer,
-						Ports: []v1.ServicePort{
-							v1.ServicePort{
-								Port:       container.Ports[0].HostPort,
-								TargetPort: intstr.FromInt(int(container.Ports[0].ContainerPort)),
-							},
-						},
+						Type:  v1.ServiceTypeClusterIP,
+						Ports: servicePorts,
 					},
 				}
 				_, err = service.Create(v1Service)
