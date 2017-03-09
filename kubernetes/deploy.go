@@ -495,8 +495,9 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 						Namespace: defaultNamespace,
 					},
 					Spec: v1.ServiceSpec{
-						Type:  v1.ServiceTypeClusterIP,
-						Ports: servicePorts,
+						Type:     v1.ServiceTypeClusterIP,
+						Ports:    servicePorts,
+						Selector: labels,
 					},
 				}
 				_, err = service.Create(v1Service)
