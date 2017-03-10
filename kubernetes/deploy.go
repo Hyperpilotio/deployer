@@ -82,7 +82,6 @@ func (k8sDeployment *KubernetesDeployment) populateNodeInfos(ec2Svc *ec2.EC2) er
 				Instance:  instance,
 				PrivateIp: *instance.PrivateIpAddress,
 			}
-			glog.Infof("Adding node info i: %d, info: %v", i, nodeInfo)
 			k8sDeployment.DeployedCluster.NodeInfos[i] = nodeInfo
 			i += 1
 		}
@@ -309,7 +308,7 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		DeployedCluster: deployedCluster,
 	}
 
-	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", "/tmp/delivery_kubeconfig/kubeconfig"); err != nil {
+	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", "/tmp/"+deployment.Name+"_kubeconfig/kubeconfig"); err != nil {
 		return errors.New("Unable to parse kube config: " + err.Error())
 	} else {
 		k8sDeployment.KubeConfig = kubeConfig
@@ -445,15 +444,17 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 
 	deployedCluster := k8sDeployment.DeployedCluster
 
-	tasks := map[string]*apis.KubernetesTask{}
+	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
-		tasks[task.Family] = &task
+		tasks[task.Family] = task
 	}
 
 	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
 		deploy := c.Extensions().Deployments(defaultNamespace)
 		taskCount := map[string]int{}
 		for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
+			glog.Infof("Deploying task %s with mapping %s", mapping.Task, mapping.Id)
+
 			task, ok := tasks[mapping.Task]
 			if !ok {
 				return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
@@ -526,9 +527,10 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				glog.Infof("Created %s internal service", serviceName)
 
 				if !task.Private {
+					publicServiceName := serviceName + "-public"
 					publicService := &v1.Service{
 						ObjectMeta: v1.ObjectMeta{
-							Name:      serviceName + "-public",
+							Name:      publicServiceName,
 							Labels:    labels,
 							Namespace: defaultNamespace,
 						},
@@ -546,9 +548,9 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 					}
 					_, err = service.Create(publicService)
 					if err != nil {
-						return fmt.Errorf("Unable to create service %s: %s", serviceName+"-public", err)
+						return fmt.Errorf("Unable to create service %s: %s", publicServiceName, err)
 					}
-					glog.Infof("Created %s public service", serviceName)
+					glog.Infof("Created %s service", publicServiceName)
 				} else {
 					glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
 				}
