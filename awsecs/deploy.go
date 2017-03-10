@@ -590,19 +590,17 @@ func startTask(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsS
 		ContainerInstances: []*string{&nodeInfo.Arn},
 	}
 
-	glog.Infof("Starting task %v with count %d", startTaskInput, mapping.Count)
-	for i := 0; i < mapping.Count; i++ {
-		startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
-		if err != nil {
-			return fmt.Errorf("Unable to start task %v\nError: %v", mapping.Task, err)
-		}
+	glog.Infof("Starting task %v")
+	startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
+	if err != nil {
+		return fmt.Errorf("Unable to start task %v\nError: %v", mapping.Task, err)
+	}
 
-		if len(startTaskOutput.Failures) > 0 {
-			return fmt.Errorf(
-				"Unable to start task %v\nMessage: %v",
-				mapping.Task,
-				errorMessageFromFailures(startTaskOutput.Failures))
-		}
+	if len(startTaskOutput.Failures) > 0 {
+		return fmt.Errorf(
+			"Unable to start task %v\nMessage: %v",
+			mapping.Task,
+			errorMessageFromFailures(startTaskOutput.Failures))
 	}
 
 	return nil
@@ -610,7 +608,7 @@ func startTask(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsS
 
 func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
 	serviceInput := &ecs.CreateServiceInput{
-		DesiredCount:   aws.Int64(int64(mapping.Count)),
+		DesiredCount:   aws.Int64(int64(1)),
 		ServiceName:    aws.String(mapping.Service()),
 		TaskDefinition: aws.String(mapping.Task),
 		Cluster:        aws.String(deployedCluster.Deployment.Name),
@@ -632,10 +630,6 @@ func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, e
 
 func createServices(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	for _, mapping := range deployedCluster.Deployment.NodeMapping {
-		// If user didn't specify a count (defaults to 0), we at least run one task.
-		if mapping.Count <= 0 {
-			mapping.Count = 1
-		}
 		startService(deployedCluster, &mapping, ecsSvc)
 	}
 

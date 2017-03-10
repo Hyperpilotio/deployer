@@ -284,7 +284,7 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		//k8sClusters.DeleteDeployment(config, deployedCluster)
+		k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
@@ -294,7 +294,7 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	if err := k8sDeployment.deployServices(); err != nil {
-		//k8sClusters.DeleteDeployment(config, deployedCluster)
+		k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -445,21 +445,40 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 
 	deployedCluster := k8sDeployment.DeployedCluster
 
+	tasks := map[string]*apis.KubernetesTask{}
+	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+		tasks[task.Family] = &task
+	}
+
 	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
 		deploy := c.Extensions().Deployments(defaultNamespace)
-		for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+		taskCount := map[string]int{}
+		for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
+			task, ok := tasks[mapping.Task]
+			if !ok {
+				return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
+			}
+
 			deploySpec := task.Deployment
 			family := task.Family
+			node, ok := deployedCluster.NodeInfos[mapping.Id]
+			if !ok {
+				return fmt.Errorf("Unable to find node id %s in cluster", mapping.Id)
+			}
+
+			count, ok := taskCount[family]
+			if !ok {
+				count = 1
+			} else {
+				count += 1
+				//family = family + "-" + strconv.Itoa(count)
+				// Update deploy spec to reflect multiple count of the same task
+
+			}
+			taskCount[family] = count
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
-			node, nodeErr := getNode(family, deployedCluster)
-			if nodeErr != nil {
-				return errors.New("Unable to find node: " + err.Error())
-			}
-
-			//publicDnsName := *node.Instance.PublicDnsName
-			//nodeName := strings.TrimSuffix(*node.Instance.PrivateDnsName, ".ec2.internal")
 			nodeName := *node.Instance.PrivateDnsName
 			glog.Infof("Selecting node %s for deployment %s", nodeName, family)
 			nodeSelector["kubernetes.io/hostname"] = nodeName
@@ -488,7 +507,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 					servicePorts = append(servicePorts, newPort)
 				}
 
-				v1Service := &v1.Service{
+				internalService := &v1.Service{
 					ObjectMeta: v1.ObjectMeta{
 						Name:      serviceName,
 						Labels:    labels,
@@ -500,11 +519,39 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 						Selector: labels,
 					},
 				}
-				_, err = service.Create(v1Service)
+				_, err = service.Create(internalService)
 				if err != nil {
 					return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
 				}
-				glog.Infof("Created %s service", serviceName)
+				glog.Infof("Created %s internal service", serviceName)
+
+				if !task.Private {
+					publicService := &v1.Service{
+						ObjectMeta: v1.ObjectMeta{
+							Name:      serviceName + "-public",
+							Labels:    labels,
+							Namespace: defaultNamespace,
+						},
+						Spec: v1.ServiceSpec{
+							Type: v1.ServiceTypeLoadBalancer,
+							Ports: []v1.ServicePort{
+								v1.ServicePort{
+									Port:       container.Ports[0].HostPort,
+									TargetPort: intstr.FromInt(int(container.Ports[0].ContainerPort)),
+									Name:       "public-port",
+								},
+							},
+							Selector: labels,
+						},
+					}
+					_, err = service.Create(publicService)
+					if err != nil {
+						return fmt.Errorf("Unable to create service %s: %s", serviceName+"-public", err)
+					}
+					glog.Infof("Created %s public service", serviceName)
+				} else {
+					glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
+				}
 			}
 
 			// start deploy deployment
@@ -517,27 +564,6 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 	}
 
 	return nil
-}
-
-func getNode(family string, deployedCluster *awsecs.DeployedCluster) (*awsecs.NodeInfo, error) {
-	id := -1
-	for _, node := range deployedCluster.Deployment.NodeMapping {
-		if node.Task == family {
-			id = node.Id
-			break
-		}
-	}
-
-	if id == -1 {
-		return nil, errors.New("Unable to get node by family:" + family)
-	}
-
-	nodeInfo, ok := deployedCluster.NodeInfos[id]
-	if !ok {
-		return nil, errors.New("Unable to find node in node infos")
-	}
-
-	return nodeInfo, nil
 }
 
 // DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
