@@ -19,3 +19,8 @@ make build
 make dev-test
 ```
 
+# Use 
+cd $GOPATH/src/github.com/hyperpilotio/deployer
+make init 
+go build 
+./deployer -v 1 --config documents/template.config
