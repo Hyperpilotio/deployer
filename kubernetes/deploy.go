@@ -33,6 +33,7 @@ type KubernetesDeployment struct {
 	BastionIp       string
 	MasterIp        string
 	KubeConfigPath  string
+	Endpoints       map[string]string
 	KubeConfig      *rest.Config
 	DeployedCluster *awsecs.DeployedCluster
 }
@@ -297,6 +298,10 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
+	// if err := k8sDeployment.tagEndpoint(); err != nil {
+	// 	return errors.New("Unable to tag deployment service endpoint: " + err.Error())
+	// }
+
 	return nil
 }
 
@@ -453,7 +458,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 		deploy := c.Extensions().Deployments(defaultNamespace)
 		taskCount := map[string]int{}
 		for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
-			glog.Infof("Deploying task %s with mapping %s", mapping.Task, mapping.Id)
+			glog.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
 
 			task, ok := tasks[mapping.Task]
 			if !ok {
@@ -472,9 +477,15 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				count = 1
 			} else {
 				count += 1
-				//family = family + "-" + strconv.Itoa(count)
-				// Update deploy spec to reflect multiple count of the same task
+				family = family + "-" + strconv.Itoa(count)
+				newName := deploySpec.GetObjectMeta().GetName() + "-" + strconv.Itoa(count)
+				newLabels := map[string]string{"app": newName}
 
+				// Update deploy spec to reflect multiple count of the same task
+				deploySpec.GetObjectMeta().SetName(newName)
+				deploySpec.GetObjectMeta().SetLabels(newLabels)
+				deploySpec.Spec.Selector.MatchLabels = newLabels
+				deploySpec.Spec.Template.GetObjectMeta().SetLabels(newLabels)
 			}
 			taskCount[family] = count
 
@@ -562,6 +573,34 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				return fmt.Errorf("could not create deployment: %s", err)
 			}
 			glog.Infof("%s deployment created", family)
+		}
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) tagEndpoint() error {
+	if k8sDeployment.KubeConfig == nil {
+		return errors.New("Unable to find kube config in deployment")
+	}
+
+	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
+		endpoints := map[string]string{}
+		services := c.CoreV1().Services(defaultNamespace)
+		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+			for _, service := range serviceLists.Items {
+				serviceName := service.GetObjectMeta().GetName()
+				if strings.HasSuffix(serviceName, "-public") {
+					if len(service.Status.LoadBalancer.Ingress) > 0 {
+						hostname := service.Status.LoadBalancer.Ingress[0].Hostname
+						port := service.Spec.Ports[0].Port
+						endpoints[serviceName] = hostname + ":" + strconv.FormatInt(int64(port), 10)
+					}
+				}
+			}
+			k8sDeployment.Endpoints = endpoints
+		} else {
+			glog.Warning("Unable to list services for get LoadBalancer host name: " + listError.Error())
 		}
 	}
 
