@@ -298,9 +298,9 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
-	// if err := k8sDeployment.tagEndpoint(); err != nil {
-	// 	return errors.New("Unable to tag deployment service endpoint: " + err.Error())
-	// }
+	if err := k8sDeployment.tagEndpoints(); err != nil {
+		return errors.New("Unable to tag deployment service endpoint: " + err.Error())
+	}
 
 	return nil
 }
@@ -333,6 +333,10 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	if err := k8sDeployment.deployServices(); err != nil {
 		k8sClusters.DeleteDeployment(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
+	}
+
+	if err := k8sDeployment.tagEndpoints(); err != nil {
+		return errors.New("Unable to tag deployment service endpoint: " + err.Error())
 	}
 
 	return nil
@@ -505,7 +509,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 
 				service := c.CoreV1().Services(defaultNamespace)
 				serviceName := family
-				if family != container.Name {
+				if !strings.HasPrefix(family, serviceName) {
 					serviceName = serviceName + "-" + container.Name
 				}
 				labels := map[string]string{"app": family}
@@ -579,14 +583,35 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) tagEndpoint() error {
+func (k8sDeployment *KubernetesDeployment) tagEndpoints() error {
 	if k8sDeployment.KubeConfig == nil {
 		return errors.New("Unable to find kube config in deployment")
 	}
 
 	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
-		endpoints := map[string]string{}
+		// wait LoadBalancer Ingress ready
 		services := c.CoreV1().Services(defaultNamespace)
+		serviceReady := false
+		for !serviceReady {
+			isAllElbDNSNameReady := true
+			if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+				for _, service := range serviceLists.Items {
+					serviceName := service.GetObjectMeta().GetName()
+					if strings.HasSuffix(serviceName, "-public") {
+						if len(service.Status.LoadBalancer.Ingress) == 0 {
+							isAllElbDNSNameReady = false
+							break
+						}
+					}
+				}
+			}
+
+			if isAllElbDNSNameReady {
+				break
+			}
+		}
+
+		endpoints := map[string]string{}
 		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
 			for _, service := range serviceLists.Items {
 				serviceName := service.GetObjectMeta().GetName()
