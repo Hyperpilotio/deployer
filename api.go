@@ -299,7 +299,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 	} else if deployment.KubernetesDeployment != nil {
 		err = server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
-
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
@@ -318,18 +317,21 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	server.DeployedClusters[deployment.Name] = deployedCluster
 
-	endpoints := server.KubernetesClusters.Clusters[deployment.Name].Endpoints
-	if endpoints != nil {
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  endpoints,
-		})
-	} else {
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  "",
-		})
+	if deployment.KubernetesDeployment != nil {
+		endpoints := server.KubernetesClusters.Clusters[deployment.Name].Endpoints
+		if endpoints != nil {
+			c.JSON(http.StatusAccepted, gin.H{
+				"error": false,
+				"data":  endpoints,
+			})
+			return
+		}
 	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "",
+	})
 }
 
 func (server *Server) startTask(c *gin.Context) {
@@ -376,17 +378,18 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		// TODO create a batch job to delete the deployment
-		// TODO Delete deployment depending on k8s or awsecs
-		//awsecs.DeleteDeployment(server.Config, data)
-		server.KubernetesClusters.DeleteDeployment(server.Config, data)
+		if data.Deployment.KubernetesDeployment != nil {
+			server.KubernetesClusters.DeleteDeployment(server.Config, data)
+		} else {
+			awsecs.DeleteDeployment(server.Config, data)
+		}
 
-		// NOTE if deployment failed, keep the data in the server.DeployedClusters map
-		// delete(server.DeployedClusters, c.Param("deployment"))
+		delete(server.DeployedClusters, c.Param("deployment"))
+
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
 			"data":  "",
 		})
-
 	} else {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
