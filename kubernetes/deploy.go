@@ -344,10 +344,15 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	return nil
 }
 
-func deleteSecurityGroup(ec2Svc *ec2.EC2, groupIds []*string) error {
+func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
 	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
-		GroupIds: groupIds,
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("vpc-id"),
+				Values: []*string{vpcID},
+			},
+		},
 	}
 
 	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
@@ -411,24 +416,18 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 
 	// delete loadBalancer
 	glog.Infof("Deleting loadBalancer...")
-	sgIds := []*string{}
 	resp, _ := elbSvc.DescribeLoadBalancers(nil)
 	for _, lbd := range resp.LoadBalancerDescriptions {
 		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
 		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
 			glog.Warningf("Unable to deleting loadBalancer: %s", err.Error())
 		}
-		sgIds = append(sgIds, lbd.SecurityGroups[0])
 	}
 
 	// delete bastion-Host EC2 instance
 	glog.Infof("Deleting bastion-Host EC2 instance...")
-	if err, bastionHostSgIds := deleteBastionHost(ec2Svc); err != nil {
+	if err := deleteBastionHost(ec2Svc); err != nil {
 		glog.Warning("Unable to delete bastion-Host EC2 instance: %s", err.Error())
-	} else {
-		for _, bastionHostSgId := range bastionHostSgIds {
-			sgIds = append(sgIds, bastionHostSgId)
-		}
 	}
 
 	// delete bastion-host stack
@@ -442,7 +441,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	}
 
 	// delete VPC
-	retryTimes := 10
+	retryTimes := 5
 	glog.Infof("Delete VPC...")
 	params := &ec2.DeleteVpcInput{
 		VpcId: aws.String(vpcID),
@@ -456,7 +455,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 			glog.Warningf("Unable to find VPC: %s, retrying %d time", err.Error(), i)
 			break
 		}
-		if err := deleteSecurityGroup(ec2Svc, sgIds); err != nil {
+		if err := deleteSecurityGroup(ec2Svc, aws.String(vpcID)); err != nil {
 			glog.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
 		}
 		if _, err := ec2Svc.DeleteVpc(params); err != nil {
@@ -478,7 +477,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	return nil
 }
 
-func deleteBastionHost(ec2Svc *ec2.EC2) (error, []*string) {
+func deleteBastionHost(ec2Svc *ec2.EC2) error {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -498,15 +497,13 @@ func deleteBastionHost(ec2Svc *ec2.EC2) (error, []*string) {
 
 	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
 	if describeErr != nil {
-		return errors.New("Unable to describe ec2 instances: " + describeErr.Error()), nil
+		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
 	}
 
 	var instanceIds []*string
-	var securityGroupsIds []*string
 	for _, reservation := range describeInstancesOutput.Reservations {
 		for _, instance := range reservation.Instances {
 			instanceIds = append(instanceIds, instance.InstanceId)
-			securityGroupsIds = append(securityGroupsIds, instance.SecurityGroups[0].GroupId)
 		}
 	}
 
@@ -515,7 +512,7 @@ func deleteBastionHost(ec2Svc *ec2.EC2) (error, []*string) {
 	}
 
 	if _, err := ec2Svc.TerminateInstances(params); err != nil {
-		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error()), nil
+		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error())
 	}
 
 	terminatedInstanceParams := &ec2.DescribeInstancesInput{
@@ -523,9 +520,9 @@ func deleteBastionHost(ec2Svc *ec2.EC2) (error, []*string) {
 	}
 
 	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
-		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error()), nil
+		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
 	}
-	return nil, securityGroupsIds
+	return nil
 }
 
 func deleteK8S(kubeConfig *rest.Config) error {
