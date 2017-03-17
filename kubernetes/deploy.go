@@ -361,6 +361,9 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
 	}
 
 	for _, group := range resp.SecurityGroups {
+		if aws.StringValue(group.GroupName) == "default" {
+			continue
+		}
 		params := &ec2.DeleteSecurityGroupInput{
 			GroupId: group.GroupId,
 		}
@@ -440,26 +443,22 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 		glog.Warning("Unable to delete stack: " + err.Error())
 	}
 
-	// delete VPC
+	// delete securityGroup
 	retryTimes := 5
-	glog.Infof("Delete VPC...")
-	params := &ec2.DeleteVpcInput{
-		VpcId: aws.String(vpcID),
-	}
-
+	glog.Infof("Delete securityGroup...")
 	for i := 1; i <= retryTimes; i++ {
-		describeVpcsInput := &ec2.DescribeVpcsInput{
-			VpcIds: []*string{aws.String(vpcID)},
-		}
-		if _, err := ec2Svc.DescribeVpcs(describeVpcsInput); err != nil {
-			glog.Warningf("Unable to find VPC: %s, retrying %d time", err.Error(), i)
-			break
-		}
+		// describeVpcsInput := &ec2.DescribeVpcsInput{
+		// 	VpcIds: []*string{aws.String(vpcID)},
+		// }
+		// if _, err := ec2Svc.DescribeVpcs(describeVpcsInput); err != nil {
+		// 	glog.Warningf("Unable to find VPC: %s, retrying %d time", err.Error(), i)
+		// 	break
+		// }
 		if err := deleteSecurityGroup(ec2Svc, aws.String(vpcID)); err != nil {
 			glog.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
-		}
-		if _, err := ec2Svc.DeleteVpc(params); err != nil {
-			glog.Warningf("Unable to delete VPC: %s, retrying %d time", err.Error(), i)
+		} else if err == nil {
+			glog.Infof("Delete securityGroup ok...")
+			break
 		}
 		time.Sleep(time.Duration(60) * time.Second)
 	}
