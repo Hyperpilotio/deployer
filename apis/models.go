@@ -40,8 +40,8 @@ type KubernetesTask struct {
 	Deployment v1beta1.Deployment `form:"deployment" json:"deployment" binding:"required"`
 	Family     string             `form:"family" json:"family" binding:"required"`
 
-	// Private marks if a deployment needs to have a public endpoint
-	Private bool `form:"private" json:"private"`
+	// Type of each port opened by a container: 0 - private, 1 - public
+	PortTypes []int `form:"portTypes" json:"portTypes"`
 }
 
 // KubernetesDeployment storing the information of a Kubernetes deployment
