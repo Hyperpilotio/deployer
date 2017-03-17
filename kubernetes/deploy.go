@@ -344,6 +344,34 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	return nil
 }
 
+func deleteSecurityGroup(ec2Svc *ec2.EC2, groupIds []*string) error {
+	errBool := false
+	describeParams := &ec2.DescribeSecurityGroupsInput{
+		GroupIds: groupIds,
+	}
+
+	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
+	}
+
+	for _, group := range resp.SecurityGroups {
+		params := &ec2.DeleteSecurityGroupInput{
+			GroupId: group.GroupId,
+		}
+		if _, err := ec2Svc.DeleteSecurityGroup(params); err != nil {
+			glog.Warningf("Unable to delete security group: %s\n", err.Error())
+			errBool = true
+		}
+	}
+
+	if errBool {
+		return errors.New("Unable to delete all the relative security groups")
+	}
+
+	return nil
+}
+
 func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string, k8sDeployment *KubernetesDeployment) error {
 	// find k8s-node stack name
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
@@ -361,13 +389,14 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 		}
 	}
 
-	// delete k8s-node stack
+	// delete k8s-master/k8s-node stack
+	glog.Infof("Deleting k8s-master/k8s-node stack...")
 	deleteStackInput := &cloudformation.DeleteStackInput{
 		StackName: aws.String(k8sNodeStackName),
 	}
 
 	if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
-		glog.Warning("Unable to delete stack: " + err.Error())
+		glog.Warningf("Unable to delete stack: %s", err.Error())
 	}
 
 	describeStacksInput := &cloudformation.DescribeStacksInput{
@@ -375,15 +404,35 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	}
 
 	if err := cfSvc.WaitUntilStackDeleteComplete(describeStacksInput); err != nil {
-		glog.Warning("Unable to wait until stack is deleted: " + err.Error())
+		glog.Warningf("Unable to wait until stack is deleted: %s", err.Error())
+	} else if err == nil {
+		glog.Infof("Delete %s stack ok...", k8sNodeStackName)
 	}
 
-	if err := deleteBastionHost(ec2Svc); err != nil {
-		glog.Warning("Unable to delete bastion-Host EC2 instance: " + err.Error())
+	// delete loadBalancer
+	glog.Infof("Deleting loadBalancer...")
+	sgIds := []*string{}
+	resp, _ := elbSvc.DescribeLoadBalancers(nil)
+	for _, lbd := range resp.LoadBalancerDescriptions {
+		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
+		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
+			glog.Warningf("Unable to deleting loadBalancer: %s", err.Error())
+		}
+		sgIds = append(sgIds, lbd.SecurityGroups[0])
+	}
+
+	// delete bastion-Host EC2 instance
+	glog.Infof("Deleting bastion-Host EC2 instance...")
+	if err, bastionHostSgIds := deleteBastionHost(ec2Svc); err != nil {
+		glog.Warning("Unable to delete bastion-Host EC2 instance: %s", err.Error())
+	} else {
+		for _, bastionHostSgId := range bastionHostSgIds {
+			sgIds = append(sgIds, bastionHostSgId)
+		}
 	}
 
 	// delete bastion-host stack
-	glog.Infof("delete bastion-host stack...")
+	glog.Infof("Deleting bastion-host stack...")
 	deleteBastionHostStackInput := &cloudformation.DeleteStackInput{
 		StackName: aws.String(stackName),
 	}
@@ -392,30 +441,28 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 		glog.Warning("Unable to delete stack: " + err.Error())
 	}
 
-	time.Sleep(time.Duration(60) * time.Second)
-
-	// delete loadBalancer
-	glog.Infof("Deleting LoadBalancer")
-	resp, _ := elbSvc.DescribeLoadBalancers(nil)
-	for _, lbd := range resp.LoadBalancerDescriptions {
-		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
-		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
-			glog.Warningf("Unable to deleting loadBalancer: %s", err.Error())
-		}
-	}
-
-	// TODO WaitUntilNatGatewayAvailable deleted
-	time.Sleep(time.Duration(120) * time.Second)
-
-	// TODO must delete VPC dependencies
 	// delete VPC
-	glog.Infof("delete VPC..")
+	retryTimes := 10
+	glog.Infof("Delete VPC...")
 	params := &ec2.DeleteVpcInput{
 		VpcId: aws.String(vpcID),
 	}
 
-	if _, err := ec2Svc.DeleteVpc(params); err != nil {
-		glog.Infof("Unable to delete VPC: " + err.Error())
+	for i := 1; i <= retryTimes; i++ {
+		describeVpcsInput := &ec2.DescribeVpcsInput{
+			VpcIds: []*string{aws.String(vpcID)},
+		}
+		if _, err := ec2Svc.DescribeVpcs(describeVpcsInput); err != nil {
+			glog.Warningf("Unable to find VPC: %s, retrying %d time", err.Error(), i)
+			break
+		}
+		if err := deleteSecurityGroup(ec2Svc, sgIds); err != nil {
+			glog.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
+		}
+		if _, err := ec2Svc.DeleteVpc(params); err != nil {
+			glog.Warningf("Unable to delete VPC: %s, retrying %d time", err.Error(), i)
+		}
+		time.Sleep(time.Duration(60) * time.Second)
 	}
 
 	describeBastionHostStacksInput := &cloudformation.DescribeStacksInput{
@@ -423,14 +470,15 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	}
 
 	if err := cfSvc.WaitUntilStackDeleteComplete(describeBastionHostStacksInput); err != nil {
-		glog.Warningf("Unable to wait until stack is deleted: " + err.Error())
+		glog.Warningf("Unable to wait until stack is deleted: %s", err.Error())
+	} else if err == nil {
+		glog.Infof("Delete %s stack ok...", stackName)
 	}
-	glog.Infof("delete tech-demo-stack ok")
 
 	return nil
 }
 
-func deleteBastionHost(ec2Svc *ec2.EC2) error {
+func deleteBastionHost(ec2Svc *ec2.EC2) (error, []*string) {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -450,14 +498,15 @@ func deleteBastionHost(ec2Svc *ec2.EC2) error {
 
 	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
 	if describeErr != nil {
-		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
+		return errors.New("Unable to describe ec2 instances: " + describeErr.Error()), nil
 	}
-	fmt.Println("describeInstancesOutput:", describeInstancesOutput)
 
 	var instanceIds []*string
+	var securityGroupsIds []*string
 	for _, reservation := range describeInstancesOutput.Reservations {
 		for _, instance := range reservation.Instances {
 			instanceIds = append(instanceIds, instance.InstanceId)
+			securityGroupsIds = append(securityGroupsIds, instance.SecurityGroups[0].GroupId)
 		}
 	}
 
@@ -466,7 +515,7 @@ func deleteBastionHost(ec2Svc *ec2.EC2) error {
 	}
 
 	if _, err := ec2Svc.TerminateInstances(params); err != nil {
-		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error())
+		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error()), nil
 	}
 
 	terminatedInstanceParams := &ec2.DescribeInstancesInput{
@@ -474,9 +523,9 @@ func deleteBastionHost(ec2Svc *ec2.EC2) error {
 	}
 
 	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
-		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
+		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error()), nil
 	}
-	return nil
+	return nil, securityGroupsIds
 }
 
 func deleteK8S(kubeConfig *rest.Config) error {
@@ -547,7 +596,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	}
 
 	// Deleting kubernetes deployment
-	glog.Infof("Deleting kubernetes deployment")
+	glog.Infof("Deleting kubernetes deployment...")
 	if err := deleteK8S(k8sDeployment.KubeConfig); err != nil {
 		glog.Warning("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
@@ -562,6 +611,19 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	ec2Svc := ec2.New(sess)
 	cfSvc := cloudformation.New(sess)
 
+	// deregister loadBalancer
+	glog.Infof("Deregister loadBalancer...")
+	resp, _ := elbSvc.DescribeLoadBalancers(nil)
+	for _, lbd := range resp.LoadBalancerDescriptions {
+		deregisterInstancesFromLoadBalancerInput := &elb.DeregisterInstancesFromLoadBalancerInput{
+			Instances:        lbd.Instances,
+			LoadBalancerName: lbd.LoadBalancerName,
+		}
+		if _, err := elbSvc.DeregisterInstancesFromLoadBalancer(deregisterInstancesFromLoadBalancerInput); err != nil {
+			glog.Warningf("Unable to deregister instances from loadBalancer: %s:", err.Error())
+		}
+	}
+
 	// delete cloudformation Stack
 	cfStackName := deployedCluster.StackName()
 	glog.Infof("Deleting cloudformation Stack: %s", cfStackName)
@@ -569,6 +631,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 		glog.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
 	}
 
+	glog.Infof("Deleting KeyPair...")
 	if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		glog.Warning("Unable to delete key pair: " + err.Error())
 	}
