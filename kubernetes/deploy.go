@@ -537,33 +537,38 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				}
 				glog.Infof("Created %s internal service", serviceName)
 
-				if !task.Private {
-					publicServiceName := serviceName + "-public"
-					publicService := &v1.Service{
-						ObjectMeta: v1.ObjectMeta{
-							Name:      publicServiceName,
-							Labels:    labels,
-							Namespace: defaultNamespace,
-						},
-						Spec: v1.ServiceSpec{
-							Type: v1.ServiceTypeLoadBalancer,
-							Ports: []v1.ServicePort{
-								v1.ServicePort{
-									Port:       container.Ports[0].HostPort,
-									TargetPort: intstr.FromInt(int(container.Ports[0].ContainerPort)),
-									Name:       "public-port",
+				// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
+				if task.PortTypes != nil && len(task.PortTypes) > 0 {
+					for i, portType  := range task.PortTypes {
+						if portType == 1 { // public port
+							publicServiceName := serviceName + "-public" + servicePorts[i].Name
+							publicService := &v1.Service{
+								ObjectMeta: v1.ObjectMeta{
+									Name:      publicServiceName,
+									Labels:    labels,
+									Namespace: defaultNamespace,
 								},
-							},
-							Selector: labels,
-						},
+								Spec: v1.ServiceSpec{
+									Type: v1.ServiceTypeLoadBalancer,
+									Ports: []v1.ServicePort{
+										v1.ServicePort{
+											Port:       servicePorts[i].Port,
+											TargetPort: servicePorts[i].TargetPort,
+											Name:       "public-" + servicePorts[i].Name,
+										},
+									},
+									Selector: labels,
+								},
+							}
+							_, err = service.Create(publicService)
+							if err != nil {
+								return fmt.Errorf("Unable to create public service %s: %s", publicServiceName, err)
+							}
+							glog.Infof("Created a public service %s with port %d", publicServiceName, servicePorts[i].Port)
+						} else { // private port
+							glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
+						}
 					}
-					_, err = service.Create(publicService)
-					if err != nil {
-						return fmt.Errorf("Unable to create service %s: %s", publicServiceName, err)
-					}
-					glog.Infof("Created %s service", publicServiceName)
-				} else {
-					glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
 				}
 			}
 
