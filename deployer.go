@@ -35,5 +35,4 @@ func main() {
 
 	err := Run(*configPath)
 	glog.Errorln(err)
-
 }
