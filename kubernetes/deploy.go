@@ -447,13 +447,6 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	retryTimes := 5
 	glog.Infof("Delete securityGroup...")
 	for i := 1; i <= retryTimes; i++ {
-		// describeVpcsInput := &ec2.DescribeVpcsInput{
-		// 	VpcIds: []*string{aws.String(vpcID)},
-		// }
-		// if _, err := ec2Svc.DescribeVpcs(describeVpcsInput); err != nil {
-		// 	glog.Warningf("Unable to find VPC: %s, retrying %d time", err.Error(), i)
-		// 	break
-		// }
 		if err := deleteSecurityGroup(ec2Svc, aws.String(vpcID)); err != nil {
 			glog.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
 		} else if err == nil {
