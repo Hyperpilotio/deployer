@@ -318,11 +318,18 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	server.DeployedClusters[deployment.Name] = deployedCluster
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"error": false,
-		"data":  "",
-	})
-
+	endpoints := server.KubernetesClusters.Clusters[deployment.Name].Endpoints
+	if endpoints != nil {
+		c.JSON(http.StatusAccepted, gin.H{
+			"error": false,
+			"data":  endpoints,
+		})
+	} else {
+		c.JSON(http.StatusAccepted, gin.H{
+			"error": false,
+			"data":  "",
+		})
+	}
 }
 
 func (server *Server) startTask(c *gin.Context) {
