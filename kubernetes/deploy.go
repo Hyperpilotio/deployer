@@ -380,6 +380,51 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
 	return nil
 }
 
+func waitUntilInternetGatewayDelete(ec2Svc *ec2.EC2, deploymentName string, timeout time.Duration) error {
+	c := make(chan bool, 1)
+	quit := make(chan bool)
+	go func() {
+		for {
+			select {
+			case <-quit:
+				return
+			default:
+				params := &ec2.DescribeTagsInput{
+					Filters: []*ec2.Filter{
+						{
+							Name: aws.String("resource-type"),
+							Values: []*string{
+								aws.String("internet-gateway"),
+							},
+						},
+						{
+							Name: aws.String("tag:deployment"),
+							Values: []*string{
+								aws.String(deploymentName),
+							},
+						},
+					},
+				}
+
+				resp, _ := ec2Svc.DescribeTags(params)
+				if resp.Tags == nil {
+					c <- true
+				}
+				time.Sleep(time.Second * 10)
+			}
+		}
+	}()
+
+	select {
+	case <-c:
+		glog.Info("InternetGateway is Delete")
+		return nil
+	case <-time.After(timeout):
+		quit <- true
+		return errors.New("Timed out waiting for InternetGateway to be deleted")
+	}
+}
+
 func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string, k8sDeployment *KubernetesDeployment) error {
 	// find k8s-node stack name
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
@@ -430,7 +475,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	// delete bastion-Host EC2 instance
 	glog.Infof("Deleting bastion-Host EC2 instance...")
 	if err := deleteBastionHost(ec2Svc); err != nil {
-		glog.Warning("Unable to delete bastion-Host EC2 instance: %s", err.Error())
+		glog.Warningf("Unable to delete bastion-Host EC2 instance: %s", err.Error())
 	}
 
 	// delete bastion-host stack
@@ -440,7 +485,11 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	}
 
 	if _, err := cfSvc.DeleteStack(deleteBastionHostStackInput); err != nil {
-		glog.Warning("Unable to delete stack: " + err.Error())
+		glog.Warningf("Unable to delete stack: %s", err.Error())
+	}
+
+	if err := waitUntilInternetGatewayDelete(ec2Svc, strings.TrimSuffix(stackName, "-stack"), time.Duration(3)*time.Minute); err != nil {
+		glog.Warningf("Unable to wait for internetGateway delete: %s" + err.Error())
 	}
 
 	// delete securityGroup
@@ -453,7 +502,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 			glog.Infof("Delete securityGroup ok...")
 			break
 		}
-		time.Sleep(time.Duration(60) * time.Second)
+		time.Sleep(time.Duration(30) * time.Second)
 	}
 
 	describeBastionHostStacksInput := &cloudformation.DescribeStacksInput{
@@ -587,7 +636,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	// Deleting kubernetes deployment
 	glog.Infof("Deleting kubernetes deployment...")
 	if err := deleteK8S(k8sDeployment.KubeConfig); err != nil {
-		glog.Warning("Unable to deleting kubernetes deployment: %s", err.Error())
+		glog.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
 	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
@@ -632,6 +681,24 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
 	//TODO: Tag kube nodes with node mapping ids, and then remember the mapping
 	// in a in-memory structure.
 	// We should do this so we know consistently which tasks are running on which nodes.
+	nodeInfos := map[string]int{}
+	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
+		privateDnsName := k8sDeployment.DeployedCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
+		nodeInfos[aws.StringValue(privateDnsName)] = mapping.Id
+	}
+
+	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
+		for nodeName, id := range nodeInfos {
+			if node, err := c.CoreV1().Nodes().Get(nodeName); err == nil {
+				node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
+				c.Core().Nodes().Update(node)
+				glog.Infof("Add label hyperpilot/node-id:%s to kubernets node %s...", strconv.Itoa(id), nodeName)
+			} else if err != nil {
+				glog.Warningf("Unable to get kubernets node by name %s: %s", nodeName, err.Error())
+			}
+		}
+	}
+
 	return nil
 }
 
