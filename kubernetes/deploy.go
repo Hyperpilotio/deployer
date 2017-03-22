@@ -691,7 +691,7 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
 		for nodeName, id := range nodeInfos {
 			if node, err := c.CoreV1().Nodes().Get(nodeName); err == nil {
 				node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
-				c.Core().Nodes().Update(node)
+				c.CoreV1().Nodes().Update(node)
 				glog.Infof("Add label hyperpilot/node-id:%s to kubernets node %s...", strconv.Itoa(id), nodeName)
 			} else if err != nil {
 				glog.Warningf("Unable to get kubernets node by name %s: %s", nodeName, err.Error())
