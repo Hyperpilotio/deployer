@@ -380,7 +380,7 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
 	return nil
 }
 
-func waitUntilInternetGatewayDelete(ec2Svc *ec2.EC2, deploymentName string, timeout time.Duration) error {
+func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string, timeout time.Duration) error {
 	c := make(chan bool, 1)
 	quit := make(chan bool)
 	go func() {
@@ -417,7 +417,7 @@ func waitUntilInternetGatewayDelete(ec2Svc *ec2.EC2, deploymentName string, time
 
 	select {
 	case <-c:
-		glog.Info("InternetGateway is Delete")
+		glog.Info("InternetGateway is deleted")
 		return nil
 	case <-time.After(timeout):
 		quit <- true
@@ -488,8 +488,8 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 		glog.Warningf("Unable to delete stack: %s", err.Error())
 	}
 
-	if err := waitUntilInternetGatewayDelete(ec2Svc, strings.TrimSuffix(stackName, "-stack"), time.Duration(3)*time.Minute); err != nil {
-		glog.Warningf("Unable to wait for internetGateway delete: %s" + err.Error())
+	if err := waitUntilInternetGatewayDeleted(ec2Svc, strings.TrimSuffix(stackName, "-stack"), time.Duration(3)*time.Minute); err != nil {
+		glog.Warningf("Unable to wait for internetGateway to be deleted: %s", err.Error())
 	}
 
 	// delete securityGroup
@@ -678,9 +678,6 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 }
 
 func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
-	//TODO: Tag kube nodes with node mapping ids, and then remember the mapping
-	// in a in-memory structure.
-	// We should do this so we know consistently which tasks are running on which nodes.
 	nodeInfos := map[string]int{}
 	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
 		privateDnsName := k8sDeployment.DeployedCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
@@ -692,12 +689,14 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
 			if node, err := c.CoreV1().Nodes().Get(nodeName); err == nil {
 				node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
 				if _, err := c.CoreV1().Nodes().Update(node); err == nil {
-					glog.Infof("Add label hyperpilot/node-id:%s to kubernets node %s...", strconv.Itoa(id), nodeName)
+					glog.V(1).Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
 				}
-			} else if err != nil {
-				glog.Warningf("Unable to get kubernets node by name %s: %s", nodeName, err.Error())
+			} else {
+				return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
 			}
 		}
+	} else {
+		return fmt.Errorf("Unable to connect to Kubernetes master for tagging nodes: %s", err.Error())
 	}
 
 	return nil
