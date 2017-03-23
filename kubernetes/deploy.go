@@ -732,6 +732,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				return fmt.Errorf("Unable to find node id %s in cluster", mapping.Id)
 			}
 
+			originalFamily := family
 			count, ok := taskCount[family]
 			if !ok {
 				count = 1
@@ -747,7 +748,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 				deploySpec.Spec.Selector.MatchLabels = newLabels
 				deploySpec.Spec.Template.GetObjectMeta().SetLabels(newLabels)
 			}
-			taskCount[family] = count
+			taskCount[originalFamily] = count
 
 			// Assigning Pods to Nodes
 			nodeSelector := map[string]string{}
