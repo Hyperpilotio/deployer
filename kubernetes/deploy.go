@@ -934,7 +934,7 @@ func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.
 	case <-c:
 		glog.Info("All public endpoints recorded.")
 		k8sDeployment.Endpoints = endpoints
-	case <-time.After(time.Duration(15) * time.Second):
+	case <-time.After(time.Duration(2) * time.Minute):
 		quit <- true
 		glog.Warning("Timed out waiting for AWS ELB to be ready.")
 	}
