@@ -46,7 +46,8 @@ type KubernetesTask struct {
 
 // KubernetesDeployment storing the information of a Kubernetes deployment
 type KubernetesDeployment struct {
-	Kubernetes []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+	Kubernetes          []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+	SkipDeleteOnFailure bool             `form:"skipdDeleteOnFailure" json:"skipDeleteOnFailure"`
 }
 
 type Deployment struct {

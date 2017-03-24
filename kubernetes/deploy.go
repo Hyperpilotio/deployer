@@ -29,8 +29,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-const defaultNamespace string = "default"
-
 type KubernetesDeployment struct {
 	BastionIp       string
 	MasterIp        string
@@ -43,6 +41,8 @@ type KubernetesDeployment struct {
 type KubernetesClusters struct {
 	Clusters map[string]*KubernetesDeployment
 }
+
+var publicPortType = 1
 
 func NewKubernetesClusters() *KubernetesClusters {
 	return &KubernetesClusters{
@@ -286,23 +286,26 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sClusters.DeleteDeployment(config, deployedCluster)
+		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
-	if err := k8sDeployment.tagKubeNodes(); err != nil {
-		//k8sClusters.DeleteDeployment(config, deployedCluster)
+	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	if err := k8sDeployment.tagKubeNodes(k8sClient); err != nil {
+		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sDeployment.deployServices(); err != nil {
-		k8sClusters.DeleteDeployment(config, deployedCluster)
+	if err := k8sDeployment.deployServices(k8sClient); err != nil {
+		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
-	if err := k8sDeployment.tagEndpoints(); err != nil {
-		return errors.New("Unable to tag deployment service endpoint: " + err.Error())
-	}
+	k8sDeployment.recordPublicEndpoints(k8sClient)
 
 	return nil
 }
@@ -332,14 +335,17 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
-	if err := k8sDeployment.deployServices(); err != nil {
-		k8sClusters.DeleteDeployment(config, deployedCluster)
+	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	if err := k8sDeployment.deployServices(k8sClient); err != nil {
+		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
-	if err := k8sDeployment.tagEndpoints(); err != nil {
-		return errors.New("Unable to tag deployment service endpoint: " + err.Error())
-	}
+	k8sDeployment.recordPublicEndpoints(k8sClient)
 
 	return nil
 }
@@ -566,63 +572,53 @@ func deleteBastionHost(ec2Svc *ec2.EC2) error {
 	return nil
 }
 
-func deleteK8S(kubeConfig *rest.Config) error {
-	if kubeConfig != nil {
-		glog.Info("Found kube config, deleting kubernetes objects")
-		if c, err := k8s.NewForConfig(kubeConfig); err == nil {
-			deploys := c.Extensions().Deployments(defaultNamespace)
-			if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
-				for _, deployment := range deployLists.Items {
-					deploymentName := deployment.GetObjectMeta().GetName()
-					if err := deploys.Delete(deploymentName, &v1.DeleteOptions{}); err != nil {
-						return fmt.Errorf("Unable to delete deployment %s: %s", deploymentName, err.Error())
-					}
-				}
-			} else {
-				return fmt.Errorf("Unable to list deployments for deletion: " + listError.Error())
-			}
+func deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
+	if kubeConfig == nil {
+		return errors.New("Empty kubeconfig passed, skipping to delete k8s objects")
+	}
 
-			replicaSets := c.Extensions().ReplicaSets(defaultNamespace)
-			if replicaSetLists, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
-				for _, replicaSet := range replicaSetLists.Items {
-					replicaName := replicaSet.GetObjectMeta().GetName()
-					if err := replicaSets.Delete(replicaName, &v1.DeleteOptions{}); err != nil {
-						return fmt.Errorf("Unable to delete replica set %s: %s", replicaName, err.Error())
-					}
-				}
-			} else {
-				return fmt.Errorf("Unable to list replica sets for deletion: " + listError.Error())
-			}
+	glog.Info("Found kube config, deleting kubernetes objects")
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
 
-			pods := c.CoreV1().Pods(defaultNamespace)
-			if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
-				for _, pod := range podLists.Items {
-					podName := pod.GetObjectMeta().GetName()
-					if err := pods.Delete(podName, &v1.DeleteOptions{}); err != nil {
-						glog.Warningf("Unable to delete pod %s: %s", podName, err.Error())
-					}
+	for _, namespace := range namespaces {
+		deploys := k8sClient.Extensions().Deployments(namespace)
+		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
+			for _, deployment := range deployLists.Items {
+				deploymentName := deployment.GetObjectMeta().GetName()
+				if err := deploys.Delete(deploymentName, &v1.DeleteOptions{}); err != nil {
+					glog.Errorf("Unable to delete deployment %s: %s", deploymentName, err.Error())
 				}
-			} else {
-				glog.Warning("Unable to list pods for deletion: " + listError.Error())
-			}
-
-			services := c.CoreV1().Services(defaultNamespace)
-			if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
-				for _, service := range serviceLists.Items {
-					serviceName := service.GetObjectMeta().GetName()
-					if err := services.Delete(serviceName, &v1.DeleteOptions{}); err != nil {
-						glog.Warningf("Unable to delete service %s: %s", serviceName, err.Error())
-					}
-				}
-			} else {
-				glog.Warningf("Unable to list services for deletion: " + listError.Error())
 			}
 		} else {
-			glog.Warningf("Unable to connect to kubernetes, skipping delete kubernetes objects")
+			return fmt.Errorf("Unable to list deployments in namespace '%s' for deletion: ", namespace, listError.Error())
+		}
+
+		services := k8sClient.CoreV1().Services(namespace)
+		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+			for _, service := range serviceLists.Items {
+				serviceName := service.GetObjectMeta().GetName()
+				if err := services.Delete(serviceName, &v1.DeleteOptions{}); err != nil {
+					glog.Warningf("Unable to delete service %s: %s", serviceName, err.Error())
+				}
+			}
+		} else {
+			glog.Warningf("Unable to list services in namespace '%s' for deletion: %s", namespace, listError.Error())
 		}
 	}
 
 	return nil
+}
+
+func (k8sClusters *KubernetesClusters) deleteDeploymentOnFailure(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
+	if deployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
+		glog.Warning("Skipping delete deployment on failure")
+		return
+	}
+
+	k8sClusters.DeleteDeployment(config, deployedCluster)
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
@@ -635,7 +631,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 
 	// Deleting kubernetes deployment
 	glog.Infof("Deleting kubernetes deployment...")
-	if err := deleteK8S(k8sDeployment.KubeConfig); err != nil {
+	if err := deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
 		glog.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
@@ -646,11 +642,9 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	}
 
 	elbSvc := elb.New(sess)
-	ec2Svc := ec2.New(sess)
-	cfSvc := cloudformation.New(sess)
 
-	// deregister loadBalancer
-	glog.Infof("Deregister loadBalancer...")
+	// deregister load Balancer
+	glog.Infof("Deregistering load balancers...")
 	resp, _ := elbSvc.DescribeLoadBalancers(nil)
 	for _, lbd := range resp.LoadBalancerDescriptions {
 		deregisterInstancesFromLoadBalancerInput := &elb.DeregisterInstancesFromLoadBalancerInput{
@@ -658,10 +652,12 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 			LoadBalancerName: lbd.LoadBalancerName,
 		}
 		if _, err := elbSvc.DeregisterInstancesFromLoadBalancer(deregisterInstancesFromLoadBalancerInput); err != nil {
-			glog.Warningf("Unable to deregister instances from loadBalancer: %s:", err.Error())
+			glog.Warningf("Unable to deregister instances from load balancer: %s:", err.Error())
 		}
 	}
 
+	cfSvc := cloudformation.New(sess)
+	ec2Svc := ec2.New(sess)
 	// delete cloudformation Stack
 	cfStackName := deployedCluster.StackName()
 	glog.Infof("Deleting cloudformation Stack: %s", cfStackName)
@@ -677,32 +673,49 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
 }
 
-func (k8sDeployment *KubernetesDeployment) tagKubeNodes() error {
+func (k8sDeployment *KubernetesDeployment) getAllDeployedNamespaces() []string {
+	// Find all namespaces we deployed to
+	allNamespaces := []string{}
+	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+		newNamespace := task.Deployment.ObjectMeta.Namespace
+		exists := false
+		for _, namespace := range allNamespaces {
+			if namespace == newNamespace {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			allNamespaces = append(allNamespaces, newNamespace)
+		}
+	}
+
+	return allNamespaces
+}
+
+func (k8sDeployment *KubernetesDeployment) tagKubeNodes(k8sClient *k8s.Clientset) error {
 	nodeInfos := map[string]int{}
 	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
 		privateDnsName := k8sDeployment.DeployedCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
 		nodeInfos[aws.StringValue(privateDnsName)] = mapping.Id
 	}
 
-	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
-		for nodeName, id := range nodeInfos {
-			if node, err := c.CoreV1().Nodes().Get(nodeName); err == nil {
-				node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
-				if _, err := c.CoreV1().Nodes().Update(node); err == nil {
-					glog.V(1).Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
-				}
-			} else {
-				return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
+	for nodeName, id := range nodeInfos {
+		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName); err == nil {
+			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
+			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
+				glog.V(1).Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
 			}
+		} else {
+			return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
 		}
-	} else {
-		return fmt.Errorf("Unable to connect to Kubernetes master for tagging nodes: %s", err.Error())
 	}
 
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployServices() error {
+func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clientset) error {
 	if k8sDeployment.KubeConfig == nil {
 		return errors.New("Unable to find kube config in deployment")
 	}
@@ -714,199 +727,217 @@ func (k8sDeployment *KubernetesDeployment) deployServices() error {
 		tasks[task.Family] = task
 	}
 
-	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
-		deploy := c.Extensions().Deployments(defaultNamespace)
-		taskCount := map[string]int{}
-		for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
-			glog.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
+	k8sNamespaces := k8sClient.CoreV1().Namespaces()
+	existingNamespaces, err := k8sNamespaces.List(v1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("Unable to get existing namespaces: " + err.Error())
+	}
+	namespaces := map[string]bool{}
+	for _, existingNamespace := range existingNamespaces.Items {
+		namespaces[existingNamespace.Name] = true
+	}
 
-			task, ok := tasks[mapping.Task]
-			if !ok {
-				return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
-			}
+	taskCount := map[string]int{}
+	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
+		glog.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
 
-			deploySpec := task.Deployment
-			family := task.Family
-			node, ok := deployedCluster.NodeInfos[mapping.Id]
-			if !ok {
-				return fmt.Errorf("Unable to find node id %s in cluster", mapping.Id)
-			}
-
-			originalFamily := family
-			count, ok := taskCount[family]
-			if !ok {
-				count = 1
-			} else {
-				count += 1
-				family = family + "-" + strconv.Itoa(count)
-				newName := deploySpec.GetObjectMeta().GetName() + "-" + strconv.Itoa(count)
-				newLabels := map[string]string{"app": newName}
-
-				// Update deploy spec to reflect multiple count of the same task
-				deploySpec.GetObjectMeta().SetName(newName)
-				deploySpec.GetObjectMeta().SetLabels(newLabels)
-				deploySpec.Spec.Selector.MatchLabels = newLabels
-				deploySpec.Spec.Template.GetObjectMeta().SetLabels(newLabels)
-			}
-			taskCount[originalFamily] = count
-
-			// Assigning Pods to Nodes
-			nodeSelector := map[string]string{}
-			nodeName := *node.Instance.PrivateDnsName
-			glog.Infof("Selecting node %s for deployment %s", nodeName, family)
-			nodeSelector["kubernetes.io/hostname"] = nodeName
-
-			deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
-
-			// Create service for each container that opens a port
-			for _, container := range deploySpec.Spec.Template.Spec.Containers {
-				if len(container.Ports) == 0 {
-					continue
-				}
-
-				service := c.CoreV1().Services(defaultNamespace)
-				serviceName := family
-				if !strings.HasPrefix(family, serviceName) {
-					serviceName = serviceName + "-" + container.Name
-				}
-				labels := map[string]string{"app": family}
-				servicePorts := []v1.ServicePort{}
-				for i, port := range container.Ports {
-					newPort := v1.ServicePort{
-						Port:       port.HostPort,
-						TargetPort: intstr.FromInt(int(port.ContainerPort)),
-						Name:       "port" + strconv.Itoa(i),
-					}
-					servicePorts = append(servicePorts, newPort)
-				}
-
-				internalService := &v1.Service{
-					ObjectMeta: v1.ObjectMeta{
-						Name:      serviceName,
-						Labels:    labels,
-						Namespace: defaultNamespace,
-					},
-					Spec: v1.ServiceSpec{
-						Type:     v1.ServiceTypeClusterIP,
-						Ports:    servicePorts,
-						Selector: labels,
-					},
-				}
-				_, err = service.Create(internalService)
-				if err != nil {
-					return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
-				}
-				glog.Infof("Created %s internal service", serviceName)
-
-				// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
-				if task.PortTypes != nil && len(task.PortTypes) > 0 {
-					for i, portType := range task.PortTypes {
-						if portType == 1 { // public port
-							publicServiceName := serviceName + "-public" + servicePorts[i].Name
-							publicService := &v1.Service{
-								ObjectMeta: v1.ObjectMeta{
-									Name:      publicServiceName,
-									Labels:    labels,
-									Namespace: defaultNamespace,
-								},
-								Spec: v1.ServiceSpec{
-									Type: v1.ServiceTypeLoadBalancer,
-									Ports: []v1.ServicePort{
-										v1.ServicePort{
-											Port:       servicePorts[i].Port,
-											TargetPort: servicePorts[i].TargetPort,
-											Name:       "public-" + servicePorts[i].Name,
-										},
-									},
-									Selector: labels,
-								},
-							}
-							_, err = service.Create(publicService)
-							if err != nil {
-								return fmt.Errorf("Unable to create public service %s: %s", publicServiceName, err)
-							}
-							glog.Infof("Created a public service %s with port %d", publicServiceName, servicePorts[i].Port)
-						} else { // private port
-							glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
-						}
-					}
-				}
-			}
-
-			// start deploy deployment
-			_, err = deploy.Create(&deploySpec)
-			if err != nil {
-				return fmt.Errorf("could not create deployment: %s", err)
-			}
-			glog.Infof("%s deployment created", family)
+		task, ok := tasks[mapping.Task]
+		if !ok {
+			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
 		}
+
+		deploySpec := task.Deployment
+		family := task.Family
+		namespace := deploySpec.ObjectMeta.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		if _, ok := namespaces[namespace]; !ok {
+			glog.Infof("Creating new namespace %s", namespace)
+			_, err := k8sNamespaces.Create(&v1.Namespace{
+				ObjectMeta: v1.ObjectMeta{
+					Name: namespace,
+				},
+			})
+			if err != nil {
+				return fmt.Errorf("Unable to create namespace '%s': %s", namespace, err.Error())
+			}
+			namespaces[namespace] = true
+		}
+
+		node, ok := deployedCluster.NodeInfos[mapping.Id]
+		if !ok {
+			return fmt.Errorf("Unable to find node id %s in cluster", mapping.Id)
+		}
+
+		originalFamily := family
+		count, ok := taskCount[family]
+		if !ok {
+			count = 1
+		} else {
+			count += 1
+			family = family + "-" + strconv.Itoa(count)
+			newName := deploySpec.GetObjectMeta().GetName() + "-" + strconv.Itoa(count)
+			newLabels := map[string]string{"app": newName}
+
+			// Update deploy spec to reflect multiple count of the same task
+			deploySpec.GetObjectMeta().SetName(newName)
+			deploySpec.GetObjectMeta().SetLabels(newLabels)
+			deploySpec.Spec.Selector.MatchLabels = newLabels
+			deploySpec.Spec.Template.GetObjectMeta().SetLabels(newLabels)
+		}
+		taskCount[originalFamily] = count
+
+		// Assigning Pods to Nodes
+		nodeSelector := map[string]string{}
+		nodeName := *node.Instance.PrivateDnsName
+		glog.Infof("Selecting node %s for deployment %s", nodeName, family)
+		nodeSelector["kubernetes.io/hostname"] = nodeName
+
+		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
+
+		// Create service for each container that opens a port
+		for _, container := range deploySpec.Spec.Template.Spec.Containers {
+			if len(container.Ports) == 0 {
+				continue
+			}
+
+			service := k8sClient.CoreV1().Services(namespace)
+			serviceName := family
+			if !strings.HasPrefix(family, serviceName) {
+				serviceName = serviceName + "-" + container.Name
+			}
+			labels := map[string]string{"app": family}
+			servicePorts := []v1.ServicePort{}
+			for i, port := range container.Ports {
+				newPort := v1.ServicePort{
+					Port:       port.HostPort,
+					TargetPort: intstr.FromInt(int(port.ContainerPort)),
+					Name:       "port" + strconv.Itoa(i),
+				}
+				servicePorts = append(servicePorts, newPort)
+			}
+
+			internalService := &v1.Service{
+				ObjectMeta: v1.ObjectMeta{
+					Name:      serviceName,
+					Labels:    labels,
+					Namespace: namespace,
+				},
+				Spec: v1.ServiceSpec{
+					Type:     v1.ServiceTypeClusterIP,
+					Ports:    servicePorts,
+					Selector: labels,
+				},
+			}
+			_, err := service.Create(internalService)
+			if err != nil {
+				return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
+			}
+			glog.Infof("Created %s internal service", serviceName)
+
+			// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
+			if task.PortTypes != nil && len(task.PortTypes) > 0 {
+				for i, portType := range task.PortTypes {
+					if portType == publicPortType { // public port
+						publicServiceName := serviceName + "-public" + servicePorts[i].Name
+						publicService := &v1.Service{
+							ObjectMeta: v1.ObjectMeta{
+								Name:      publicServiceName,
+								Labels:    labels,
+								Namespace: namespace,
+							},
+							Spec: v1.ServiceSpec{
+								Type: v1.ServiceTypeLoadBalancer,
+								Ports: []v1.ServicePort{
+									v1.ServicePort{
+										Port:       servicePorts[i].Port,
+										TargetPort: servicePorts[i].TargetPort,
+										Name:       "public-" + servicePorts[i].Name,
+									},
+								},
+								Selector: labels,
+							},
+						}
+						_, err := service.Create(publicService)
+						if err != nil {
+							return fmt.Errorf("Unable to create public service %s: %s", publicServiceName, err)
+						}
+						glog.Infof("Created a public service %s with port %d", publicServiceName, servicePorts[i].Port)
+					} else { // private port
+						glog.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
+					}
+				}
+			}
+		}
+
+		deploy := k8sClient.Extensions().Deployments(namespace)
+		_, err := deploy.Create(&deploySpec)
+		if err != nil {
+			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
+		}
+		glog.Infof("%s deployment created", family)
 	}
 
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) waitUntilElbLoadBalancerReady(clientset *k8s.Clientset, timeout time.Duration) error {
-	services := clientset.CoreV1().Services(defaultNamespace)
+func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.Clientset) {
+	allNamespaces := k8sDeployment.getAllDeployedNamespaces()
 	endpoints := map[string]string{}
 	c := make(chan bool, 1)
 	quit := make(chan bool)
 	go func() {
+		tagElbFunc := func() {
+			allElbsTagged := true
+			for _, namespace := range allNamespaces {
+				services := k8sClient.CoreV1().Services(namespace)
+				serviceLists, listError := services.List(v1.ListOptions{})
+				if listError != nil {
+					glog.Warningf("Unable to list services for namespace '%s': %s", namespace, listError.Error())
+					return
+				}
+				for _, service := range serviceLists.Items {
+					serviceName := service.GetObjectMeta().GetName()
+					if strings.Index(serviceName, "-public") != -1 {
+						if len(service.Status.LoadBalancer.Ingress) > 0 {
+							hostname := service.Status.LoadBalancer.Ingress[0].Hostname
+							port := service.Spec.Ports[0].Port
+							endpoints[serviceName] = hostname + ":" + strconv.FormatInt(int64(port), 10)
+						} else {
+							allElbsTagged = false
+							break
+						}
+					}
+				}
+
+				if allElbsTagged {
+					c <- true
+				} else {
+					time.Sleep(time.Second * 2)
+				}
+			}
+		}
+
 		for {
 			select {
 			case <-quit:
 				return
 			default:
-				serviceReady := false
-				if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
-					for _, service := range serviceLists.Items {
-						serviceName := service.GetObjectMeta().GetName()
-						if strings.Index(serviceName, "-public") != -1 {
-							if len(service.Status.LoadBalancer.Ingress) > 0 {
-								hostname := service.Status.LoadBalancer.Ingress[0].Hostname
-								port := service.Spec.Ports[0].Port
-								endpoints[serviceName] = hostname + ":" + strconv.FormatInt(int64(port), 10)
-
-								serviceReady = true
-							} else {
-								serviceReady = false
-								break
-							}
-						}
-					}
-				}
-
-				if serviceReady {
-					c <- true
-				}
-				time.Sleep(time.Second * 2)
+				tagElbFunc()
 			}
 		}
 	}()
 
 	select {
 	case <-c:
-		glog.Info("ELB loadBalancer is ready")
+		glog.Info("All public endpoints recorded.")
 		k8sDeployment.Endpoints = endpoints
-		return nil
-	case <-time.After(timeout):
+	case <-time.After(time.Duration(15) * time.Second):
 		quit <- true
-		return errors.New("Timed out waiting for Elb LoadBalancer to be ready")
+		glog.Warning("Timed out waiting for AWS ELB to be ready.")
 	}
-}
-
-func (k8sDeployment *KubernetesDeployment) tagEndpoints() error {
-	if k8sDeployment.KubeConfig == nil {
-		return errors.New("Unable to find kube config in deployment")
-	}
-
-	if c, err := k8s.NewForConfig(k8sDeployment.KubeConfig); err == nil {
-		// Wait until elb loadbanlcer is ready before kubectl describe services
-		if err := k8sDeployment.waitUntilElbLoadBalancerReady(c, time.Duration(10)*time.Second); err != nil {
-			return errors.New("Unable to wait for Elb LoadBalancer: " + err.Error())
-		}
-	}
-
-	return nil
 }
 
 // DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
