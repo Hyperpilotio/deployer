@@ -35,11 +35,15 @@ func Store(path string, object interface{}) error {
 // Load file to struct
 func Load(path string, object interface{}) error {
 	file, err := os.Open(path)
-	if err == nil {
-		decoder := gob.NewDecoder(file)
-		err = decoder.Decode(object)
+	if err != nil {
+		return fmt.Errorf("Unable to open file path with %s: %s", path, err.Error())
 	}
 	defer file.Close()
+
+	dec := gob.NewDecoder(file)
+	if err := dec.Decode(object); err != nil {
+		return fmt.Errorf("Unable to decode file to struct: %s", err.Error())
+	}
 
 	return err
 }
