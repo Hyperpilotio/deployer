@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -11,9 +12,12 @@ import (
 	"sync"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
+	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 
 	"net/http"
@@ -242,6 +246,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 			"data":  "Error update deployment: " + err.Error(),
 		})
 	} else {
+		server.storeDeploymentStatus()
 		c.JSON(http.StatusOK, gin.H{
 			"error": false,
 			"data":  "",
@@ -279,6 +284,9 @@ func (server *Server) createDeployment(c *gin.Context) {
 			"data":  "Error deserializing deployment: " + err.Error(),
 		})
 		return
+	} else {
+		randomId := strings.ToUpper(strings.Split(uuid.NewUUID().String(), "-")[0])
+		deployment.Name = fmt.Sprintf("%s-%s", deployment.Name, randomId)
 	}
 
 	server.mutex.Lock()
@@ -320,16 +328,20 @@ func (server *Server) createDeployment(c *gin.Context) {
 	if deployment.KubernetesDeployment != nil {
 		endpoints := server.KubernetesClusters.Clusters[deployment.Name].Endpoints
 		if endpoints != nil {
+			server.storeDeploymentStatus()
 			c.JSON(http.StatusAccepted, gin.H{
 				"error": false,
+				"name":  deployment.Name,
 				"data":  endpoints,
 			})
 			return
 		}
 	}
 
+	server.storeDeploymentStatus()
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
+		"name":  deployment.Name,
 		"data":  "",
 	})
 }
@@ -385,6 +397,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		}
 
 		delete(server.DeployedClusters, c.Param("deployment"))
+		server.storeDeploymentStatus()
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
@@ -496,4 +509,38 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
+}
+
+func (server *Server) storeDeploymentStatus() {
+	awsDcPath := path.Join(server.Config.GetString("filesPath"), "DeployedClusters")
+	if err := common.Store(awsDcPath, &server.DeployedClusters); err != nil {
+		glog.Warningf("Unable to store deployedClusters status: %s", err.Error())
+	}
+
+	k8sDcPath := path.Join(server.Config.GetString("filesPath"), "KubernetesClusters")
+	if err := common.Store(k8sDcPath, &server.KubernetesClusters); err != nil {
+		glog.Warningf("Unable to store KubernetesClusters status: %s", err.Error())
+	}
+}
+
+func (server *Server) loadDeploymentStatus() {
+	awsDcPath := path.Join(server.Config.GetString("filesPath"), "DeployedClusters")
+	if _, err := os.Stat(awsDcPath); err == nil {
+		if awsDcErr := common.Load(awsDcPath, &server.DeployedClusters); awsDcErr != nil {
+			glog.Warningf("Unable to read deployedClusters status file: %s", awsDcErr.Error())
+		} else {
+			if len(server.DeployedClusters) > 0 {
+				for deploymentName := range server.DeployedClusters {
+					glog.Infof("Find deployment name %s in deployedClusters...", deploymentName)
+				}
+			}
+		}
+	}
+
+	k8sDcPath := path.Join(server.Config.GetString("filesPath"), "KubernetesClusters")
+	if _, err := os.Stat(k8sDcPath); err == nil {
+		if k8sDcErr := common.Load(k8sDcPath, &server.KubernetesClusters); k8sDcErr != nil {
+			glog.Warningf("Unable to read kubernetesClusters status file: %s", k8sDcErr.Error())
+		}
+	}
 }
