@@ -433,6 +433,7 @@ func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string, tim
 
 func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string, k8sDeployment *KubernetesDeployment) error {
 	// find k8s-node stack name
+	deploymentName := k8sDeployment.DeployedCluster.Deployment.Name
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
 	k8sNodeStackName := ""
 	vpcID := ""
@@ -472,6 +473,30 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	glog.Infof("Deleting loadBalancer...")
 	resp, _ := elbSvc.DescribeLoadBalancers(nil)
 	for _, lbd := range resp.LoadBalancerDescriptions {
+		isDeploymentLoadBalancer := false
+		describeTagsInput := &elb.DescribeTagsInput{
+			LoadBalancerNames: []*string{
+				lbd.LoadBalancerName,
+			},
+		}
+
+		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
+			glog.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
+		} else {
+			for _, tagDescription := range tagsOutput.TagDescriptions {
+				for _, tag := range tagDescription.Tags {
+					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == stackName) {
+						isDeploymentLoadBalancer = true
+						break
+					}
+				}
+			}
+		}
+
+		if !isDeploymentLoadBalancer {
+			continue
+		}
+
 		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
 		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
 			glog.Warningf("Unable to deleting loadBalancer: %s", err.Error())
@@ -480,7 +505,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 
 	// delete bastion-Host EC2 instance
 	glog.Infof("Deleting bastion-Host EC2 instance...")
-	if err := deleteBastionHost(ec2Svc); err != nil {
+	if err := deleteBastionHost(ec2Svc, deploymentName); err != nil {
 		glog.Warningf("Unable to delete bastion-Host EC2 instance: %s", err.Error())
 	}
 
@@ -494,7 +519,7 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 		glog.Warningf("Unable to delete stack: %s", err.Error())
 	}
 
-	if err := waitUntilInternetGatewayDeleted(ec2Svc, strings.TrimSuffix(stackName, "-stack"), time.Duration(3)*time.Minute); err != nil {
+	if err := waitUntilInternetGatewayDeleted(ec2Svc, deploymentName, time.Duration(3)*time.Minute); err != nil {
 		glog.Warningf("Unable to wait for internetGateway to be deleted: %s", err.Error())
 	}
 
@@ -524,13 +549,19 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	return nil
 }
 
-func deleteBastionHost(ec2Svc *ec2.EC2) error {
+func deleteBastionHost(ec2Svc *ec2.EC2, deploymentName string) error {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			{
 				Name: aws.String("tag:Name"),
 				Values: []*string{
 					aws.String("bastion-host"),
+				},
+			},
+			{
+				Name: aws.String("tag:deployment"),
+				Values: []*string{
+					aws.String(deploymentName),
 				},
 			},
 			{
@@ -647,6 +678,30 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	glog.Infof("Deregistering load balancers...")
 	resp, _ := elbSvc.DescribeLoadBalancers(nil)
 	for _, lbd := range resp.LoadBalancerDescriptions {
+		isDeploymentLoadBalancer := false
+		describeTagsInput := &elb.DescribeTagsInput{
+			LoadBalancerNames: []*string{
+				lbd.LoadBalancerName,
+			},
+		}
+
+		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
+			glog.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
+		} else {
+			for _, tagDescription := range tagsOutput.TagDescriptions {
+				for _, tag := range tagDescription.Tags {
+					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == deployedCluster.StackName()) {
+						isDeploymentLoadBalancer = true
+						break
+					}
+				}
+			}
+		}
+
+		if !isDeploymentLoadBalancer {
+			continue
+		}
+
 		deregisterInstancesFromLoadBalancerInput := &elb.DeregisterInstancesFromLoadBalancerInput{
 			Instances:        lbd.Instances,
 			LoadBalancerName: lbd.LoadBalancerName,

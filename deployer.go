@@ -26,6 +26,7 @@ func Run(fileConfig string) error {
 	}
 
 	server := NewServer(viper)
+	server.loadDeploymentStatus()
 	return server.StartServer()
 }
 
