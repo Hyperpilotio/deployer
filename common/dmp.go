@@ -45,5 +45,5 @@ func Load(path string, object interface{}) error {
 		return fmt.Errorf("Unable to decode file to struct: %s", err.Error())
 	}
 
-	return err
+	return nil
 }
