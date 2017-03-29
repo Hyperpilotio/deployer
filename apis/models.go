@@ -37,8 +37,9 @@ type ECSDeployment struct {
 }
 
 type KubernetesTask struct {
-	Deployment v1beta1.Deployment `form:"deployment" json:"deployment" binding:"required"`
-	Family     string             `form:"family" json:"family" binding:"required"`
+	DaemonSet  *v1beta1.DaemonSet  `form:"daemonset" json:"daemonset,omitempty"`
+	Deployment *v1beta1.Deployment `form:"deployment" json:"deployment,omitempty"`
+	Family     string              `form:"family" json:"family" binding:"required"`
 
 	// Type of each port opened by a container: 0 - private, 1 - public
 	PortTypes []int `form:"portTypes" json:"portTypes"`

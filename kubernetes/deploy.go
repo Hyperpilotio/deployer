@@ -753,8 +753,6 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		return errors.New("Unable to find kube config in deployment")
 	}
 
-	deployedCluster := k8sDeployment.DeployedCluster
-
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
@@ -770,22 +768,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		namespaces[existingNamespace.Name] = true
 	}
 
-	taskCount := map[string]int{}
-	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
-		glog.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
-
-		task, ok := tasks[mapping.Task]
-		if !ok {
-			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
-		}
-
-		deploySpec := task.Deployment
-		family := task.Family
-		namespace := deploySpec.ObjectMeta.Namespace
-		if namespace == "" {
-			namespace = "default"
-		}
-
+	createNamespacesFunc := func(namespace string) error {
 		if _, ok := namespaces[namespace]; !ok {
 			glog.Infof("Creating new namespace %s", namespace)
 			_, err := k8sNamespaces.Create(&v1.Namespace{
@@ -799,9 +782,30 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 			namespaces[namespace] = true
 		}
 
-		node, ok := deployedCluster.NodeInfos[mapping.Id]
+		return nil
+	}
+
+	taskCount := map[string]int{}
+	for _, mapping := range k8sDeployment.DeployedCluster.Deployment.NodeMapping {
+		glog.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
+
+		task, ok := tasks[mapping.Task]
 		if !ok {
-			return fmt.Errorf("Unable to find node id %s in cluster", mapping.Id)
+			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
+		}
+
+		deploySpec := task.Deployment
+		if deploySpec == nil {
+			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
+		}
+		family := task.Family
+		namespace := deploySpec.ObjectMeta.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		if err := createNamespacesFunc(namespace); err != nil {
+			return err
 		}
 
 		originalFamily := family
@@ -824,9 +828,8 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 		// Assigning Pods to Nodes
 		nodeSelector := map[string]string{}
-		nodeName := *node.Instance.PrivateDnsName
-		glog.Infof("Selecting node %s for deployment %s", nodeName, family)
-		nodeSelector["kubernetes.io/hostname"] = nodeName
+		glog.Infof("Selecting node %d for deployment %s", mapping.Id, family)
+		nodeSelector["hyperpilot/node-id"] = strconv.Itoa(mapping.Id)
 
 		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
@@ -906,11 +909,37 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		}
 
 		deploy := k8sClient.Extensions().Deployments(namespace)
-		_, err := deploy.Create(&deploySpec)
+		_, err := deploy.Create(deploySpec)
 		if err != nil {
 			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
 		}
 		glog.Infof("%s deployment created", family)
+	}
+
+	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+		if task.DaemonSet == nil {
+			continue
+		}
+
+		if task.Deployment != nil {
+			return fmt.Errorf("Cannot assign both daemonset and deployment to the same task: %s", task.Family)
+		}
+
+		daemonSet := task.DaemonSet
+		namespace := daemonSet.ObjectMeta.Namespace
+		if namespace == "" {
+			namespace = "default"
+		}
+
+		if err := createNamespacesFunc(namespace); err != nil {
+			return err
+		}
+
+		daemonSets := k8sClient.Extensions().DaemonSets(namespace)
+		glog.Infof("Creating daemonset %s", task.Family)
+		if _, err := daemonSets.Create(daemonSet); err != nil {
+			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
+		}
 	}
 
 	return nil
