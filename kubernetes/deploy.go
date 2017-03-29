@@ -440,33 +440,48 @@ func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.Cloud
 	for _, stack := range describeStacksOutput.Stacks {
 		if strings.HasPrefix(aws.StringValue(stack.StackName), stackName+"-K8sStack") {
 			k8sNodeStackName = aws.StringValue(stack.StackName)
-			for _, param := range stack.Parameters {
-				if aws.StringValue(param.ParameterKey) == "VPCID" {
-					vpcID = aws.StringValue(param.ParameterValue)
-					break
+			if vpcID == "" {
+				for _, param := range stack.Parameters {
+					if aws.StringValue(param.ParameterKey) == "VPCID" {
+						vpcID = aws.StringValue(param.ParameterValue)
+						break
+					}
+				}
+			}
+		} else if aws.StringValue(stack.StackName) == stackName {
+			if vpcID == "" {
+				for _, output := range stack.Outputs {
+					if aws.StringValue(output.OutputKey) == "VPCID" {
+						vpcID = aws.StringValue(output.OutputValue)
+						break
+					}
 				}
 			}
 		}
 	}
 
 	// delete k8s-master/k8s-node stack
-	glog.Infof("Deleting k8s-master/k8s-node stack...")
-	deleteStackInput := &cloudformation.DeleteStackInput{
-		StackName: aws.String(k8sNodeStackName),
-	}
+	if k8sNodeStackName != "" {
+		glog.Infof("Deleting k8s-master/k8s-node stack...")
+		deleteStackInput := &cloudformation.DeleteStackInput{
+			StackName: aws.String(k8sNodeStackName),
+		}
 
-	if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
-		glog.Warningf("Unable to delete stack: %s", err.Error())
-	}
+		if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
+			glog.Warningf("Unable to delete stack: %s", err.Error())
+		}
 
-	describeStacksInput := &cloudformation.DescribeStacksInput{
-		StackName: aws.String(k8sNodeStackName),
-	}
+		describeStacksInput := &cloudformation.DescribeStacksInput{
+			StackName: aws.String(k8sNodeStackName),
+		}
 
-	if err := cfSvc.WaitUntilStackDeleteComplete(describeStacksInput); err != nil {
-		glog.Warningf("Unable to wait until stack is deleted: %s", err.Error())
-	} else if err == nil {
-		glog.Infof("Delete %s stack ok...", k8sNodeStackName)
+		if err := cfSvc.WaitUntilStackDeleteComplete(describeStacksInput); err != nil {
+			glog.Warningf("Unable to wait until stack is deleted: %s", err.Error())
+		} else if err == nil {
+			glog.Infof("Delete %s stack ok...", k8sNodeStackName)
+		}
+	} else {
+		glog.Warningf("Unable to find k8s-master/k8s-node stack...")
 	}
 
 	// delete loadBalancer
@@ -673,46 +688,9 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	}
 
 	elbSvc := elb.New(sess)
-
-	// deregister load Balancer
-	glog.Infof("Deregistering load balancers...")
-	resp, _ := elbSvc.DescribeLoadBalancers(nil)
-	for _, lbd := range resp.LoadBalancerDescriptions {
-		isDeploymentLoadBalancer := false
-		describeTagsInput := &elb.DescribeTagsInput{
-			LoadBalancerNames: []*string{
-				lbd.LoadBalancerName,
-			},
-		}
-
-		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
-			glog.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
-		} else {
-			for _, tagDescription := range tagsOutput.TagDescriptions {
-				for _, tag := range tagDescription.Tags {
-					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == deployedCluster.StackName()) {
-						isDeploymentLoadBalancer = true
-						break
-					}
-				}
-			}
-		}
-
-		if !isDeploymentLoadBalancer {
-			continue
-		}
-
-		deregisterInstancesFromLoadBalancerInput := &elb.DeregisterInstancesFromLoadBalancerInput{
-			Instances:        lbd.Instances,
-			LoadBalancerName: lbd.LoadBalancerName,
-		}
-		if _, err := elbSvc.DeregisterInstancesFromLoadBalancer(deregisterInstancesFromLoadBalancerInput); err != nil {
-			glog.Warningf("Unable to deregister instances from load balancer: %s:", err.Error())
-		}
-	}
-
 	cfSvc := cloudformation.New(sess)
 	ec2Svc := ec2.New(sess)
+
 	// delete cloudformation Stack
 	cfStackName := deployedCluster.StackName()
 	glog.Infof("Deleting cloudformation Stack: %s", cfStackName)
