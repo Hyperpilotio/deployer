@@ -216,21 +216,19 @@ func (server *Server) deleteFile(c *gin.Context) {
 }
 
 func (server *Server) updateDeployment(c *gin.Context) {
-	//deploymentName := c.Param("deployment")
+	deploymentName := c.Param("deployment")
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	/*
-		data, ok := server.DeployedClusters[deploymentName]
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Deployment not found",
-			})
-			return
-		}
-	**/
+	data, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
 
 	// TODO Implement function to update deployment
 	var deployment apis.Deployment
@@ -241,9 +239,11 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
+	deploymentName = data.Deployment.Name
+	data.Deployment = &deployment
+	data.Deployment.Name = deploymentName
 
-	data := awsecs.NewDeployedCluster(&deployment)
-
+	// TODO: Check if it's ECS or kubernetes
 	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{

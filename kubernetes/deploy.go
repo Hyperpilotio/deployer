@@ -127,7 +127,88 @@ func (k8sDeployment *KubernetesDeployment) uploadFiles(ec2Svc *ec2.EC2, uploaded
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployKubernetesCluster(sess *session.Session) error {
+func (k8sDeployment *KubernetesDeployment) getExistingNamespaces(k8sClient *k8s.Clientset) (map[string]bool, error) {
+	namespaces := map[string]bool{}
+	k8sNamespaces := k8sClient.CoreV1().Namespaces()
+	existingNamespaces, err := k8sNamespaces.List(v1.ListOptions{})
+	if err != nil {
+		return namespaces, fmt.Errorf("Unable to get existing namespaces: " + err.Error())
+	}
+
+	for _, existingNamespace := range existingNamespaces.Items {
+		namespaces[existingNamespace.Name] = true
+	}
+
+	return namespaces, nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, uploadedFiles map[string]string) error {
+	deployedCluster := k8sDeployment.DeployedCluster
+	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create session: " + sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+
+	if err := awsecs.CreateKeypair(ec2Svc, deployedCluster); err != nil {
+		return errors.New("Unable to create key pair: " + err.Error())
+	}
+
+	if err := k8sDeployment.deployKubernetes(sess); err != nil {
+		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
+	}
+
+	if err := k8sDeployment.populateNodeInfos(ec2Svc); err != nil {
+		return errors.New("Unable to populate node infos: " + err.Error())
+	}
+
+	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to upload files to cluster: " + err.Error())
+	}
+
+	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	if err := k8sDeployment.tagKubeNodes(k8sClient); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
+	}
+
+	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deployKubernetesObjects(config *viper.Viper, k8sClient *k8s.Clientset) error {
+	namespaces, namespacesErr := k8sDeployment.getExistingNamespaces(k8sClient)
+	if namespacesErr != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+	}
+
+	if err := k8sDeployment.createSecrets(k8sClient, namespaces); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to create secrets in k8s: " + err.Error())
+	}
+
+	if err := k8sDeployment.deployServices(k8sClient, namespaces); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(config)
+		return errors.New("Unable to setup K8S: " + err.Error())
+	}
+
+	k8sDeployment.recordPublicEndpoints(k8sClient)
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Session) error {
 	cfSvc := cloudformation.New(sess)
 	params := &cloudformation.CreateStackInput{
 		StackName: aws.String(k8sDeployment.DeployedCluster.StackName()),
@@ -265,87 +346,27 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	k8sClusters.Clusters[deployedCluster.Deployment.Name] = k8sDeployment
-
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return errors.New("Unable to create session: " + sessionErr.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-
-	if err := awsecs.CreateKeypair(ec2Svc, deployedCluster); err != nil {
-		return errors.New("Unable to create key pair: " + err.Error())
-	}
-
-	if err := k8sDeployment.deployKubernetesCluster(sess); err != nil {
-		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
-	}
-
-	if err := k8sDeployment.populateNodeInfos(ec2Svc); err != nil {
-		return errors.New("Unable to populate node infos: " + err.Error())
-	}
-
-	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
-		return errors.New("Unable to upload files to cluster: " + err.Error())
-	}
-
-	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
-	if err != nil {
-		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
-	}
-
-	if err := k8sDeployment.tagKubeNodes(k8sClient); err != nil {
-		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
-		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
-	}
-
-	if err := k8sDeployment.deployServices(k8sClient); err != nil {
-		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
-		return errors.New("Unable to setup K8S: " + err.Error())
-	}
-
-	k8sDeployment.recordPublicEndpoints(k8sClient)
+	k8sDeployment.deployCluster(config, uploadedFiles)
 
 	return nil
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
 func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
+	if !ok {
+		return fmt.Errorf("Unable to find cluster '%s' to update", deployedCluster.Deployment.Name)
+	}
+
 	glog.Info("Updating kubernetes deployment")
-
-	k8sDeployment := &KubernetesDeployment{
-		DeployedCluster: deployedCluster,
-	}
-
-	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", "/tmp/"+deployment.Name+"_kubeconfig/kubeconfig"); err != nil {
-		return errors.New("Unable to parse kube config: " + err.Error())
-	} else {
-		k8sDeployment.KubeConfig = kubeConfig
-	}
-
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return errors.New("Unable to create session: " + sessionErr.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-
-	if err := k8sDeployment.populateNodeInfos(ec2Svc); err != nil {
-		return errors.New("Unable to populate node infos: " + err.Error())
-	}
 
 	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := k8sDeployment.deployServices(k8sClient); err != nil {
-		k8sClusters.deleteDeploymentOnFailure(config, deployedCluster)
-		return errors.New("Unable to setup K8S: " + err.Error())
-	}
-
-	k8sDeployment.recordPublicEndpoints(k8sClient)
+	deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig)
+	k8sDeployment.deployKubernetesObjects(config, k8sClient)
 
 	return nil
 }
@@ -431,7 +452,7 @@ func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string, tim
 	}
 }
 
-func deleteCfStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string, k8sDeployment *KubernetesDeployment) error {
+func deleteCloudFormationStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string, k8sDeployment *KubernetesDeployment) error {
 	// find k8s-node stack name
 	deploymentName := k8sDeployment.DeployedCluster.Deployment.Name
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
@@ -630,12 +651,24 @@ func deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
 	}
 
 	for _, namespace := range namespaces {
+		daemonsets := k8sClient.Extensions().DaemonSets(namespace)
+		if daemonsetList, listError := daemonsets.List(v1.ListOptions{}); listError == nil {
+			for _, daemonset := range daemonsetList.Items {
+				name := daemonset.GetObjectMeta().GetName()
+				if err := daemonsets.Delete(name, &v1.DeleteOptions{}); err != nil {
+					glog.Warningf("Unable to delete daemonset %s: %s", name, err.Error())
+				}
+			}
+		} else {
+			return fmt.Errorf("Unable to list daemonsets in namespace '%s' for deletion: ", namespace, listError.Error())
+		}
+
 		deploys := k8sClient.Extensions().Deployments(namespace)
 		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
 			for _, deployment := range deployLists.Items {
-				deploymentName := deployment.GetObjectMeta().GetName()
-				if err := deploys.Delete(deploymentName, &v1.DeleteOptions{}); err != nil {
-					glog.Errorf("Unable to delete deployment %s: %s", deploymentName, err.Error())
+				name := deployment.GetObjectMeta().GetName()
+				if err := deploys.Delete(name, &v1.DeleteOptions{}); err != nil {
+					glog.Warningf("Unable to delete daemonset %s: %s", name, err.Error())
 				}
 			}
 		} else {
@@ -651,30 +684,37 @@ func deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
 				}
 			}
 		} else {
-			glog.Warningf("Unable to list services in namespace '%s' for deletion: %s", namespace, listError.Error())
+			return fmt.Errorf("Unable to list services in namespace '%s' for deletion: %s", namespace, listError.Error())
 		}
+
+		secrets := k8sClient.CoreV1().Secrets(namespace)
+		if secretList, listError := secrets.List(v1.ListOptions{}); listError == nil {
+			for _, secret := range secretList.Items {
+				name := secret.GetObjectMeta().GetName()
+				if err := secrets.Delete(name, &v1.DeleteOptions{}); err != nil {
+					glog.Warningf("Unable to delete service %s: %s", name, err.Error())
+				}
+			}
+		} else {
+			return fmt.Errorf("Unable to list secrets in namespace '%s' for deletion: %s", namespace, listError.Error())
+		}
+
 	}
 
 	return nil
 }
 
-func (k8sClusters *KubernetesClusters) deleteDeploymentOnFailure(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
-	if deployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
+func (k8sDeployment *KubernetesDeployment) deleteDeploymentOnFailure(config *viper.Viper) {
+	if k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
 		glog.Warning("Skipping delete deployment on failure")
 		return
 	}
 
-	k8sClusters.DeleteDeployment(config, deployedCluster)
+	k8sDeployment.deleteDeployment(config)
 }
 
-// DeleteDeployment clean up the cluster from kubenetes.
-func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
-	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
-	if !ok {
-		glog.Warningf("Unable to find kubernetes deployment to delete: %s", deployedCluster.Deployment.Name)
-		return
-	}
-
+func (k8sDeployment *KubernetesDeployment) deleteDeployment(config *viper.Viper) {
+	deployedCluster := k8sDeployment.DeployedCluster
 	// Deleting kubernetes deployment
 	glog.Infof("Deleting kubernetes deployment...")
 	if err := deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
@@ -694,7 +734,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	// delete cloudformation Stack
 	cfStackName := deployedCluster.StackName()
 	glog.Infof("Deleting cloudformation Stack: %s", cfStackName)
-	if err := deleteCfStack(elbSvc, ec2Svc, cfSvc, cfStackName, k8sDeployment); err != nil {
+	if err := deleteCloudFormationStack(elbSvc, ec2Svc, cfSvc, cfStackName, k8sDeployment); err != nil {
 		glog.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
 	}
 
@@ -702,6 +742,17 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 	if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		glog.Warning("Unable to delete key pair: " + err.Error())
 	}
+}
+
+// DeleteDeployment clean up the cluster from kubenetes.
+func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
+	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
+	if !ok {
+		glog.Warningf("Unable to find kubernetes deployment to delete: %s", deployedCluster.Deployment.Name)
+		return
+	}
+
+	k8sDeployment.deleteDeployment(config)
 
 	delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
 }
@@ -710,7 +761,12 @@ func (k8sDeployment *KubernetesDeployment) getAllDeployedNamespaces() []string {
 	// Find all namespaces we deployed to
 	allNamespaces := []string{}
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
-		newNamespace := task.Deployment.ObjectMeta.Namespace
+		newNamespace := ""
+		if task.Deployment != nil {
+			newNamespace = getNamespace(task.Deployment.ObjectMeta)
+		} else if task.DaemonSet != nil {
+			newNamespace = getNamespace(task.DaemonSet.ObjectMeta)
+		}
 		exists := false
 		for _, namespace := range allNamespaces {
 			if namespace == newNamespace {
@@ -748,7 +804,55 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes(k8sClient *k8s.Clientset
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clientset) error {
+func getNamespace(objectMeta v1.ObjectMeta) string {
+	namespace := objectMeta.Namespace
+	if namespace == "" {
+		return "default"
+	}
+
+	return namespace
+}
+
+func createNamespaceIfNotExist(namespace string, existingNamespaces map[string]bool, k8sClient *k8s.Clientset) error {
+	if _, ok := existingNamespaces[namespace]; !ok {
+		glog.Infof("Creating new namespace %s", namespace)
+		k8sNamespaces := k8sClient.CoreV1().Namespaces()
+		_, err := k8sNamespaces.Create(&v1.Namespace{
+			ObjectMeta: v1.ObjectMeta{
+				Name: namespace,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("Unable to create namespace '%s': %s", namespace, err.Error())
+		}
+		existingNamespaces[namespace] = true
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) createSecrets(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
+	secrets := k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Secrets
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	for _, secret := range secrets {
+		namespace := getNamespace(secret.ObjectMeta)
+		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+			return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
+		}
+
+		k8sSecret := k8sClient.CoreV1().Secrets(namespace)
+		if _, err := k8sSecret.Create(&secret); err != nil {
+			return fmt.Errorf("Unable to create secret %s: %s", secret.Name, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
 	if k8sDeployment.KubeConfig == nil {
 		return errors.New("Unable to find kube config in deployment")
 	}
@@ -756,33 +860,6 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
-	}
-
-	k8sNamespaces := k8sClient.CoreV1().Namespaces()
-	existingNamespaces, err := k8sNamespaces.List(v1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("Unable to get existing namespaces: " + err.Error())
-	}
-	namespaces := map[string]bool{}
-	for _, existingNamespace := range existingNamespaces.Items {
-		namespaces[existingNamespace.Name] = true
-	}
-
-	createNamespacesFunc := func(namespace string) error {
-		if _, ok := namespaces[namespace]; !ok {
-			glog.Infof("Creating new namespace %s", namespace)
-			_, err := k8sNamespaces.Create(&v1.Namespace{
-				ObjectMeta: v1.ObjectMeta{
-					Name: namespace,
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("Unable to create namespace '%s': %s", namespace, err.Error())
-			}
-			namespaces[namespace] = true
-		}
-
-		return nil
 	}
 
 	taskCount := map[string]int{}
@@ -799,12 +876,8 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
 		}
 		family := task.Family
-		namespace := deploySpec.ObjectMeta.Namespace
-		if namespace == "" {
-			namespace = "default"
-		}
-
-		if err := createNamespacesFunc(namespace); err != nil {
+		namespace := getNamespace(deploySpec.ObjectMeta)
+		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 			return err
 		}
 
@@ -926,12 +999,8 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		}
 
 		daemonSet := task.DaemonSet
-		namespace := daemonSet.ObjectMeta.Namespace
-		if namespace == "" {
-			namespace = "default"
-		}
-
-		if err := createNamespacesFunc(namespace); err != nil {
+		namespace := getNamespace(daemonSet.ObjectMeta)
+		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 			return err
 		}
 

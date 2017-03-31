@@ -3,6 +3,7 @@ package apis
 import (
 	"fmt"
 
+	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
 
 	"github.com/aws/aws-sdk-go/service/ecs"
@@ -48,6 +49,7 @@ type KubernetesTask struct {
 // KubernetesDeployment storing the information of a Kubernetes deployment
 type KubernetesDeployment struct {
 	Kubernetes          []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
+	Secrets             []v1.Secret      `form:"secrets" json:"secrets"`
 	SkipDeleteOnFailure bool             `form:"skipdDeleteOnFailure" json:"skipDeleteOnFailure"`
 }
 
