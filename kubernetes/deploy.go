@@ -346,7 +346,9 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 	}
 
 	k8sClusters.Clusters[deployedCluster.Deployment.Name] = k8sDeployment
-	k8sDeployment.deployCluster(config, uploadedFiles)
+	if err := k8sDeployment.deployCluster(config, uploadedFiles); err != nil {
+		return errors.New("Unable to deploy kubernetes: " + err.Error())
+	}
 
 	return nil
 }
