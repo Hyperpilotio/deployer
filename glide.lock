@@ -1,5 +1,5 @@
 hash: 0be6b89f4d7d716224a55f8e98c72cd2856d4006d3990a1e15b71a64dcc78307
-updated: 2017-03-06T14:14:00.120720988+08:00
+updated: 2017-04-05T10:57:19.056070086+08:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -38,6 +38,7 @@ imports:
   - service/cloudwatchlogs
   - service/ec2
   - service/ecs
+  - service/elb
   - service/iam
   - service/sts
 - name: github.com/blang/semver
@@ -137,6 +138,8 @@ imports:
   version: 281032e84ae07510239465db46bf442aa44b953a
 - name: github.com/mitchellh/mapstructure
   version: db1efb556f84b25a0a13a04aad883943538ad2e0
+- name: github.com/op/go-logging
+  version: 970db520ece77730c7e4724c61121037378659d9
 - name: github.com/pborman/uuid
   version: ca53cad383cad2479bbba7f7a1a05797ec1386e4
 - name: github.com/pelletier/go-buffruneio
