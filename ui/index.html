@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Deployer</title>
+    <link rel="stylesheet" type="text/css" href="/static/css/style.css">
+    <script src='/static/js/jquery-3.2.0.min.js'></script>
+    <script>
+        $(function() {
+            $('.deployment-list li').click(function() {
+                $('.deployment-list li').removeClass('active');
+                $(this).addClass('active');
+
+                $('main h1').remove();
+                $('.deployment-detail').show();
+
+                $.ajax({
+                    url: '/ui/' + $(this).data('name') + '/list',
+                    type: 'GET',
+                    dataType: 'json',
+                    success: function(json) {
+                        if (json.error == false) {
+                            $('.deployment-log').html('');
+                            $.each(json.data, function(i, line) {
+                                $('.deployment-log').append('<p class="line">' + line + '</p>');
+                            });
+                        }
+                    }
+                });
+            });
+        });
+    </script>
+</head>
+
+<body>
+    <!-- header -->
+    <header>
+        <nav>
+            <a href="/ui" class="banner">Deployer</a>
+            <ul>
+                <li>
+                    <a href="/ui" class="active">deploys</a>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- sidebar -->
+    <aside>
+        <ul class="deployment-list">
+            {{range $k,$v := .logs}}
+            <li class="deployment" data-name="{{$v.Name}}">
+                <div class="logName">{{$v.Name}}</div>
+                <span class="logTime">{{$v.Time}}</span>
+                <span class="badge badge-success">Deployed</span>
+            </li>
+            {{end}}
+        </ul>
+    </aside>
+
+    <!-- main -->
+    <main>
+        <h1>{{.msg}}!</h1>
+        <div class="deployment-detail" style="display: none;">
+            <h2>Deployment Log</h2>
+            <div class="deployment-log">
+            </div>
+        </div>
+    </main>
+</body>
+
+</html>
