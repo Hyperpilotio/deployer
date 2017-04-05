@@ -653,6 +653,7 @@ func deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
 	}
 
 	for _, namespace := range namespaces {
+		glog.Info("Deleting kubernetes objects in namespace " + namespace)
 		daemonsets := k8sClient.Extensions().DaemonSets(namespace)
 		if daemonsetList, listError := daemonsets.List(v1.ListOptions{}); listError == nil {
 			for _, daemonset := range daemonsetList.Items {
@@ -675,6 +676,18 @@ func deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
 			}
 		} else {
 			return fmt.Errorf("Unable to list deployments in namespace '%s' for deletion: ", namespace, listError.Error())
+		}
+
+		replicaSets := k8sClient.Extensions().ReplicaSets(namespace)
+		if replicaSetList, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
+			for _, replicaSet := range replicaSetList.Items {
+				name := replicaSet.GetObjectMeta().GetName()
+				if err := replicaSets.Delete(name, &v1.DeleteOptions{}); err != nil {
+					glog.Warningf("Unable to delete replica set %s: %s", name, err.Error())
+				}
+			}
+		} else {
+			return fmt.Errorf("Unable to list replica sets in namespace '%s' for deletion: ", namespace, listError.Error())
 		}
 
 		services := k8sClient.CoreV1().Services(namespace)
