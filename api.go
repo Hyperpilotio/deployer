@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -17,11 +18,22 @@ import (
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/kubernetes"
+	logging "github.com/op/go-logging"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 
 	"net/http"
 )
+
+var logFormatter = logging.MustStringFormatter(
+	` %{level:.1s}%{time:0102 15:04:05.999999} %{pid} %{shortfile}] %{message}`,
+)
+
+type DeploymentLog struct {
+	Name   string
+	Time   string
+	Status string
+}
 
 type DeploymentStatus struct {
 	DeployedClusters   map[string]*awsecs.DeployedCluster
@@ -50,6 +62,38 @@ func NewServer(config *viper.Viper) *Server {
 	}
 }
 
+// NewLogger create per deployment logger
+func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.File, error) {
+	deploymentName := deployedCluster.Deployment.Name
+	log := logging.MustGetLogger(deploymentName)
+
+	logDirPath := path.Join(server.Config.GetString("filesPath"), "log")
+	if _, err := os.Stat(logDirPath); os.IsNotExist(err) {
+		os.Mkdir(logDirPath, 0777)
+	}
+
+	logFilePath := path.Join(logDirPath, deploymentName+".log")
+	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
+	if err != nil {
+		return logFile, errors.New("Unable to create deployment log file:" + err.Error())
+	}
+
+	fileLog := logging.NewLogBackend(logFile, "["+deploymentName+"]", 0)
+	consoleLog := logging.NewLogBackend(os.Stdout, "["+deploymentName+"]", 0)
+
+	fileLogLevel := logging.AddModuleLevel(fileLog)
+	fileLogLevel.SetLevel(logging.INFO, "")
+
+	consoleLogBackend := logging.NewBackendFormatter(consoleLog, logFormatter)
+	fileLogBackend := logging.NewBackendFormatter(fileLog, logFormatter)
+
+	logging.SetBackend(fileLogBackend, consoleLogBackend)
+
+	deployedCluster.Logger = log
+
+	return logFile, nil
+}
+
 // StartServer start a web server
 func (server *Server) StartServer() error {
 	if server.Config.GetString("filesPath") == "" {
@@ -68,6 +112,15 @@ func (server *Server) StartServer() error {
 	// Global middleware
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
+
+	router.LoadHTMLGlob("ui/*.html")
+	router.Static("/static", "./ui/static")
+
+	uiGroup := router.Group("/ui")
+	{
+		uiGroup.GET("", server.logUI)
+		uiGroup.GET("/:logFile/list", server.getDeploymentLog)
+	}
 
 	daemonsGroup := router.Group("/v1/deployments")
 	{
@@ -243,6 +296,16 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	data.Deployment = &deployment
 	data.Deployment.Name = deploymentName
 
+	f, logErr := server.NewLogger(data)
+	if logErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error creating deployment logger:" + logErr.Error(),
+		})
+		return
+	}
+	defer f.Close()
+
 	// TODO: Check if it's ECS or kubernetes
 	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
 	if err != nil {
@@ -307,6 +370,16 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
+
+	f, logErr := server.NewLogger(deployedCluster)
+	if logErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error creating deployment logger:" + logErr.Error(),
+		})
+		return
+	}
+	defer f.Close()
 
 	if deployment.ECSDeployment != nil {
 		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
@@ -394,6 +467,16 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		f, logErr := server.NewLogger(data)
+		if logErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Error creating deployment logger:" + logErr.Error(),
+			})
+			return
+		}
+		defer f.Close()
+
 		// TODO create a batch job to delete the deployment
 		if data.Deployment.KubernetesDeployment != nil {
 			server.KubernetesClusters.DeleteDeployment(server.Config, data)
@@ -514,6 +597,62 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
+}
+
+func (server *Server) logUI(c *gin.Context) {
+	logPath := path.Join(server.Config.GetString("filesPath"), "log")
+	if files, err := ioutil.ReadDir(logPath); err != nil {
+		c.HTML(http.StatusNotFound, "index.html", gin.H{
+			"msg":  "Unable to read deployment log:" + err.Error(),
+			"logs": "",
+		})
+	} else {
+		deploymentLogs := []*DeploymentLog{}
+		for _, f := range files {
+			// TODO deployment status: deployed, error
+			deploymentLog := &DeploymentLog{
+				Name: f.Name(),
+				Time: f.ModTime().Format("2006-01-02 15:04:05"),
+			}
+			deploymentLogs = append(deploymentLogs, deploymentLog)
+		}
+
+		c.HTML(http.StatusOK, "index.html", gin.H{
+			"msg":  "Hello hyperpilot!",
+			"logs": deploymentLogs,
+		})
+	}
+}
+
+func (server *Server) getDeploymentLog(c *gin.Context) {
+	logFile := c.Param("logFile")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile)
+	file, err := os.Open(logPath)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to read deployment log",
+		})
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+
+	lines := []string{}
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  lines,
+	})
 }
 
 func (server *Server) storeDeploymentStatus() {
