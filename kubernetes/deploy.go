@@ -37,6 +37,12 @@ type KubernetesDeployment struct {
 	DeployedCluster *awsecs.DeployedCluster
 }
 
+type CreateDeploymentResponse struct {
+	Endpoints map[string]string `json:"endpoints"`
+	BastionIp string            `json:"bastionIp"`
+	MasterIp  string            `json:"masterIp"`
+}
+
 type KubernetesClusters struct {
 	Clusters map[string]*KubernetesDeployment
 }
@@ -339,7 +345,10 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 }
 
 // CreateDeployment start a deployment
-func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, uploadedFiles map[string]string, deployedCluster *awsecs.DeployedCluster) error {
+func (k8sClusters *KubernetesClusters) CreateDeployment(
+	config *viper.Viper,
+	uploadedFiles map[string]string,
+	deployedCluster *awsecs.DeployedCluster) (*CreateDeploymentResponse, error) {
 	log := deployedCluster.Logger
 	log.Info("Starting kubernetes deployment")
 
@@ -349,10 +358,16 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(config *viper.Viper, upl
 
 	k8sClusters.Clusters[deployedCluster.Deployment.Name] = k8sDeployment
 	if err := k8sDeployment.deployCluster(config, uploadedFiles); err != nil {
-		return errors.New("Unable to deploy kubernetes: " + err.Error())
+		return nil, errors.New("Unable to deploy kubernetes: " + err.Error())
 	}
 
-	return nil
+	response := &CreateDeploymentResponse{
+		Endpoints: k8sDeployment.Endpoints,
+		BastionIp: k8sDeployment.BastionIp,
+		MasterIp:  k8sDeployment.MasterIp,
+	}
+
+	return response, nil
 }
 
 // UpdateDeployment start a deployment on EC2 is ready

@@ -343,6 +343,11 @@ func (server *Server) getDeployment(c *gin.Context) {
 	}
 }
 
+func createUniqueDeploymentName(familyName string) string {
+	randomId := strings.ToUpper(strings.Split(uuid.NewUUID().String(), "-")[0])
+	return fmt.Sprintf("%s-%s", familyName, randomId)
+}
+
 func (server *Server) createDeployment(c *gin.Context) {
 	// FIXME document the structure of deployment in the doc file
 	var deployment apis.Deployment
@@ -352,10 +357,9 @@ func (server *Server) createDeployment(c *gin.Context) {
 			"data":  "Error deserializing deployment: " + err.Error(),
 		})
 		return
-	} else {
-		randomId := strings.ToUpper(strings.Split(uuid.NewUUID().String(), "-")[0])
-		deployment.Name = fmt.Sprintf("%s-%s", deployment.Name, randomId)
 	}
+
+	deployment.Name = createUniqueDeploymentName(deployment.Name)
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
@@ -368,8 +372,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	var err error
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
+	server.DeployedClusters[deployment.Name] = deployedCluster
 
 	f, logErr := server.NewLogger(deployedCluster)
 	if logErr != nil {
@@ -382,9 +386,28 @@ func (server *Server) createDeployment(c *gin.Context) {
 	defer f.Close()
 
 	if deployment.ECSDeployment != nil {
-		err = awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to create ECS deployment: " + err.Error(),
+			})
+			return
+		}
 	} else if deployment.KubernetesDeployment != nil {
-		err = server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		info, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to create Kubernetes deployment: " + err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusAccepted, gin.H{
+			"error": false,
+			"data":  info,
+		})
 	} else {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
@@ -393,35 +416,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to create deployment: " + err.Error(),
-		})
-		return
-	}
-
-	server.DeployedClusters[deployment.Name] = deployedCluster
-
-	if deployment.KubernetesDeployment != nil {
-		endpoints := server.KubernetesClusters.Clusters[deployment.Name].Endpoints
-		if endpoints != nil {
-			server.storeDeploymentStatus()
-			c.JSON(http.StatusAccepted, gin.H{
-				"error": false,
-				"name":  deployment.Name,
-				"data":  endpoints,
-			})
-			return
-		}
-	}
-
+	// Deployment succeeded, storing deployment status
 	server.storeDeploymentStatus()
-	c.JSON(http.StatusAccepted, gin.H{
-		"error": false,
-		"name":  deployment.Name,
-		"data":  "",
-	})
 }
 
 func (server *Server) startTask(c *gin.Context) {
