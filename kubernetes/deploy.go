@@ -38,6 +38,7 @@ type KubernetesDeployment struct {
 }
 
 type CreateDeploymentResponse struct {
+	Name      string            `json:"name"`
 	Endpoints map[string]string `json:"endpoints"`
 	BastionIp string            `json:"bastionIp"`
 	MasterIp  string            `json:"masterIp"`
@@ -362,6 +363,7 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(
 	}
 
 	response := &CreateDeploymentResponse{
+		Name:      deployedCluster.Deployment.Name,
 		Endpoints: k8sDeployment.Endpoints,
 		BastionIp: k8sDeployment.BastionIp,
 		MasterIp:  k8sDeployment.MasterIp,
@@ -386,6 +388,18 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	}
 
 	k8sDeployment.deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig)
+
+	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
+	}
+
+	elbSvc := elb.New(sess)
+	cfStackName := deployedCluster.StackName()
+	if err := k8sDeployment.deleteLoadBalancers(elbSvc, cfStackName); err != nil {
+		return errors.New("Unable to delete load balancers: " + err.Error())
+	}
+
 	k8sDeployment.deployKubernetesObjects(config, k8sClient)
 
 	return nil
@@ -474,6 +488,44 @@ func (k8sDeployment *KubernetesDeployment) waitUntilInternetGatewayDeleted(ec2Sv
 	}
 }
 
+func (k8sDeployment *KubernetesDeployment) deleteLoadBalancers(elbSvc *elb.ELB, stackName string) error {
+	log := k8sDeployment.DeployedCluster.Logger
+	log.Infof("Deleting loadBalancer...")
+	resp, _ := elbSvc.DescribeLoadBalancers(nil)
+	for _, lbd := range resp.LoadBalancerDescriptions {
+		isDeploymentLoadBalancer := false
+		describeTagsInput := &elb.DescribeTagsInput{
+			LoadBalancerNames: []*string{
+				lbd.LoadBalancerName,
+			},
+		}
+
+		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
+			log.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
+		} else {
+			for _, tagDescription := range tagsOutput.TagDescriptions {
+				for _, tag := range tagDescription.Tags {
+					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == stackName) {
+						isDeploymentLoadBalancer = true
+						break
+					}
+				}
+			}
+		}
+
+		if !isDeploymentLoadBalancer {
+			continue
+		}
+
+		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
+		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
+			return fmt.Errorf("Unable to deleting loadBalancer: %s", err.Error())
+		}
+	}
+
+	return nil
+}
+
 func (k8sDeployment *KubernetesDeployment) deleteCloudFormationStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string) error {
 	log := k8sDeployment.DeployedCluster.Logger
 	// find k8s-node stack name
@@ -528,38 +580,8 @@ func (k8sDeployment *KubernetesDeployment) deleteCloudFormationStack(elbSvc *elb
 		log.Warningf("Unable to find k8s-master/k8s-node stack...")
 	}
 
-	// delete loadBalancer
-	log.Infof("Deleting loadBalancer...")
-	resp, _ := elbSvc.DescribeLoadBalancers(nil)
-	for _, lbd := range resp.LoadBalancerDescriptions {
-		isDeploymentLoadBalancer := false
-		describeTagsInput := &elb.DescribeTagsInput{
-			LoadBalancerNames: []*string{
-				lbd.LoadBalancerName,
-			},
-		}
-
-		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
-			log.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
-		} else {
-			for _, tagDescription := range tagsOutput.TagDescriptions {
-				for _, tag := range tagDescription.Tags {
-					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == stackName) {
-						isDeploymentLoadBalancer = true
-						break
-					}
-				}
-			}
-		}
-
-		if !isDeploymentLoadBalancer {
-			continue
-		}
-
-		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
-		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
-			log.Warningf("Unable to deleting loadBalancer: %s", err.Error())
-		}
+	if err := k8sDeployment.deleteLoadBalancers(elbSvc, stackName); err != nil {
+		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
 	// delete bastion-Host EC2 instance
