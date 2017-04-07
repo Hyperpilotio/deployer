@@ -719,6 +719,15 @@ func (server *Server) storeDeploymentStatus() {
 	if err := common.Store(depStatPath, &deploymentStatus); err != nil {
 		glog.Warningf("Unable to store deployment status: %s", err.Error())
 	}
+
+	// Store deploymentStatus to simpleDB
+	if db, err := NewDB(server.Config); err != nil {
+		glog.Warningf("Unable to new database object: %s", err.Error())
+	} else {
+		if err := db.StoreDeploymentStatus(deploymentStatus); err != nil {
+			glog.Warningf("Unable to store deployment status to simpleDB: %s", err.Error())
+		}
+	}
 }
 
 func (server *Server) loadDeploymentStatus() {
