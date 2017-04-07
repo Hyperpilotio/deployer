@@ -724,6 +724,18 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 			return fmt.Errorf("Unable to list services in namespace '%s' for deletion: %s", namespace, listError.Error())
 		}
 
+		pods := k8sClient.CoreV1().Pods(namespace)
+		if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
+			for _, pod := range podLists.Items {
+				podName := pod.GetObjectMeta().GetName()
+				if err := pods.Delete(podName, &v1.DeleteOptions{}); err != nil {
+					log.Warningf("Unable to delete pod %s: %s", podName, err.Error())
+				}
+			}
+		} else {
+			return fmt.Errorf("Unable to list pods in namespace '%s' for deletion: %s", namespace, listError.Error())
+		}
+
 		secrets := k8sClient.CoreV1().Secrets(namespace)
 		if secretList, listError := secrets.List(v1.ListOptions{}); listError == nil {
 			for _, secret := range secretList.Items {
