@@ -868,6 +868,7 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes(k8sClient *k8s.Clientset
 	for nodeName, id := range nodeInfos {
 		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName); err == nil {
 			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
+			node.Labels["hyperpilot/deployment"] = k8sDeployment.DeployedCluster.Name
 			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
 				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
 			}
