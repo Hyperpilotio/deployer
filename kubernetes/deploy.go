@@ -274,7 +274,7 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 				Value: aws.String(k8sDeployment.DeployedCluster.Deployment.Name),
 			},
 		},
-		TemplateURL:      aws.String("https://hyperpilot-k8s.s3.amazonaws.com/kubernetes-cluster-with-new-vpc.template"),
+		TemplateURL:      aws.String("https://hyperpilot-snap-collectors.s3.amazonaws.com/kubernetes-cluster-with-new-vpc.template"),
 		TimeoutInMinutes: aws.Int64(30),
 	}
 	log.Info("Creating kubernetes stack...")
