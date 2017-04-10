@@ -666,7 +666,7 @@ func (server *Server) storeDeploymentStatus() {
 	if db, err := NewDB(server.Config); err != nil {
 		glog.Warningf("Unable to new database object: %s", err.Error())
 	} else {
-		if err := db.StoreDeploymentStatus(deploymentStatus); err != nil {
+		if err := db.Insert(deploymentStatus); err != nil {
 			glog.Warningf("Unable to store deployment status to simpleDB: %s", err.Error())
 		}
 	}
