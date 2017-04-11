@@ -14,6 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
@@ -702,15 +706,8 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	})
 }
 
-// On disk representation struct
-// TODO:: Moving all following to store
-type DeploymentFile struct {
-	DeployedClusters   map[string]*DeploymentInfo
-	KubernetesClusters *kubernetes.KubernetesClusters
-}
-
-func (server *Server) storeDeploymentStatus() {
-	deploymentStatus := &DeploymentFile{
+func (server *Server) storeDeploymentStatus(deleteItemName *string) {
+	deploymentStatus := &DeploymentStatus{
 		DeployedClusters:   server.DeployedClusters,
 		KubernetesClusters: server.KubernetesClusters,
 	}
@@ -724,24 +721,108 @@ func (server *Server) storeDeploymentStatus() {
 	if db, err := NewDB(server.Config); err != nil {
 		glog.Warningf("Unable to new database object: %s", err.Error())
 	} else {
-		if err := db.Insert(deploymentStatus); err != nil {
-			glog.Warningf("Unable to store deployment status to simpleDB: %s", err.Error())
+		if deleteItemName != nil {
+			if err := db.DeleteClusterState(deleteItemName); err != nil {
+				glog.Warningf("Unable to delete %s deployment status from simpleDB: %s", deleteItemName, err.Error())
+			}
+		}
+
+		for deploymentName, deployedCluster := range server.DeployedClusters {
+			instanceIds := []string{}
+			for _, id := range deployedCluster.InstanceIds {
+				instanceIds = append(instanceIds, aws.StringValue(id))
+			}
+
+			clusterState := &ClusterState{
+				DeploymentName:    deploymentName,
+				Region:            deployedCluster.Deployment.Region,
+				BastionIp:         "",
+				MasterIp:          "",
+				KubeConfigCommand: "",
+				KeyName:           aws.StringValue(deployedCluster.KeyPair.KeyName),
+				KeyFingerprint:    aws.StringValue(deployedCluster.KeyPair.KeyFingerprint),
+				KeyMaterial_1:     aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[:1024],
+				KeyMaterial_2:     aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[1024:],
+				SecurityGroupId:   deployedCluster.SecurityGroupId,
+				SubnetId:          deployedCluster.SubnetId,
+				InternetGatewayId: deployedCluster.InternetGatewayId,
+				VpcId:             deployedCluster.VpcId,
+				InstanceIds:       strings.Join(instanceIds, ","),
+			}
+
+			if server.KubernetesClusters.Clusters[deploymentName] != nil {
+				bastionIp := server.KubernetesClusters.Clusters[deploymentName].BastionIp
+				masterIp := server.KubernetesClusters.Clusters[deploymentName].MasterIp
+				kubeConfigPath := server.KubernetesClusters.Clusters[deploymentName].KubeConfigPath
+
+				clusterState.KubeConfigPath = kubeConfigPath
+				clusterState.BastionIp = bastionIp
+				clusterState.MasterIp = masterIp
+				clusterState.KubeConfigCommand = fmt.Sprintf("scp -o ProxyCommand='ssh ubuntu@%s nc %s 22' ubuntu@%s:~/kubeconfig kubeconfig",
+					bastionIp, masterIp, masterIp)
+			}
+
+			if err := db.StoreClusterState(clusterState); err != nil {
+				glog.Warningf("Unable to store %s deployment status to simpleDB: %s", deploymentName, err.Error())
+			}
 		}
 	}
 }
 
 func (server *Server) loadDeploymentStatus() {
-	deploymentStatus := &DeploymentFile{}
-	depStatPath := path.Join(server.Config.GetString("filesPath"), "DeploymentStatus")
-	if _, err := os.Stat(depStatPath); err == nil {
-		if err := common.Load(depStatPath, &deploymentStatus); err != nil {
-			glog.Warningf("Unable to read deploymentStatus status file: %s", err.Error())
+	if db, err := NewDB(server.Config); err != nil {
+		glog.Warningf("Unable to new database object: %s", err.Error())
+	} else {
+		if clusterStates, err := db.LoadClusterState(); err != nil {
+			glog.Warningf("Unable to load deployment status from simpleDB: %s", err.Error())
 		} else {
-			server.DeployedClusters = deploymentStatus.DeployedClusters
-			server.KubernetesClusters = deploymentStatus.KubernetesClusters
-			if len(server.DeployedClusters) > 0 {
-				for deploymentName := range server.DeployedClusters {
-					glog.Infof("Find deployment name %s in deployedClusters...", deploymentName)
+			for _, clusterState := range clusterStates {
+				deployment := &apis.Deployment{
+					Name:   clusterState.DeploymentName,
+					Region: clusterState.Region,
+				}
+
+				keyPair := &ec2.CreateKeyPairOutput{
+					KeyName:        aws.String(clusterState.KeyName),
+					KeyFingerprint: aws.String(clusterState.KeyFingerprint),
+					KeyMaterial:    aws.String(clusterState.KeyMaterial_1 + clusterState.KeyMaterial_2),
+				}
+
+				deployedCluster := awsecs.NewDeployedCluster(deployment)
+				deployedCluster.KeyPair = keyPair
+				deployedCluster.SecurityGroupId = clusterState.SecurityGroupId
+				deployedCluster.SubnetId = clusterState.SubnetId
+				deployedCluster.InternetGatewayId = clusterState.InternetGatewayId
+				deployedCluster.VpcId = clusterState.VpcId
+
+				if clusterState.InstanceIds != "" {
+					instanceIds := []*string{}
+					instanceIdArray := strings.Split(clusterState.InstanceIds, ",")
+					for _, id := range instanceIdArray {
+						instanceIds = append(instanceIds, aws.String(id))
+					}
+					deployedCluster.InstanceIds = instanceIds
+				}
+
+				server.DeployedClusters[deployment.Name] = deployedCluster
+
+				k8sDeployment := &kubernetes.KubernetesDeployment{
+					BastionIp:       clusterState.BastionIp,
+					MasterIp:        clusterState.MasterIp,
+					KubeConfigPath:  clusterState.KubeConfigPath,
+					DeployedCluster: deployedCluster,
+				}
+
+				if kubeConfig, err := clientcmd.BuildConfigFromFlags("", clusterState.KubeConfigPath); err != nil {
+					glog.Warningf("Unable to parse kube config: " + err.Error())
+				} else {
+					k8sDeployment.KubeConfig = kubeConfig
+				}
+				server.KubernetesClusters.Clusters[deployment.Name] = k8sDeployment
+
+				// Set the deployment type to Kubernetes
+				if k8sDeployment.KubeConfig != nil {
+					deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
 				}
 			}
 		}
