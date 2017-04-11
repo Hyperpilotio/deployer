@@ -928,6 +928,88 @@ func (k8sDeployment *KubernetesDeployment) createSecrets(k8sClient *k8s.Clientse
 	return nil
 }
 
+func (k8sDeployment *KubernetesDeployment) createServiceForDeployment(namespace string, family string, k8sClient *k8s.Clientset, task apis.KubernetesTask, container v1.Container) error {
+	log := k8sDeployment.DeployedCluster.Logger
+
+	if len(container.Ports) == 0 {
+		return nil
+	}
+
+	service := k8sClient.CoreV1().Services(namespace)
+	serviceName := family
+	if !strings.HasPrefix(family, serviceName) {
+		serviceName = serviceName + "-" + container.Name
+	}
+	labels := map[string]string{"app": family}
+	servicePorts := []v1.ServicePort{}
+	for i, port := range container.Ports {
+		newPort := v1.ServicePort{
+			Port:       port.HostPort,
+			TargetPort: intstr.FromInt(int(port.ContainerPort)),
+			Name:       "port" + strconv.Itoa(i),
+		}
+		servicePorts = append(servicePorts, newPort)
+	}
+
+	internalService := &v1.Service{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      serviceName,
+			Labels:    labels,
+			Namespace: namespace,
+		},
+		Spec: v1.ServiceSpec{
+			Type:     v1.ServiceTypeClusterIP,
+			Ports:    servicePorts,
+			Selector: labels,
+		},
+	}
+	_, err := service.Create(internalService)
+	if err != nil {
+		return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
+	}
+	log.Infof("Created %s internal service", serviceName)
+
+	// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
+	if task.PortTypes == nil || len(task.PortTypes) == 0 {
+		return nil
+	}
+
+	for i, portType := range task.PortTypes {
+		if portType != publicPortType {
+			log.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
+			continue
+		}
+		// public port
+		publicServiceName := serviceName + "-public" + servicePorts[i].Name
+		publicService := &v1.Service{
+			ObjectMeta: v1.ObjectMeta{
+				Name:      publicServiceName,
+				Labels:    labels,
+				Namespace: namespace,
+			},
+			Spec: v1.ServiceSpec{
+				Type: v1.ServiceTypeLoadBalancer,
+				Ports: []v1.ServicePort{
+					v1.ServicePort{
+						Port:       servicePorts[i].Port,
+						TargetPort: servicePorts[i].TargetPort,
+						Name:       "public-" + servicePorts[i].Name,
+					},
+				},
+				Selector: labels,
+			},
+		}
+		_, err := service.Create(publicService)
+		if err != nil {
+			return fmt.Errorf("Unable to create public service %s: %s", publicServiceName, err)
+		}
+
+		log.Infof("Created a public service %s with port %d", publicServiceName, servicePorts[i].Port)
+	}
+
+	return nil
+}
+
 func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
 	log := k8sDeployment.DeployedCluster.Logger
 	if k8sDeployment.KubeConfig == nil {
@@ -960,20 +1042,17 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 		originalFamily := family
 		count, ok := taskCount[family]
+		originalName := deploySpec.GetObjectMeta().GetName()
+		metaLabels := deploySpec.GetObjectMeta().GetLabels()
+		labels := deploySpec.Spec.Template.GetObjectMeta().GetLabels()
+
 		if !ok {
 			count = 1
 		} else {
 			count += 1
 			family = family + "-" + strconv.Itoa(count)
-			newName := deploySpec.GetObjectMeta().GetName() + "-" + strconv.Itoa(count)
-			newLabels := map[string]string{"app": newName}
-
-			// Update deploy spec to reflect multiple count of the same task
-			deploySpec.GetObjectMeta().SetName(newName)
-			deploySpec.GetObjectMeta().SetLabels(newLabels)
-			deploySpec.Spec.Selector.MatchLabels = newLabels
-			deploySpec.Spec.Template.GetObjectMeta().SetLabels(newLabels)
 		}
+
 		taskCount[originalFamily] = count
 
 		// Assigning Pods to Nodes
@@ -985,81 +1064,49 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			if len(container.Ports) == 0 {
-				continue
-			}
-
-			service := k8sClient.CoreV1().Services(namespace)
-			serviceName := family
-			if !strings.HasPrefix(family, serviceName) {
-				serviceName = serviceName + "-" + container.Name
-			}
-			labels := map[string]string{"app": family}
-			servicePorts := []v1.ServicePort{}
-			for i, port := range container.Ports {
-				newPort := v1.ServicePort{
-					Port:       port.HostPort,
-					TargetPort: intstr.FromInt(int(port.ContainerPort)),
-					Name:       "port" + strconv.Itoa(i),
-				}
-				servicePorts = append(servicePorts, newPort)
-			}
-
-			internalService := &v1.Service{
-				ObjectMeta: v1.ObjectMeta{
-					Name:      serviceName,
-					Labels:    labels,
-					Namespace: namespace,
-				},
-				Spec: v1.ServiceSpec{
-					Type:     v1.ServiceTypeClusterIP,
-					Ports:    servicePorts,
-					Selector: labels,
-				},
-			}
-			_, err := service.Create(internalService)
+			err := k8sDeployment.createServiceForDeployment(namespace, family, k8sClient, task, container)
 			if err != nil {
-				return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
-			}
-			log.Infof("Created %s internal service", serviceName)
-
-			// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
-			if task.PortTypes != nil && len(task.PortTypes) > 0 {
-				for i, portType := range task.PortTypes {
-					if portType == publicPortType { // public port
-						publicServiceName := serviceName + "-public" + servicePorts[i].Name
-						publicService := &v1.Service{
-							ObjectMeta: v1.ObjectMeta{
-								Name:      publicServiceName,
-								Labels:    labels,
-								Namespace: namespace,
-							},
-							Spec: v1.ServiceSpec{
-								Type: v1.ServiceTypeLoadBalancer,
-								Ports: []v1.ServicePort{
-									v1.ServicePort{
-										Port:       servicePorts[i].Port,
-										TargetPort: servicePorts[i].TargetPort,
-										Name:       "public-" + servicePorts[i].Name,
-									},
-								},
-								Selector: labels,
-							},
-						}
-						_, err := service.Create(publicService)
-						if err != nil {
-							return fmt.Errorf("Unable to create public service %s: %s", publicServiceName, err)
-						}
-						log.Infof("Created a public service %s with port %d", publicServiceName, servicePorts[i].Port)
-					} else { // private port
-						log.Infof("Skipping creating public endpoint for service %s as it's marked as private", serviceName)
-					}
-				}
+				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
 		}
 
 		deploy := k8sClient.Extensions().Deployments(namespace)
+		newName := originalName + "-" + strconv.Itoa(count)
+		if count > 1 {
+			metaLabels["app"] = newName
+			labels["app"] = newName
+
+			// Update deploy spec to reflect multiple count of the same task
+			deploySpec.GetObjectMeta().SetName(newName)
+			deploySpec.GetObjectMeta().SetLabels(metaLabels)
+			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": newName}
+			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
+			for _, container := range deploySpec.Spec.Template.Spec.Containers {
+				if container.Name == originalName {
+					container.Name = newName
+				}
+			}
+		}
+
 		_, err := deploy.Create(deploySpec)
+
+		if count > 1 {
+			// Reset the label changes
+			metaLabels["app"] = originalName
+			labels["app"] = originalName
+
+			// Update deploy spec to reflect multiple count of the same task
+			deploySpec.GetObjectMeta().SetName(originalName)
+			deploySpec.GetObjectMeta().SetLabels(metaLabels)
+			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": originalName}
+			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
+			for _, container := range deploySpec.Spec.Template.Spec.Containers {
+				if container.Name == newName {
+					container.Name = originalName
+				}
+			}
+		}
+
 		if err != nil {
 			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
 		}
