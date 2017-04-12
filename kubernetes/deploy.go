@@ -389,11 +389,6 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 
 	k8sDeployment.deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig)
 
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
-	}
-
 	k8sDeployment.deployKubernetesObjects(config, k8sClient)
 
 	return nil
