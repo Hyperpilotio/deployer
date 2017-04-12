@@ -336,7 +336,7 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 	k8sDeployment.BastionIp = addresses[0]
 	k8sDeployment.MasterIp = addresses[1]
 
-	if err := k8sDeployment.downloadKubeConfig(); err != nil {
+	if err := k8sDeployment.DownloadKubeConfig(); err != nil {
 		return errors.New("Unable to download kubeconfig: " + err.Error())
 	}
 
@@ -1196,7 +1196,7 @@ func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.
 }
 
 // DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
-func (k8sDeployment *KubernetesDeployment) downloadKubeConfig() error {
+func (k8sDeployment *KubernetesDeployment) DownloadKubeConfig() error {
 	deployedCluster := k8sDeployment.DeployedCluster
 	baseDir := deployedCluster.Deployment.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
