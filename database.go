@@ -15,21 +15,13 @@ import (
 )
 
 type ClusterState struct {
-	DeploymentName    string
-	Region            string
-	BastionIp         string
-	MasterIp          string
-	KubeConfigCommand string
-	KubeConfigPath    string
-	KeyName           string
-	KeyFingerprint    string
-	KeyMaterial_1     string
-	KeyMaterial_2     string
-	SecurityGroupId   string
-	SubnetId          string
-	InternetGatewayId string
-	VpcId             string
-	InstanceIds       string
+	DeploymentName string
+	Region         string
+	BastionIp      string
+	MasterIp       string
+	KeyName        string
+	KeyMaterial_1  string
+	KeyMaterial_2  string
 }
 
 type DB interface {
