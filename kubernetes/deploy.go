@@ -394,12 +394,6 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
 	}
 
-	elbSvc := elb.New(sess)
-	cfStackName := deployedCluster.StackName()
-	if err := k8sDeployment.deleteLoadBalancers(elbSvc, cfStackName); err != nil {
-		return errors.New("Unable to delete load balancers: " + err.Error())
-	}
-
 	k8sDeployment.deployKubernetesObjects(config, k8sClient)
 
 	return nil
