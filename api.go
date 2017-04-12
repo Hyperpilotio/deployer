@@ -706,7 +706,7 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	})
 }
 
-func (server *Server) storeDeploymentStatus(deleteItemName *string) {
+func (server *Server) storeDeploymentStatus(deleteItemName *string) error {
 	deploymentStatus := &DeploymentStatus{
 		DeployedClusters:   server.DeployedClusters,
 		KubernetesClusters: server.KubernetesClusters,
@@ -714,117 +714,100 @@ func (server *Server) storeDeploymentStatus(deleteItemName *string) {
 
 	depStatPath := path.Join(server.Config.GetString("filesPath"), "DeploymentStatus")
 	if err := common.Store(depStatPath, &deploymentStatus); err != nil {
-		glog.Warningf("Unable to store deployment status: %s", err.Error())
+		return fmt.Errorf("Unable to store deployment status: %s", err.Error())
 	}
 
 	// Store deploymentStatus to simpleDB
 	if db, err := NewDB(server.Config); err != nil {
-		glog.Warningf("Unable to new database object: %s", err.Error())
+		return fmt.Errorf("Unable to new database object: %s", err.Error())
 	} else {
 		if deleteItemName != nil {
 			if err := db.DeleteClusterState(deleteItemName); err != nil {
-				glog.Warningf("Unable to delete %s deployment status from simpleDB: %s", deleteItemName, err.Error())
+				return fmt.Errorf("Unable to delete %s deployment status from simpleDB: %s", deleteItemName, err.Error())
 			}
 		}
 
 		for deploymentName, deployedCluster := range server.DeployedClusters {
-			instanceIds := []string{}
-			for _, id := range deployedCluster.InstanceIds {
-				instanceIds = append(instanceIds, aws.StringValue(id))
-			}
-
 			clusterState := &ClusterState{
-				DeploymentName:    deploymentName,
-				Region:            deployedCluster.Deployment.Region,
-				BastionIp:         "",
-				MasterIp:          "",
-				KubeConfigCommand: "",
-				KeyName:           aws.StringValue(deployedCluster.KeyPair.KeyName),
-				KeyFingerprint:    aws.StringValue(deployedCluster.KeyPair.KeyFingerprint),
-				KeyMaterial_1:     aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[:1024],
-				KeyMaterial_2:     aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[1024:],
-				SecurityGroupId:   deployedCluster.SecurityGroupId,
-				SubnetId:          deployedCluster.SubnetId,
-				InternetGatewayId: deployedCluster.InternetGatewayId,
-				VpcId:             deployedCluster.VpcId,
-				InstanceIds:       strings.Join(instanceIds, ","),
+				DeploymentName: deploymentName,
+				Region:         deployedCluster.Deployment.Region,
+				BastionIp:      "",
+				MasterIp:       "",
+				KeyName:        aws.StringValue(deployedCluster.KeyPair.KeyName),
+				KeyMaterial_1:  aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[:1024],
+				KeyMaterial_2:  aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[1024:],
 			}
 
 			if server.KubernetesClusters.Clusters[deploymentName] != nil {
 				bastionIp := server.KubernetesClusters.Clusters[deploymentName].BastionIp
 				masterIp := server.KubernetesClusters.Clusters[deploymentName].MasterIp
-				kubeConfigPath := server.KubernetesClusters.Clusters[deploymentName].KubeConfigPath
 
-				clusterState.KubeConfigPath = kubeConfigPath
 				clusterState.BastionIp = bastionIp
 				clusterState.MasterIp = masterIp
-				clusterState.KubeConfigCommand = fmt.Sprintf("scp -o ProxyCommand='ssh ubuntu@%s nc %s 22' ubuntu@%s:~/kubeconfig kubeconfig",
-					bastionIp, masterIp, masterIp)
 			}
 
 			if err := db.StoreClusterState(clusterState); err != nil {
-				glog.Warningf("Unable to store %s deployment status to simpleDB: %s", deploymentName, err.Error())
+				return fmt.Errorf("Unable to store %s deployment status to simpleDB: %s", deploymentName, err.Error())
 			}
 		}
 	}
+
+	return nil
 }
 
-func (server *Server) loadDeploymentStatus() {
+func (server *Server) loadDeploymentStatus() error {
 	if db, err := NewDB(server.Config); err != nil {
-		glog.Warningf("Unable to new database object: %s", err.Error())
+		return fmt.Errorf("Unable to new database object: %s", err.Error())
 	} else {
 		if clusterStates, err := db.LoadClusterState(); err != nil {
-			glog.Warningf("Unable to load deployment status from simpleDB: %s", err.Error())
+			return fmt.Errorf("Unable to load deployment status from simpleDB: %s", err.Error())
 		} else {
 			for _, clusterState := range clusterStates {
+				deploymentName := clusterState.DeploymentName
 				deployment := &apis.Deployment{
-					Name:   clusterState.DeploymentName,
+					Name:   deploymentName,
 					Region: clusterState.Region,
 				}
-
-				keyPair := &ec2.CreateKeyPairOutput{
-					KeyName:        aws.String(clusterState.KeyName),
-					KeyFingerprint: aws.String(clusterState.KeyFingerprint),
-					KeyMaterial:    aws.String(clusterState.KeyMaterial_1 + clusterState.KeyMaterial_2),
-				}
-
 				deployedCluster := awsecs.NewDeployedCluster(deployment)
-				deployedCluster.KeyPair = keyPair
-				deployedCluster.SecurityGroupId = clusterState.SecurityGroupId
-				deployedCluster.SubnetId = clusterState.SubnetId
-				deployedCluster.InternetGatewayId = clusterState.InternetGatewayId
-				deployedCluster.VpcId = clusterState.VpcId
 
-				if clusterState.InstanceIds != "" {
-					instanceIds := []*string{}
-					instanceIdArray := strings.Split(clusterState.InstanceIds, ",")
-					for _, id := range instanceIdArray {
-						instanceIds = append(instanceIds, aws.String(id))
-					}
-					deployedCluster.InstanceIds = instanceIds
-				}
-
-				server.DeployedClusters[deployment.Name] = deployedCluster
-
-				k8sDeployment := &kubernetes.KubernetesDeployment{
-					BastionIp:       clusterState.BastionIp,
-					MasterIp:        clusterState.MasterIp,
-					KubeConfigPath:  clusterState.KubeConfigPath,
-					DeployedCluster: deployedCluster,
-				}
-
-				if kubeConfig, err := clientcmd.BuildConfigFromFlags("", clusterState.KubeConfigPath); err != nil {
-					glog.Warningf("Unable to parse kube config: " + err.Error())
+				// Reload keypair
+				if err := awsecs.ReloadKeyPair(server.Config, deployedCluster); err != nil {
+					return fmt.Errorf("Unable to load %s keyPair: %s", deploymentName, err.Error())
 				} else {
-					k8sDeployment.KubeConfig = kubeConfig
+					deployedCluster.KeyPair.KeyMaterial = aws.String(clusterState.KeyMaterial_1 + clusterState.KeyMaterial_2)
 				}
-				server.KubernetesClusters.Clusters[deployment.Name] = k8sDeployment
 
-				// Set the deployment type to Kubernetes
-				if k8sDeployment.KubeConfig != nil {
+				if (clusterState.BastionIp != "") && (clusterState.MasterIp != "") {
+					// Deployment type is kubernetes
 					deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
+					k8sDeployment := &kubernetes.KubernetesDeployment{
+						BastionIp:       clusterState.BastionIp,
+						MasterIp:        clusterState.MasterIp,
+						DeployedCluster: deployedCluster,
+					}
+
+					if err := k8sDeployment.DownloadKubeConfig(); err != nil {
+						return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
+					} else {
+						glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
+						if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
+							return fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
+						} else {
+							k8sDeployment.KubeConfig = kubeConfig
+						}
+					}
+					server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
+				} else {
+					//  Deployment type is awsecs
+					deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
+					if err := awsecs.ReloadInstanceIds(server.Config, deployedCluster); err != nil {
+						return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+					}
 				}
+				server.DeployedClusters[deploymentName] = deployedCluster
 			}
 		}
 	}
+
+	return nil
 }
