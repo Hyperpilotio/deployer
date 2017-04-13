@@ -696,7 +696,7 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 	}
 
 	for _, namespace := range namespaces {
-		glog.Info("Deleting kubernetes objects in namespace " + namespace)
+		log.Info("Deleting kubernetes objects in namespace " + namespace)
 		daemonsets := k8sClient.Extensions().DaemonSets(namespace)
 		if daemonsetList, listError := daemonsets.List(v1.ListOptions{}); listError == nil {
 			for _, daemonset := range daemonsetList.Items {
@@ -1041,15 +1041,23 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 		originalFamily := family
 		count, ok := taskCount[family]
-		originalName := deploySpec.GetObjectMeta().GetName()
-		metaLabels := deploySpec.GetObjectMeta().GetLabels()
-		labels := deploySpec.Spec.Template.GetObjectMeta().GetLabels()
 
 		if !ok {
 			count = 1
+			deploySpec.Name = originalFamily
+			deploySpec.Labels["app"] = originalFamily
+			deploySpec.Spec.Template.Labels["app"] = originalFamily
 		} else {
+			// Update deploy spec to reflect multiple count of the same task
 			count += 1
 			family = family + "-" + strconv.Itoa(count)
+			deploySpec.Name = family
+			deploySpec.Labels["app"] = family
+			deploySpec.Spec.Template.Labels["app"] = family
+		}
+
+		if deploySpec.Spec.Selector != nil {
+			deploySpec.Spec.Selector.MatchLabels = deploySpec.Spec.Template.Labels
 		}
 
 		taskCount[originalFamily] = count
@@ -1070,42 +1078,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		}
 
 		deploy := k8sClient.Extensions().Deployments(namespace)
-		newName := originalName + "-" + strconv.Itoa(count)
-		if count > 1 {
-			metaLabels["app"] = newName
-			labels["app"] = newName
-
-			// Update deploy spec to reflect multiple count of the same task
-			deploySpec.GetObjectMeta().SetName(newName)
-			deploySpec.GetObjectMeta().SetLabels(metaLabels)
-			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": newName}
-			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
-			for _, container := range deploySpec.Spec.Template.Spec.Containers {
-				if container.Name == originalName {
-					container.Name = newName
-				}
-			}
-		}
-
 		_, err := deploy.Create(deploySpec)
-
-		if count > 1 {
-			// Reset the label changes
-			metaLabels["app"] = originalName
-			labels["app"] = originalName
-
-			// Update deploy spec to reflect multiple count of the same task
-			deploySpec.GetObjectMeta().SetName(originalName)
-			deploySpec.GetObjectMeta().SetLabels(metaLabels)
-			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": originalName}
-			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
-			for _, container := range deploySpec.Spec.Template.Spec.Containers {
-				if container.Name == newName {
-					container.Name = originalName
-				}
-			}
-		}
-
 		if err != nil {
 			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
 		}
