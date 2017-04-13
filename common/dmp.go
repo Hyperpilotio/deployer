@@ -10,7 +10,7 @@ import (
 )
 
 // Store struct to file
-func Store(path string, object interface{}) error {
+func WriteObjectToFile(path string, object interface{}) error {
 	b := new(bytes.Buffer)
 	enc := gob.NewEncoder(b)
 	if err := enc.Encode(object); err != nil {
@@ -33,7 +33,7 @@ func Store(path string, object interface{}) error {
 }
 
 // Load file to struct
-func Load(path string, object interface{}) error {
+func LoadFileToObject(path string, object interface{}) error {
 	file, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("Unable to open file path with %s: %s", path, err.Error())
