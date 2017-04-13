@@ -185,7 +185,7 @@ func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, up
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient); err != nil {
+	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, false); err != nil {
 		k8sDeployment.deleteDeploymentOnFailure(config)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
@@ -193,20 +193,26 @@ func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, up
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployKubernetesObjects(config *viper.Viper, k8sClient *k8s.Clientset) error {
+func (k8sDeployment *KubernetesDeployment) deployKubernetesObjects(config *viper.Viper, k8sClient *k8s.Clientset, skipDelete bool) error {
 	namespaces, namespacesErr := k8sDeployment.getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+		if !skipDelete {
+			k8sDeployment.deleteDeploymentOnFailure(config)
+		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := k8sDeployment.createSecrets(k8sClient, namespaces); err != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+		if !skipDelete {
+			k8sDeployment.deleteDeploymentOnFailure(config)
+		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := k8sDeployment.deployServices(k8sClient, namespaces); err != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+		if !skipDelete {
+			k8sDeployment.deleteDeploymentOnFailure(config)
+		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -387,9 +393,13 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	k8sDeployment.deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig)
+	if err := k8sDeployment.deleteK8S(k8sDeployment.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
+		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
+	}
 
-	k8sDeployment.deployKubernetesObjects(config, k8sClient)
+	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, true); err != nil {
+		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
+	}
 
 	return nil
 }
