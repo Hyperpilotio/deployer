@@ -704,7 +704,7 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 			for _, deployment := range deployLists.Items {
 				name := deployment.GetObjectMeta().GetName()
 				if err := deploys.Delete(name, &v1.DeleteOptions{}); err != nil {
-					log.Warningf("Unable to delete daemonset %s: %s", name, err.Error())
+					log.Warningf("Unable to delete deployment %s: %s", name, err.Error())
 				}
 			}
 		} else {
