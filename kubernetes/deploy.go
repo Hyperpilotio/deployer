@@ -44,6 +44,13 @@ type CreateDeploymentResponse struct {
 	MasterIp  string            `json:"masterIp"`
 }
 
+type DeploymentLoadBalancers struct {
+	StackName             string
+	ApiServerBalancerName string
+	LoadBalancerNames     []string
+	SecurityGroupNames    map[string]string
+}
+
 type KubernetesClusters struct {
 	Clusters map[string]*KubernetesDeployment
 }
@@ -397,6 +404,19 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
+	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
+	}
+
+	elbSvc := elb.New(sess)
+	ec2Svc := ec2.New(sess)
+
+	stackName := k8sDeployment.DeployedCluster.StackName()
+	if err := k8sDeployment.deleteLoadBalancers(elbSvc, ec2Svc, stackName, true); err != nil {
+		log.Warningf("Unable to delete load balancers: " + err.Error())
+	}
+
 	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, true); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -487,39 +507,199 @@ func (k8sDeployment *KubernetesDeployment) waitUntilInternetGatewayDeleted(ec2Sv
 	}
 }
 
-func (k8sDeployment *KubernetesDeployment) deleteLoadBalancers(elbSvc *elb.ELB, stackName string) error {
+func (k8sDeployment *KubernetesDeployment) deleteNetworkInterfaces(ec2Svc *ec2.EC2, stackName string, securityGroupNames []*string) error {
+	log := k8sDeployment.DeployedCluster.Logger
+	errBool := false
+
+	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("group-name"),
+				Values: securityGroupNames,
+			},
+		},
+	}
+
+	resp, err := ec2Svc.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of network interface: %s\n", err.Error())
+	}
+
+	networkInterfaceIds := []*string{}
+	for _, nif := range resp.NetworkInterfaces {
+		detachNetworkInterfaceInput := &ec2.DetachNetworkInterfaceInput{
+			AttachmentId: nif.Attachment.AttachmentId,
+			Force:        aws.Bool(true),
+		}
+		if _, err := ec2Svc.DetachNetworkInterface(detachNetworkInterfaceInput); err != nil {
+			return fmt.Errorf("Unable to detach network interface: %s\n", err.Error())
+		}
+		networkInterfaceIds = append(networkInterfaceIds, nif.NetworkInterfaceId)
+	}
+
+	params := &ec2.DescribeNetworkInterfacesInput{
+		NetworkInterfaceIds: networkInterfaceIds,
+	}
+	if err := ec2Svc.WaitUntilNetworkInterfaceAvailable(params); err != nil {
+		log.Warningf("Unable to wait until network interface is available: %s\n", err.Error())
+	}
+
+	for _, networkInterfaceId := range networkInterfaceIds {
+		deleteNetworkInterfaceInput := &ec2.DeleteNetworkInterfaceInput{
+			NetworkInterfaceId: networkInterfaceId,
+		}
+		if _, err := ec2Svc.DeleteNetworkInterface(deleteNetworkInterfaceInput); err != nil {
+			log.Warningf("Unable to delete network interface: %s\n", err.Error())
+			errBool = true
+		}
+	}
+
+	if errBool {
+		return errors.New("Unable to delete all the relative network interface")
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deleteStackSecurityGroup(ec2Svc *ec2.EC2, stackName string, securityGroupNames []*string) error {
+	log := k8sDeployment.DeployedCluster.Logger
+	errBool := false
+
+	describeParams := &ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("group-name"),
+				Values: securityGroupNames,
+			},
+		},
+	}
+
+	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
+	}
+
+	k8sSgParams := &ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name: aws.String("tag:Name"),
+				Values: []*string{
+					aws.String("k8s-cluster-security-group"),
+				},
+			},
+			{
+				Name: aws.String("tag:KubernetesCluster"),
+				Values: []*string{
+					aws.String(stackName),
+				},
+			},
+		},
+	}
+
+	k8sSgResp, err := ec2Svc.DescribeSecurityGroups(k8sSgParams)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
+	}
+
+	for _, group := range resp.SecurityGroups {
+		revokeSecurityGroupIngressInput := &ec2.RevokeSecurityGroupIngressInput{
+			GroupId: k8sSgResp.SecurityGroups[0].GroupId,
+			IpPermissions: []*ec2.IpPermission{
+				{
+					IpProtocol: aws.String("-1"),
+					UserIdGroupPairs: []*ec2.UserIdGroupPair{
+						{
+							GroupId: group.GroupId,
+						},
+					},
+				},
+			},
+		}
+
+		if _, err := ec2Svc.RevokeSecurityGroupIngress(revokeSecurityGroupIngressInput); err != nil {
+			return fmt.Errorf("Unable to remove ingress rules from security group : %s\n", err.Error())
+		}
+
+		params := &ec2.DeleteSecurityGroupInput{
+			GroupId: group.GroupId,
+		}
+		if _, err := ec2Svc.DeleteSecurityGroup(params); err != nil {
+			log.Warningf("Unable to delete security group: %s\n", err.Error())
+			errBool = true
+		}
+	}
+
+	if errBool {
+		return errors.New("Unable to delete all the relative security groups")
+	}
+
+	return nil
+}
+
+func (k8sDeployment *KubernetesDeployment) deleteLoadBalancers(elbSvc *elb.ELB, ec2Svc *ec2.EC2, stackName string, skipApiServer bool) error {
 	log := k8sDeployment.DeployedCluster.Logger
 	log.Infof("Deleting loadBalancer...")
+
+	deploymentLoadBalancers := &DeploymentLoadBalancers{
+		StackName:          stackName,
+		LoadBalancerNames:  []string{},
+		SecurityGroupNames: make(map[string]string),
+	}
+
 	resp, _ := elbSvc.DescribeLoadBalancers(nil)
 	for _, lbd := range resp.LoadBalancerDescriptions {
-		isDeploymentLoadBalancer := false
+		loadBalancerName := aws.StringValue(lbd.LoadBalancerName)
+		securityGroupName := aws.StringValue(lbd.SourceSecurityGroup.GroupName)
+
 		describeTagsInput := &elb.DescribeTagsInput{
 			LoadBalancerNames: []*string{
 				lbd.LoadBalancerName,
 			},
 		}
 
-		if tagsOutput, err := elbSvc.DescribeTags(describeTagsInput); err != nil {
-			log.Warningf("Unable to describe loadBalancer tags: %s", err.Error())
-		} else {
-			for _, tagDescription := range tagsOutput.TagDescriptions {
-				for _, tag := range tagDescription.Tags {
-					if (aws.StringValue(tag.Key) == "KubernetesCluster") && (aws.StringValue(tag.Value) == stackName) {
-						isDeploymentLoadBalancer = true
-						break
-					}
-				}
+		tagsOutput, err := elbSvc.DescribeTags(describeTagsInput)
+		if err != nil {
+			return fmt.Errorf("Unable to describe loadBalancer tags: %s", err.Error())
+		}
+
+		tagInfos := map[string]string{}
+		for _, tagDescription := range tagsOutput.TagDescriptions {
+			for _, tag := range tagDescription.Tags {
+				tagInfos[aws.StringValue(tag.Key)] = aws.StringValue(tag.Value)
 			}
 		}
 
-		if !isDeploymentLoadBalancer {
-			continue
-		}
+		if tagInfos["KubernetesCluster"] == stackName {
+			if tagInfos["kubernetes.io/service-name"] == "kube-system/apiserver-public" {
+				deploymentLoadBalancers.ApiServerBalancerName = loadBalancerName
+			}
 
-		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{LoadBalancerName: lbd.LoadBalancerName}
+			deploymentLoadBalancers.LoadBalancerNames = append(deploymentLoadBalancers.LoadBalancerNames, loadBalancerName)
+			deploymentLoadBalancers.SecurityGroupNames[loadBalancerName] = securityGroupName
+		}
+	}
+
+	if skipApiServer {
+		delete(deploymentLoadBalancers.SecurityGroupNames, deploymentLoadBalancers.ApiServerBalancerName)
+	}
+
+	securityGroupNames := []*string{}
+	for loadBalancerName, securityGroupName := range deploymentLoadBalancers.SecurityGroupNames {
+		deleteLoadBalancerInput := &elb.DeleteLoadBalancerInput{
+			LoadBalancerName: aws.String(loadBalancerName),
+		}
 		if _, err := elbSvc.DeleteLoadBalancer(deleteLoadBalancerInput); err != nil {
 			return fmt.Errorf("Unable to deleting loadBalancer: %s", err.Error())
 		}
+		securityGroupNames = append(securityGroupNames, aws.String(securityGroupName))
+	}
+
+	if err := k8sDeployment.deleteNetworkInterfaces(ec2Svc, stackName, securityGroupNames); err != nil {
+		log.Warningf("Unable to deleting network interfaces: %s", err.Error())
+	}
+
+	if err := k8sDeployment.deleteStackSecurityGroup(ec2Svc, stackName, securityGroupNames); err != nil {
+		return fmt.Errorf("Unable to deleting stack securityGroups: %s", err.Error())
 	}
 
 	return nil
@@ -579,7 +759,7 @@ func (k8sDeployment *KubernetesDeployment) deleteCloudFormationStack(elbSvc *elb
 		log.Warningf("Unable to find k8s-master/k8s-node stack...")
 	}
 
-	if err := k8sDeployment.deleteLoadBalancers(elbSvc, stackName); err != nil {
+	if err := k8sDeployment.deleteLoadBalancers(elbSvc, ec2Svc, stackName, false); err != nil {
 		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
@@ -1041,15 +1221,23 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 		originalFamily := family
 		count, ok := taskCount[family]
-		originalName := deploySpec.GetObjectMeta().GetName()
-		metaLabels := deploySpec.GetObjectMeta().GetLabels()
-		labels := deploySpec.Spec.Template.GetObjectMeta().GetLabels()
 
 		if !ok {
 			count = 1
+			deploySpec.Name = originalFamily
+			deploySpec.Labels["app"] = originalFamily
+			deploySpec.Spec.Template.Labels["app"] = originalFamily
 		} else {
+			// Update deploy spec to reflect multiple count of the same task
 			count += 1
 			family = family + "-" + strconv.Itoa(count)
+			deploySpec.Name = family
+			deploySpec.Labels["app"] = family
+			deploySpec.Spec.Template.Labels["app"] = family
+		}
+
+		if deploySpec.Spec.Selector != nil {
+			deploySpec.Spec.Selector.MatchLabels = deploySpec.Spec.Template.Labels
 		}
 
 		taskCount[originalFamily] = count
@@ -1070,42 +1258,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		}
 
 		deploy := k8sClient.Extensions().Deployments(namespace)
-		newName := originalName + "-" + strconv.Itoa(count)
-		if count > 1 {
-			metaLabels["app"] = newName
-			labels["app"] = newName
-
-			// Update deploy spec to reflect multiple count of the same task
-			deploySpec.GetObjectMeta().SetName(newName)
-			deploySpec.GetObjectMeta().SetLabels(metaLabels)
-			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": newName}
-			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
-			for _, container := range deploySpec.Spec.Template.Spec.Containers {
-				if container.Name == originalName {
-					container.Name = newName
-				}
-			}
-		}
-
 		_, err := deploy.Create(deploySpec)
-
-		if count > 1 {
-			// Reset the label changes
-			metaLabels["app"] = originalName
-			labels["app"] = originalName
-
-			// Update deploy spec to reflect multiple count of the same task
-			deploySpec.GetObjectMeta().SetName(originalName)
-			deploySpec.GetObjectMeta().SetLabels(metaLabels)
-			deploySpec.Spec.Selector.MatchLabels = map[string]string{"app": originalName}
-			deploySpec.Spec.Template.GetObjectMeta().SetLabels(labels)
-			for _, container := range deploySpec.Spec.Template.Spec.Containers {
-				if container.Name == newName {
-					container.Name = originalName
-				}
-			}
-		}
-
 		if err != nil {
 			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
 		}
