@@ -8,9 +8,11 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
@@ -34,6 +36,16 @@ type DeploymentLog struct {
 	Time   string
 	Status string
 }
+
+type DeploymentLogs []*DeploymentLog
+
+func (d DeploymentLogs) Len() int { return len(d) }
+func (d DeploymentLogs) Less(i, j int) bool {
+	t1, _ := time.Parse(time.RFC3339, d[i].Time)
+	t2, _ := time.Parse(time.RFC3339, d[j].Time)
+	return t1.Before(t2)
+}
+func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 type DeploymentStatus struct {
 	DeployedClusters   map[string]*awsecs.DeployedCluster
@@ -603,15 +615,17 @@ func (server *Server) logUI(c *gin.Context) {
 			"logs": "",
 		})
 	} else {
-		deploymentLogs := []*DeploymentLog{}
+		deploymentLogs := DeploymentLogs{}
 		for _, f := range files {
 			// TODO deployment status: deployed, error
 			deploymentLog := &DeploymentLog{
 				Name: f.Name(),
-				Time: f.ModTime().Format("2006-01-02 15:04:05"),
+				Time: f.ModTime().Format(time.RFC3339),
 			}
 			deploymentLogs = append(deploymentLogs, deploymentLog)
 		}
+
+		sort.Sort(deploymentLogs)
 
 		c.HTML(http.StatusOK, "index.html", gin.H{
 			"msg":  "Hello hyperpilot!",
