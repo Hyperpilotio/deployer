@@ -21,9 +21,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/elb"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/util/intstr"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -137,7 +138,7 @@ func (k8sDeployment *KubernetesDeployment) uploadFiles(ec2Svc *ec2.EC2, uploaded
 func (k8sDeployment *KubernetesDeployment) getExistingNamespaces(k8sClient *k8s.Clientset) (map[string]bool, error) {
 	namespaces := map[string]bool{}
 	k8sNamespaces := k8sClient.CoreV1().Namespaces()
-	existingNamespaces, err := k8sNamespaces.List(v1.ListOptions{})
+	existingNamespaces, err := k8sNamespaces.List(metav1.ListOptions{})
 	if err != nil {
 		return namespaces, fmt.Errorf("Unable to get existing namespaces: " + err.Error())
 	}
@@ -698,10 +699,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 	for _, namespace := range namespaces {
 		log.Info("Deleting kubernetes objects in namespace " + namespace)
 		daemonsets := k8sClient.Extensions().DaemonSets(namespace)
-		if daemonsetList, listError := daemonsets.List(v1.ListOptions{}); listError == nil {
+		if daemonsetList, listError := daemonsets.List(metav1.ListOptions{}); listError == nil {
 			for _, daemonset := range daemonsetList.Items {
 				name := daemonset.GetObjectMeta().GetName()
-				if err := daemonsets.Delete(name, &v1.DeleteOptions{}); err != nil {
+				if err := daemonsets.Delete(name, &metav1.DeleteOptions{}); err != nil {
 					log.Warningf("Unable to delete daemonset %s: %s", name, err.Error())
 				}
 			}
@@ -710,10 +711,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 		}
 
 		deploys := k8sClient.Extensions().Deployments(namespace)
-		if deployLists, listError := deploys.List(v1.ListOptions{}); listError == nil {
+		if deployLists, listError := deploys.List(metav1.ListOptions{}); listError == nil {
 			for _, deployment := range deployLists.Items {
 				name := deployment.GetObjectMeta().GetName()
-				if err := deploys.Delete(name, &v1.DeleteOptions{}); err != nil {
+				if err := deploys.Delete(name, &metav1.DeleteOptions{}); err != nil {
 					log.Warningf("Unable to delete deployment %s: %s", name, err.Error())
 				}
 			}
@@ -722,10 +723,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 		}
 
 		replicaSets := k8sClient.Extensions().ReplicaSets(namespace)
-		if replicaSetList, listError := replicaSets.List(v1.ListOptions{}); listError == nil {
+		if replicaSetList, listError := replicaSets.List(metav1.ListOptions{}); listError == nil {
 			for _, replicaSet := range replicaSetList.Items {
 				name := replicaSet.GetObjectMeta().GetName()
-				if err := replicaSets.Delete(name, &v1.DeleteOptions{}); err != nil {
+				if err := replicaSets.Delete(name, &metav1.DeleteOptions{}); err != nil {
 					glog.Warningf("Unable to delete replica set %s: %s", name, err.Error())
 				}
 			}
@@ -734,10 +735,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 		}
 
 		services := k8sClient.CoreV1().Services(namespace)
-		if serviceLists, listError := services.List(v1.ListOptions{}); listError == nil {
+		if serviceLists, listError := services.List(metav1.ListOptions{}); listError == nil {
 			for _, service := range serviceLists.Items {
 				serviceName := service.GetObjectMeta().GetName()
-				if err := services.Delete(serviceName, &v1.DeleteOptions{}); err != nil {
+				if err := services.Delete(serviceName, &metav1.DeleteOptions{}); err != nil {
 					log.Warningf("Unable to delete service %s: %s", serviceName, err.Error())
 				}
 			}
@@ -746,10 +747,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 		}
 
 		pods := k8sClient.CoreV1().Pods(namespace)
-		if podLists, listError := pods.List(v1.ListOptions{}); listError == nil {
+		if podLists, listError := pods.List(metav1.ListOptions{}); listError == nil {
 			for _, pod := range podLists.Items {
 				podName := pod.GetObjectMeta().GetName()
-				if err := pods.Delete(podName, &v1.DeleteOptions{}); err != nil {
+				if err := pods.Delete(podName, &metav1.DeleteOptions{}); err != nil {
 					log.Warningf("Unable to delete pod %s: %s", podName, err.Error())
 				}
 			}
@@ -758,10 +759,10 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 		}
 
 		secrets := k8sClient.CoreV1().Secrets(namespace)
-		if secretList, listError := secrets.List(v1.ListOptions{}); listError == nil {
+		if secretList, listError := secrets.List(metav1.ListOptions{}); listError == nil {
 			for _, secret := range secretList.Items {
 				name := secret.GetObjectMeta().GetName()
-				if err := secrets.Delete(name, &v1.DeleteOptions{}); err != nil {
+				if err := secrets.Delete(name, &metav1.DeleteOptions{}); err != nil {
 					log.Warningf("Unable to delete service %s: %s", name, err.Error())
 				}
 			}
@@ -865,7 +866,7 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes(k8sClient *k8s.Clientset
 	}
 
 	for nodeName, id := range nodeInfos {
-		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName); err == nil {
+		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
 			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
 			node.Labels["hyperpilot/deployment"] = k8sDeployment.DeployedCluster.Name
 			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
@@ -879,7 +880,7 @@ func (k8sDeployment *KubernetesDeployment) tagKubeNodes(k8sClient *k8s.Clientset
 	return nil
 }
 
-func getNamespace(objectMeta v1.ObjectMeta) string {
+func getNamespace(objectMeta metav1.ObjectMeta) string {
 	namespace := objectMeta.Namespace
 	if namespace == "" {
 		return "default"
@@ -893,7 +894,7 @@ func createNamespaceIfNotExist(namespace string, existingNamespaces map[string]b
 		glog.Infof("Creating new namespace %s", namespace)
 		k8sNamespaces := k8sClient.CoreV1().Namespaces()
 		_, err := k8sNamespaces.Create(&v1.Namespace{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: namespace,
 			},
 		})
@@ -951,7 +952,7 @@ func (k8sDeployment *KubernetesDeployment) createServiceForDeployment(namespace 
 	}
 
 	internalService := &v1.Service{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
 			Labels:    labels,
 			Namespace: namespace,
@@ -981,7 +982,7 @@ func (k8sDeployment *KubernetesDeployment) createServiceForDeployment(namespace 
 		// public port
 		publicServiceName := serviceName + "-public" + servicePorts[i].Name
 		publicService := &v1.Service{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      publicServiceName,
 				Labels:    labels,
 				Namespace: namespace,
@@ -1121,7 +1122,7 @@ func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.
 			allElbsTagged := true
 			for _, namespace := range allNamespaces {
 				services := k8sClient.CoreV1().Services(namespace)
-				serviceLists, listError := services.List(v1.ListOptions{})
+				serviceLists, listError := services.List(metav1.ListOptions{})
 				if listError != nil {
 					log.Warningf("Unable to list services for namespace '%s': %s", namespace, listError.Error())
 					return

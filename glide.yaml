@@ -17,4 +17,3 @@ import:
 - package: github.com/pkg/sftp
 - package: k8s.io/apimachinery
 - package: k8s.io/client-go
-  version: v2.0.0-alpha.1
