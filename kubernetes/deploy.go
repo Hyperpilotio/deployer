@@ -510,7 +510,7 @@ func (k8sDeployment *KubernetesDeployment) waitUntilInternetGatewayDeleted(ec2Sv
 	}
 }
 
-func (k8sDeployment *KubernetesDeployment) waitUntilNetworkInterfaceAvailabled(ec2Svc *ec2.EC2, securityGroupNames []*string, timeout time.Duration) error {
+func (k8sDeployment *KubernetesDeployment) waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, securityGroupNames []*string, timeout time.Duration) error {
 	log := k8sDeployment.DeployedCluster.Logger
 	c := make(chan bool, 1)
 	quit := make(chan bool)
@@ -529,14 +529,14 @@ func (k8sDeployment *KubernetesDeployment) waitUntilNetworkInterfaceAvailabled(e
 					},
 				}
 
-				allAvailabled := true
+				allAvailable := true
 				resp, _ := ec2Svc.DescribeNetworkInterfaces(params)
 				for _, nif := range resp.NetworkInterfaces {
 					if aws.StringValue(nif.Status) != "available" {
-						allAvailabled = false
+						allAvailable = false
 					}
 				}
-				if allAvailabled || len(resp.NetworkInterfaces) == 0 {
+				if allAvailable || len(resp.NetworkInterfaces) == 0 {
 					c <- true
 				}
 				time.Sleep(time.Second * 5)
@@ -546,11 +546,11 @@ func (k8sDeployment *KubernetesDeployment) waitUntilNetworkInterfaceAvailabled(e
 
 	select {
 	case <-c:
-		log.Info("NetworkInterfaces is availabled")
+		log.Info("NetworkInterfaces are available")
 		return nil
 	case <-time.After(timeout):
 		quit <- true
-		return errors.New("Timed out waiting for NetworkInterfaces to be availabled")
+		return errors.New("Timed out waiting for NetworkInterfaces to be available")
 	}
 }
 
@@ -584,7 +584,7 @@ func (k8sDeployment *KubernetesDeployment) deleteNetworkInterfaces(ec2Svc *ec2.E
 		}
 	}
 
-	if err := k8sDeployment.waitUntilNetworkInterfaceAvailabled(ec2Svc, securityGroupNames, time.Duration(30)*time.Second); err != nil {
+	if err := k8sDeployment.waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(30)*time.Second); err != nil {
 		return fmt.Errorf("Unable to wait until network interface is available: %s\n", err.Error())
 	}
 
