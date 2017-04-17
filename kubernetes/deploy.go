@@ -416,7 +416,7 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	}
 
 	if err := k8sDeployment.deleteElbSecurityGroup(ec2Svc); err != nil {
-		return fmt.Errorf("Unable to deleting stack securityGroups: %s", err.Error())
+		return fmt.Errorf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
 	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, true); err != nil {
