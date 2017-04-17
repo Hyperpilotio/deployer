@@ -662,7 +662,7 @@ func (k8sDeployment *KubernetesDeployment) deleteElbSecurityGroup(ec2Svc *ec2.EC
 		}
 
 		if _, err := ec2Svc.RevokeSecurityGroupIngress(revokeSecurityGroupIngressInput); err != nil {
-			return fmt.Errorf("Unable to remove ingress rules from security group: %s" + err.Error())
+			return fmt.Errorf("Unable to remove ingress rules from security group: %s", err.Error())
 		}
 
 		params := &ec2.DeleteSecurityGroupInput{
