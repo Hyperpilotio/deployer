@@ -12,15 +12,11 @@ import (
 	"strings"
 	"sync"
 
-	"k8s.io/client-go/tools/clientcmd"
-
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
-	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/hyperpilotio/deployer/store"
 	logging "github.com/op/go-logging"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
@@ -36,11 +32,6 @@ type DeploymentLog struct {
 	Name   string
 	Time   string
 	Status string
-}
-
-type DeploymentStatus struct {
-	DeployedClusters   map[string]*awsecs.DeployedCluster
-	KubernetesClusters *kubernetes.KubernetesClusters
 }
 
 // Server store the stats / data of every deployment
@@ -317,7 +308,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 			"data":  "Error update deployment: " + err.Error(),
 		})
 	} else {
-		if err := server.storeDeploymentStatus(nil); err != nil {
+		if err := server.storeDeploymentStatus(deploymentName); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": true,
 				"data":  "Unable to store deployment status:" + err.Error(),
@@ -432,7 +423,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	// Deployment succeeded, storing deployment status
-	if err := server.storeDeploymentStatus(nil); err != nil {
+	if err := server.storeDeploymentStatus(deployment.Name); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
 			"data":  "Unable to store deployment status:" + err.Error(),
@@ -502,7 +493,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		}
 
 		delete(server.DeployedClusters, c.Param("deployment"))
-		if err := server.storeDeploymentStatus(aws.String(c.Param("deployment"))); err != nil {
+		if err := server.storeDeploymentStatus(c.Param("deployment")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": true,
 				"data":  "Unable to store deployment status:" + err.Error(),
@@ -678,107 +669,36 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	})
 }
 
-func (server *Server) storeDeploymentStatus(deleteItemName *string) error {
-	deploymentStatus := &DeploymentStatus{
-		DeployedClusters:   server.DeployedClusters,
-		KubernetesClusters: server.KubernetesClusters,
+func (server *Server) storeDeploymentStatus(deploymentName string) error {
+	storeSvc, err := store.Initialize(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to store initialize: %s", err.Error())
 	}
 
-	depStatPath := path.Join(server.Config.GetString("filesPath"), "DeploymentStatus")
-	if err := common.WriteObjectToFile(depStatPath, &deploymentStatus); err != nil {
-		return fmt.Errorf("Unable to store deployment status: %s", err.Error())
-	}
+	deployedCluster := server.DeployedClusters[deploymentName]
+	k8sDeployment := server.KubernetesClusters.Clusters[deploymentName]
+	deployment := store.NewDeployment(deployedCluster, k8sDeployment)
 
-	// Store deploymentStatus to simpleDB
-	if db, err := NewDB(server.Config); err != nil {
-		return fmt.Errorf("Unable to new database object: %s", err.Error())
-	}
-
-	if deleteItemName != nil {
-		if err := db.DeleteClusterState(deleteItemName); err != nil {
-			return fmt.Errorf("Unable to delete %s deployment status from simpleDB: %s", deleteItemName, err.Error())
-		}
-	}
-
-	for deploymentName, deployedCluster := range server.DeployedClusters {
-		clusterState := &ClusterState{
-			DeploymentName: deploymentName,
-			Region:         deployedCluster.Deployment.Region,
-			BastionIp:      "",
-			MasterIp:       "",
-			KeyName:        aws.StringValue(deployedCluster.KeyPair.KeyName),
-			KeyMaterial_1:  aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[:1024],
-			KeyMaterial_2:  aws.StringValue(deployedCluster.KeyPair.KeyMaterial)[1024:],
-		}
-
-		if server.KubernetesClusters.Clusters[deploymentName] != nil {
-			bastionIp := server.KubernetesClusters.Clusters[deploymentName].BastionIp
-			masterIp := server.KubernetesClusters.Clusters[deploymentName].MasterIp
-
-			clusterState.BastionIp = bastionIp
-			clusterState.MasterIp = masterIp
-		}
-
-		if err := db.StoreClusterState(clusterState); err != nil {
-			return fmt.Errorf("Unable to store %s deployment status to simpleDB: %s", deploymentName, err.Error())
-		}
+	if err := storeSvc.StoreNewDeployment(deployment); err != nil {
+		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 	}
 
 	return nil
 }
 
 func (server *Server) loadDeploymentStatus() error {
-	if db, err := NewDB(server.Config); err != nil {
-		return fmt.Errorf("Unable to new database object: %s", err.Error())
+	storeSvc, err := store.Initialize(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to store initialize: %s", err.Error())
 	}
 
-	if clusterStates, err := db.LoadClusterState(); err != nil {
-		return fmt.Errorf("Unable to load deployment status from simpleDB: %s", err.Error())
+	deployments, err := storeSvc.LoadDeployment()
+	if err != nil {
+		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
-	for _, clusterState := range clusterStates {
-		deploymentName := clusterState.DeploymentName
-		deployment := &apis.Deployment{
-			Name:   deploymentName,
-			Region: clusterState.Region,
-		}
-		deployedCluster := awsecs.NewDeployedCluster(deployment)
-
-		// Reload keypair
-		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster); err != nil {
-			return fmt.Errorf("Unable to load %s keyPair: %s", deploymentName, err.Error())
-		}
-
-		deployedCluster.KeyPair.KeyMaterial = aws.String(clusterState.KeyMaterial_1 + clusterState.KeyMaterial_2)
-
-		if (clusterState.BastionIp != "") && (clusterState.MasterIp != "") {
-			// Deployment type is kubernetes
-			deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
-			k8sDeployment := &kubernetes.KubernetesDeployment{
-				BastionIp:       clusterState.BastionIp,
-				MasterIp:        clusterState.MasterIp,
-				DeployedCluster: deployedCluster,
-			}
-
-			if err := k8sDeployment.DownloadKubeConfig(); err != nil {
-				return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
-			} else {
-				glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
-				if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
-					return fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
-				} else {
-					k8sDeployment.KubeConfig = kubeConfig
-				}
-			}
-			server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
-		} else {
-			//  Deployment type is awsecs
-			deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
-			if err := awsecs.ReloadInstanceIds(server.Config, deployedCluster); err != nil {
-				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
-			}
-		}
-		server.DeployedClusters[deploymentName] = deployedCluster
+	if err := store.ReloadClusterState(server.Config, deployments, server.DeployedClusters, server.KubernetesClusters); err != nil {
+		return fmt.Errorf("Unable to reload cluster state: %s", err.Error())
 	}
 
 	return nil
