@@ -119,7 +119,64 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 	return logFile, nil
 }
 
-// StartServer start a web server
+// NewStoreDeployment create deployment that needs to be stored
+func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
+	deployedCluster := server.DeployedClusters[deploymentName]
+	storeDeployment := &store.StoreDeployment{
+		Name:          deploymentName,
+		Region:        deployedCluster.Deployment.Region,
+		Type:          "ECS",
+		ECSDeployment: deployedCluster.NewECSStoreDeployment(),
+	}
+
+	k8sDeployment := server.KubernetesClusters.Clusters[deploymentName]
+	if k8sDeployment != nil {
+		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
+		storeDeployment.Type = "K8S"
+	}
+
+	return storeDeployment
+}
+
+// ReloadClusterState reload cluster state when deployer restart
+func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) error {
+	for _, storeDeployment := range deployments {
+		deploymentName := storeDeployment.Name
+		deployment := &apis.Deployment{
+			Name:   deploymentName,
+			Region: storeDeployment.Region,
+		}
+		deployedCluster := awsecs.NewDeployedCluster(deployment)
+
+		// Reload keypair
+		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster, storeDeployment.ECSDeployment.KeyMaterial); err != nil {
+			return fmt.Errorf("Unable to load %s keyPair: %s", deploymentName, err.Error())
+		}
+
+		switch storeDeployment.Type {
+		case "ECS":
+			deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
+			if err := awsecs.ReloadClusterState(server.Config, deployedCluster); err != nil {
+				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+			}
+		case "K8S":
+			deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
+			k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
+			if err != nil {
+				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+			}
+			server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
+		default:
+			return errors.New("Unsupported deployment store type: " + storeDeployment.Type)
+		}
+
+		server.DeployedClusters[deploymentName] = deployedCluster
+	}
+
+	return nil
+}
+
+// StartServer start a web servers
 func (server *Server) StartServer() error {
 	if server.Config.GetString("filesPath") == "" {
 		return errors.New("filesPath is not specified in the configuration file.")
@@ -706,15 +763,12 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 }
 
 func (server *Server) storeDeploymentStatus(deploymentName string) error {
-	storeSvc, err := store.Initialize(server.Config)
+	storeSvc, err := store.NewStore(server.Config)
 	if err != nil {
-		return fmt.Errorf("Unable to store initialize: %s", err.Error())
+		return fmt.Errorf("Unable to new store: %s", err.Error())
 	}
 
-	deployedCluster := server.DeployedClusters[deploymentName]
-	k8sDeployment := server.KubernetesClusters.Clusters[deploymentName]
-	deployment := store.NewDeployment(deployedCluster, k8sDeployment)
-
+	deployment := server.NewStoreDeployment(deploymentName)
 	if err := storeSvc.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 	}
@@ -723,9 +777,9 @@ func (server *Server) storeDeploymentStatus(deploymentName string) error {
 }
 
 func (server *Server) loadDeploymentStatus() error {
-	storeSvc, err := store.Initialize(server.Config)
+	storeSvc, err := store.NewStore(server.Config)
 	if err != nil {
-		return fmt.Errorf("Unable to store initialize: %s", err.Error())
+		return fmt.Errorf("Unable to new store: %s", err.Error())
 	}
 
 	deployments, err := storeSvc.LoadDeployment()
@@ -733,7 +787,7 @@ func (server *Server) loadDeploymentStatus() error {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
-	if err := store.ReloadClusterState(server.Config, deployments, server.DeployedClusters, server.KubernetesClusters); err != nil {
+	if err := server.ReloadClusterState(deployments); err != nil {
 		return fmt.Errorf("Unable to reload cluster state: %s", err.Error())
 	}
 

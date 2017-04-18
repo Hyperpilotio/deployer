@@ -10,7 +10,7 @@ import (
 )
 
 type FileDeployment struct {
-	Deployments []*Deployment
+	Deployments []*StoreDeployment
 }
 
 type File struct {
@@ -24,9 +24,9 @@ func NewFile(config *viper.Viper) *File {
 	}
 }
 
-func (file *File) StoreNewDeployment(deployment *Deployment) error {
+func (file *File) StoreNewDeployment(deployment *StoreDeployment) error {
 	fileDeployment := &FileDeployment{
-		Deployments: []*Deployment{},
+		Deployments: []*StoreDeployment{},
 	}
 
 	if _, err := os.Stat(file.Path); err == nil {
@@ -37,12 +37,12 @@ func (file *File) StoreNewDeployment(deployment *Deployment) error {
 		fileDeployment.Deployments = deployments
 	}
 
-	deployInfos := map[string]*Deployment{}
+	deployInfos := map[string]*StoreDeployment{}
 	for _, deployment := range fileDeployment.Deployments {
 		deployInfos[deployment.Name] = deployment
 	}
 
-	newDeployments := []*Deployment{}
+	newDeployments := []*StoreDeployment{}
 	_, ok := deployInfos[deployment.Name]
 	if ok {
 		deployInfos[deployment.Name] = deployment
@@ -60,7 +60,7 @@ func (file *File) StoreNewDeployment(deployment *Deployment) error {
 	return nil
 }
 
-func (file *File) LoadDeployment() ([]*Deployment, error) {
+func (file *File) LoadDeployment() ([]*StoreDeployment, error) {
 	fileDeployment := &FileDeployment{}
 	if err := common.LoadFileToObject(file.Path, fileDeployment); err != nil {
 		return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())

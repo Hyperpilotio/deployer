@@ -49,6 +49,18 @@ type DeployedCluster struct {
 	VpcId             string
 }
 
+type StoreDeployment struct {
+	KeyName     string
+	KeyMaterial string
+}
+
+func (deployedCluster *DeployedCluster) NewECSStoreDeployment() *StoreDeployment {
+	return &StoreDeployment{
+		KeyName:     aws.StringValue(deployedCluster.KeyPair.KeyName),
+		KeyMaterial: aws.StringValue(deployedCluster.KeyPair.KeyMaterial),
+	}
+}
+
 // KeyName return a key name according to the Deployment.Name with suffix "-key"
 func (deployedCluster *DeployedCluster) KeyName() string {
 	return deployedCluster.Deployment.Name + "-key"
@@ -1337,8 +1349,8 @@ func DeleteDeployment(viper *viper.Viper, deployedCluster *DeployedCluster) {
 	}
 }
 
-// ReloadInstanceIds reload EC2 instanceIds by clusterName
-func ReloadInstanceIds(viper *viper.Viper, deployedCluster *DeployedCluster) error {
+// ReloadClusterState reload EC2 cluster state
+func ReloadClusterState(viper *viper.Viper, deployedCluster *DeployedCluster) error {
 	sess, sessionErr := CreateSession(viper, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
@@ -1379,7 +1391,7 @@ func ReloadInstanceIds(viper *viper.Viper, deployedCluster *DeployedCluster) err
 }
 
 // ReloadKeyPair reload KeyPair by keyName
-func ReloadKeyPair(viper *viper.Viper, deployedCluster *DeployedCluster) error {
+func ReloadKeyPair(viper *viper.Viper, deployedCluster *DeployedCluster, keyMaterial string) error {
 	sess, sessionErr := CreateSession(viper, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
@@ -1402,6 +1414,7 @@ func ReloadKeyPair(viper *viper.Viper, deployedCluster *DeployedCluster) error {
 		keyPair := &ec2.CreateKeyPairOutput{
 			KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
 			KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
+			KeyMaterial:    aws.String(keyMaterial),
 		}
 		deployedCluster.KeyPair = keyPair
 	}
