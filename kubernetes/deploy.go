@@ -37,6 +37,11 @@ type KubernetesDeployment struct {
 	DeployedCluster *awsecs.DeployedCluster
 }
 
+type StoreDeployment struct {
+	BastionIp string
+	MasterIp  string
+}
+
 type CreateDeploymentResponse struct {
 	Name      string            `json:"name"`
 	Endpoints map[string]string `json:"endpoints"`
@@ -53,6 +58,13 @@ var publicPortType = 1
 func NewKubernetesClusters() *KubernetesClusters {
 	return &KubernetesClusters{
 		Clusters: make(map[string]*KubernetesDeployment),
+	}
+}
+
+func (k8sDeployment *KubernetesDeployment) NewK8SStoreDeployment() *StoreDeployment {
+	return &StoreDeployment{
+		BastionIp: k8sDeployment.BastionIp,
+		MasterIp:  k8sDeployment.MasterIp,
 	}
 }
 
@@ -1220,4 +1232,27 @@ func (k8sDeployment *KubernetesDeployment) DownloadKubeConfig() error {
 
 	k8sDeployment.KubeConfigPath = kubeconfigFilePath
 	return nil
+}
+
+// ReloadClusterState reload kubernetes cluster state
+func ReloadClusterState(deployment *StoreDeployment, deployedCluster *awsecs.DeployedCluster) (*KubernetesDeployment, error) {
+	deploymentName := deployedCluster.Deployment.Name
+	k8sDeployment := &KubernetesDeployment{
+		BastionIp:       deployment.BastionIp,
+		MasterIp:        deployment.MasterIp,
+		DeployedCluster: deployedCluster,
+	}
+
+	if err := k8sDeployment.DownloadKubeConfig(); err != nil {
+		return nil, fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
+	} else {
+		glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
+		if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
+			return nil, fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
+		} else {
+			k8sDeployment.KubeConfig = kubeConfig
+		}
+	}
+
+	return k8sDeployment, nil
 }
