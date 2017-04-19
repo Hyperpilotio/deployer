@@ -14,10 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/client-go/tools/clientcmd"
-
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
@@ -37,6 +33,7 @@ var logFormatter = logging.MustStringFormatter(
 type DeploymentLog struct {
 	Name   string
 	Time   string
+	Type   string
 	Status string
 }
 
@@ -129,8 +126,8 @@ func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDepl
 		ECSDeployment: deployedCluster.NewECSStoreDeployment(),
 	}
 
-	k8sDeployment := server.KubernetesClusters.Clusters[deploymentName]
-	if k8sDeployment != nil {
+	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
+	if ok {
 		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
 		storeDeployment.Type = "K8S"
 	}
@@ -733,10 +730,6 @@ func (server *Server) logUI(c *gin.Context) {
 
 func (server *Server) getDeploymentLog(c *gin.Context) {
 	logFile := c.Param("logFile")
-
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
 	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile)
 	file, err := os.Open(logPath)
 	if err != nil {
