@@ -8,9 +8,11 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/apis"
@@ -31,8 +33,19 @@ var logFormatter = logging.MustStringFormatter(
 type DeploymentLog struct {
 	Name   string
 	Time   string
+	Type   string
 	Status string
 }
+
+type DeploymentLogs []*DeploymentLog
+
+func (d DeploymentLogs) Len() int { return len(d) }
+func (d DeploymentLogs) Less(i, j int) bool {
+	t1, _ := time.Parse(time.RFC3339, d[i].Time)
+	t2, _ := time.Parse(time.RFC3339, d[j].Time)
+	return t1.Before(t2)
+}
+func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 // Server store the stats / data of every deployment
 type Server struct {
@@ -98,8 +111,8 @@ func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDepl
 		ECSDeployment: deployedCluster.NewECSStoreDeployment(),
 	}
 
-	k8sDeployment := server.KubernetesClusters.Clusters[deploymentName]
-	if k8sDeployment != nil {
+	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
+	if ok {
 		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
 		storeDeployment.Type = "K8S"
 	}
@@ -138,7 +151,6 @@ func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) e
 		default:
 			return errors.New("Unsupported deployment store type: " + storeDeployment.Type)
 		}
-
 		server.DeployedClusters[deploymentName] = deployedCluster
 	}
 
@@ -550,7 +562,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		}
 
 		delete(server.DeployedClusters, c.Param("deployment"))
-		if err := server.storeDeploymentStatus(c.Param("deployment")); err != nil {
+		if err := server.deleteDeploymentStatus(c.Param("deployment")); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error": true,
 				"data":  "Unable to store deployment status:" + err.Error(),
@@ -672,35 +684,57 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 
 func (server *Server) logUI(c *gin.Context) {
 	logPath := path.Join(server.Config.GetString("filesPath"), "log")
-	if files, err := ioutil.ReadDir(logPath); err != nil {
+	files, err := ioutil.ReadDir(logPath)
+	if err != nil {
 		c.HTML(http.StatusNotFound, "index.html", gin.H{
 			"msg":  "Unable to read deployment log:" + err.Error(),
 			"logs": "",
 		})
-	} else {
-		deploymentLogs := []*DeploymentLog{}
-		for _, f := range files {
-			// TODO deployment status: deployed, error
-			deploymentLog := &DeploymentLog{
-				Name: f.Name(),
-				Time: f.ModTime().Format("2006-01-02 15:04:05"),
+		return
+	}
+
+	statusInfos := map[string]string{}
+	typeInfos := map[string]string{}
+	if storeSvc, err := store.NewStore(server.Config); err == nil {
+		if deployments, err := storeSvc.LoadDeployment(); err == nil {
+			for _, deployment := range deployments {
+				statusInfos[deployment.Name] = deployment.Status
+				typeInfos[deployment.Name] = deployment.Type
 			}
-			deploymentLogs = append(deploymentLogs, deploymentLog)
+		}
+	}
+
+	deploymentLogs := DeploymentLogs{}
+	for _, f := range files {
+		deploymentName := strings.Replace(f.Name(), ".log", "", 1)
+		defaultStatus := "Deleted"
+		status, ok := statusInfos[deploymentName]
+		if ok {
+			defaultStatus = status
+			if defaultStatus == "" {
+				defaultStatus = "Created"
+			}
 		}
 
-		c.HTML(http.StatusOK, "index.html", gin.H{
-			"msg":  "Hello hyperpilot!",
-			"logs": deploymentLogs,
-		})
+		deploymentLog := &DeploymentLog{
+			Name:   f.Name(),
+			Time:   f.ModTime().Format(time.RFC3339),
+			Type:   typeInfos[deploymentName],
+			Status: defaultStatus,
+		}
+		deploymentLogs = append(deploymentLogs, deploymentLog)
 	}
+
+	sort.Sort(deploymentLogs)
+
+	c.HTML(http.StatusOK, "index.html", gin.H{
+		"msg":  "Hello hyperpilot!",
+		"logs": deploymentLogs,
+	})
 }
 
 func (server *Server) getDeploymentLog(c *gin.Context) {
 	logFile := c.Param("logFile")
-
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
 	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile)
 	file, err := os.Open(logPath)
 	if err != nil {
@@ -753,6 +787,19 @@ func (server *Server) loadDeploymentStatus() error {
 
 	if err := server.ReloadClusterState(deployments); err != nil {
 		return fmt.Errorf("Unable to reload cluster state: %s", err.Error())
+	}
+
+	return nil
+}
+
+func (server *Server) deleteDeploymentStatus(deploymentName string) error {
+	storeSvc, err := store.NewStore(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to new store: %s", err.Error())
+	}
+
+	if err := storeSvc.DeleteDeployment(deploymentName); err != nil {
+		return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 	}
 
 	return nil

@@ -1,3 +1,5 @@
 vendor
 deployer
 documents/dev.config
+.vscode
+.idea
