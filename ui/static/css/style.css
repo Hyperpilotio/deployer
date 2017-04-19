@@ -60,7 +60,7 @@ aside {
     margin-top: 64px;
     background-color: #D8D8D8;
     border-right: 1px solid #9B9B9B;
-    overflow-y: auto;
+    overflow-y: scroll;
 }
 .deployment-list {
     margin: 0;
@@ -123,23 +123,27 @@ a:hover {
     border-radius: 1px;
     box-shadow: -1px -1px 0 #333;
 }
-.badge.badge-success {
+.badge.badge-Created {
     color: white;
     background-color: #599C0F;
     box-shadow: -1px -1px 0 #417505;
     text-shadow: 0 -1px #417505;
 }
-.badge.badge-danger {
+.badge.badge-Deleted {
     color: white;
-    background-color: #D0021B;
-    box-shadow: -1px -1px 0 #9C0013;
-    text-shadow: 0 -1px #9C0013;
+    background-color: #d9534f;
+    box-shadow: -1px -1px 0 #d43f3a;
+    text-shadow: 0 -1px#d43f3a;
 }
-.badge.badge-warning {
+.badge.badge-Failed {
     color: white;
     background-color: #F5A623;
     box-shadow: -1px -1px 0 #845913;
     text-shadow: 0 -1px #845913;
+}
+.deployment-btn {
+    padding-top: 1em;
+    background-color: #FFFFFF;
 }
 .deployment-log {
     padding: 1em;
@@ -151,4 +155,50 @@ a:hover {
     margin: 0;
     margin-bottom: 0.25em;
     text-shadow: 0 -1px #333;
+}
+/*.btn {
+    cursor:pointer;
+    padding: 5px;
+}*/
+
+.btn {
+    display: inline-block;
+    padding: 6px 12px;
+    margin-bottom: 0;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.42857143;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: middle;
+    -ms-touch-action: manipulation;
+    touch-action: manipulation;
+    cursor: pointer;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+    background-image: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+}
+.btn-default {
+    color: #333;
+    background-color: #fff;
+    border-color: #ccc;
+}
+.btn-default:hover {
+    color: #333;
+    background-color: #e6e6e6;
+    border-color: #adadad;
+}
+.btn-danger {
+    color: #fff;
+    background-color: #d9534f;
+    border-color: #d43f3a;
+}
+.btn-danger:hover {
+    color: #fff;
+    background-color: #c9302c;
+    border-color: #ac2925;
 }

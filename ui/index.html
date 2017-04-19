@@ -4,9 +4,16 @@
 <head>
     <title>Deployer</title>
     <link rel="stylesheet" type="text/css" href="/static/css/style.css">
-    <script src='/static/js/jquery-3.2.0.min.js'></script>
+    <link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/jquery.loadmask.css">
+    <script src="/static/js/jquery-3.2.0.min.js"></script>
+    <script src="/static/js/download.js"></script>
+    <script src="/static/js/jquery.loadmask.min.js"></script>
     <script>
         $(function() {
+            var realHeight = $('.deployment-list').height();
+            $(".deployment-list").css('height', (realHeight + 100) + 'px');
+
             $('.deployment-list li').click(function() {
                 $('.deployment-list li').removeClass('active');
                 $(this).addClass('active');
@@ -14,21 +21,74 @@
                 $('main h1').remove();
                 $('.deployment-detail').show();
 
-                $.ajax({
-                    url: '/ui/' + $(this).data('name') + '/list',
-                    type: 'GET',
-                    dataType: 'json',
-                    success: function(json) {
-                        if (json.error == false) {
-                            $('.deployment-log').html('');
-                            $.each(json.data, function(i, line) {
-                                $('.deployment-log').append('<p class="line">' + line + '</p>');
-                            });
-                        }
+                getDeploymentLog($(this).data('name'));
+
+                if ($(this).data('status') == 'Deleted') {
+                    $('.deployment-btn').hide();
+                } else {
+                    $('.deployment-btn').show();
+                    if ($(this).data('type') == 'K8S') {
+                        $('#downloadKubeconfigBtn').show();
+                    } else if ($(this).data('type') == 'ECS') {
+                        $('#downloadKubeconfigBtn').hide();
                     }
+                }
+            });
+
+            $('#deleteBtn').click(function() {
+                var logFileName = $('.deployment-list .active').data('name');
+                var deploymentName = logFileName.replace('.log', '');
+                if (confirm('Delete ' + deploymentName + 'deployment?')) {
+                    $('body').mask('Waiting...');
+                    $('.loadmask-msg').css('top', $(window).height() / 2);
+                    $.ajax({
+                        url: '/v1/deployments/' + deploymentName,
+                        type: 'DELETE',
+                        success: function(json) {
+                            $('body').unmask();
+                            getDeploymentLog(logFileName);
+                            if (json.error == false) {
+                                alert('Delete ok');
+                            } else {
+                                alert('Delete fail');
+                            }
+                        }
+                    });
+                }
+            });
+
+            $('#downloadSshKeyBtn').click(function() {
+                var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+                $.ajax({
+                    url: '/v1/deployments/' + deploymentName + '/ssh_key',
+                    success: download.bind(true, 'text/plain', deploymentName + '-key')
+                });
+            });
+
+            $('#downloadKubeconfigBtn').click(function() {
+                var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+                $.ajax({
+                    url: '/v1/deployments/' + deploymentName + '/kubeconfig',
+                    success: download.bind(true, 'text/plain', 'kubeconfig')
                 });
             });
         });
+
+        function getDeploymentLog(logFileName) {
+            $.ajax({
+                url: '/ui/' + logFileName + '/list',
+                type: 'GET',
+                dataType: 'json',
+                success: function(json) {
+                    if (json.error == false) {
+                        $('.deployment-log').html('');
+                        $.each(json.data, function(i, line) {
+                            $('.deployment-log').append('<p class="line">' + line + '</p>');
+                        });
+                    }
+                }
+            });
+        }
     </script>
 </head>
 
@@ -49,10 +109,10 @@
     <aside>
         <ul class="deployment-list">
             {{range $k,$v := .logs}}
-            <li class="deployment" data-name="{{$v.Name}}">
+            <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
                 <div class="logName">{{$v.Name}}</div>
                 <span class="logTime">{{$v.Time}}</span>
-                <span class="badge badge-success">Deployed</span>
+                <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
             </li>
             {{end}}
         </ul>
@@ -62,6 +122,11 @@
     <main>
         <h1>{{.msg}}!</h1>
         <div class="deployment-detail" style="display: none;">
+            <div class="deployment-btn">
+                <span id="deleteBtn" class="btn btn-danger"><i class="fa fa-trash-o"></i> Delete</span>
+                <span id="downloadSshKeyBtn" class="btn btn-default"><i class="fa fa-download"></i> SSH_KEY</span>
+                <span id="downloadKubeconfigBtn" class="btn btn-default" style="display: none;"><i class="fa fa-download"></i> Kubeconfig</span>
+            </div>
             <h2>Deployment Log</h2>
             <div class="deployment-log">
             </div>
