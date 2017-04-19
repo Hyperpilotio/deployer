@@ -53,6 +53,7 @@ func (file *File) StoreNewDeployment(deployment *StoreDeployment) error {
 		newDeployments = append(newDeployments, deployment)
 		fileDeployment.Deployments = newDeployments
 	}
+
 	if err := common.WriteObjectToFile(file.Path, fileDeployment); err != nil {
 		return fmt.Errorf("Unable to store deployment status: %s", err.Error())
 	}
@@ -67,4 +68,37 @@ func (file *File) LoadDeployment() ([]*StoreDeployment, error) {
 	}
 
 	return fileDeployment.Deployments, nil
+}
+
+func (file *File) DeleteDeployment(deploymentName string) error {
+	fileDeployment := &FileDeployment{
+		Deployments: []*StoreDeployment{},
+	}
+
+	if _, err := os.Stat(file.Path); err == nil {
+		deployments, err := file.LoadDeployment()
+		if err != nil {
+			return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+		}
+		fileDeployment.Deployments = deployments
+	}
+
+	deployInfos := map[string]*StoreDeployment{}
+	for _, deployment := range fileDeployment.Deployments {
+		if deployment.Name == deploymentName {
+			continue
+		}
+		deployInfos[deployment.Name] = deployment
+	}
+
+	newDeployments := []*StoreDeployment{}
+	for _, deployInfo := range deployInfos {
+		newDeployments = append(newDeployments, deployInfo)
+	}
+
+	if err := common.WriteObjectToFile(file.Path, fileDeployment); err != nil {
+		return fmt.Errorf("Unable to store deployment status: %s", err.Error())
+	}
+
+	return nil
 }

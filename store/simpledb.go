@@ -26,15 +26,17 @@ type SimpleDB struct {
 func NewSimpleDB(config *viper.Viper) (*SimpleDB, error) {
 	region := strings.ToLower(config.GetString("store.region"))
 	domain := config.GetString("store.domain")
-	if session, err := createSessionByRegion(config, region); err != nil {
+
+	session, err := createSessionByRegion(config, region)
+	if err != nil {
 		return nil, err
-	} else {
-		return &SimpleDB{
-			Region: region,
-			Domain: domain,
-			Sess:   session,
-		}, nil
 	}
+
+	return &SimpleDB{
+		Region: region,
+		Domain: domain,
+		Sess:   session,
+	}, nil
 }
 
 func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
@@ -45,7 +47,7 @@ func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
 	}
 
 	if _, err := simpledbSvc.CreateDomain(createDomainInput); err != nil {
-		return errors.New("Unable to create simpleSB domain: " + err.Error())
+		return errors.New("Unable to create simpleDB domain: " + err.Error())
 	}
 
 	attributes := []*simpledb.ReplaceableAttribute{}
@@ -73,35 +75,61 @@ func (db *SimpleDB) LoadDeployment() ([]*StoreDeployment, error) {
 	}
 
 	deployments := []*StoreDeployment{}
-	if selectOutput, err := simpledbSvc.Select(selectInput); err != nil {
+	selectOutput, err := simpledbSvc.Select(selectInput)
+	if err != nil {
 		return nil, errors.New("Unable to select data from simpleDB: " + err.Error())
-	} else {
-		if len(selectOutput.Items) == 0 {
-			return nil, errors.New("Unable to find data from " + db.Domain)
+	}
+
+	for _, item := range selectOutput.Items {
+		getAttributesInput := &simpledb.GetAttributesInput{
+			DomainName: aws.String(db.Domain),
+			ItemName:   item.Name,
 		}
 
-		for _, item := range selectOutput.Items {
-			getAttributesInput := &simpledb.GetAttributesInput{
-				DomainName: aws.String(db.Domain),
-				ItemName:   item.Name,
-			}
-
-			resp, err := simpledbSvc.GetAttributes(getAttributesInput)
-			if err != nil {
-				return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
-			}
-
-			deployment := &StoreDeployment{
-				ECSDeployment: &awsecs.StoreDeployment{},
-				K8SDeployment: &kubernetes.StoreDeployment{},
-			}
-			recursiveSetValue(deployment, resp.Attributes)
-
-			deployments = append(deployments, deployment)
+		resp, err := simpledbSvc.GetAttributes(getAttributesInput)
+		if err != nil {
+			return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
 		}
+
+		deployment := &StoreDeployment{
+			ECSDeployment: &awsecs.StoreDeployment{},
+			K8SDeployment: &kubernetes.StoreDeployment{},
+		}
+		recursiveSetValue(deployment, resp.Attributes)
+
+		deployments = append(deployments, deployment)
 	}
 
 	return deployments, nil
+}
+
+func (db *SimpleDB) DeleteDeployment(deploymentName string) error {
+	simpledbSvc := simpledb.New(db.Sess)
+
+	selectExpression := fmt.Sprintf("select * from `%s` where itemName()='%s'", db.Domain, deploymentName)
+	selectInput := &simpledb.SelectInput{
+		SelectExpression: aws.String(selectExpression),
+	}
+
+	selectOutput, err := simpledbSvc.Select(selectInput)
+	if err != nil {
+		return errors.New("Unable to select data from simpleDB: " + err.Error())
+	}
+
+	if len(selectOutput.Items) == 0 {
+		return fmt.Errorf("Unable to find %s data from simpleDB...", deploymentName)
+	}
+
+	deleteAttributesInput := &simpledb.DeleteAttributesInput{
+		DomainName: aws.String(db.Domain),
+		ItemName:   selectOutput.Items[0].Name,
+	}
+
+	if _, err := simpledbSvc.DeleteAttributes(deleteAttributesInput); err != nil {
+		return fmt.Errorf("Unable to delete %s attributes from simpleDB: %s", deploymentName, err.Error())
+	}
+
+	return nil
 }
 
 func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
@@ -129,6 +157,10 @@ func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
 }
 
 func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}) {
+	if v == nil || reflect.ValueOf(v).IsNil() {
+		return
+	}
+
 	modelReflect := reflect.ValueOf(v).Elem()
 	modelRefType := modelReflect.Type()
 	fieldsCount := modelReflect.NumField()
@@ -153,30 +185,27 @@ func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}
 }
 
 func restoreValue(fieldName string, attributes []*simpledb.Attribute) string {
-	fieldValue := ""
 	for _, attribute := range attributes {
 		if fieldName == aws.StringValue(attribute.Name) {
-			fieldValue = aws.StringValue(attribute.Value)
-			break
+			return aws.StringValue(attribute.Value)
 		}
 	}
 
-	if fieldValue == "" {
-		fieldInfos := map[string]string{}
-		for _, attribute := range attributes {
-			attrName := aws.StringValue(attribute.Name)
-			attrValue := aws.StringValue(attribute.Value)
+	fieldValue := ""
+	fieldInfos := map[string]string{}
+	for _, attribute := range attributes {
+		attrName := aws.StringValue(attribute.Name)
+		attrValue := aws.StringValue(attribute.Value)
 
-			if strings.Contains(attrName, fieldName+"_") {
-				attrNames := strings.Split(attrName, "_")
-				fieldInfos[attrNames[1]] = attrValue
-			}
+		if strings.Contains(attrName, fieldName+"_") {
+			attrNames := strings.Split(attrName, "_")
+			fieldInfos[attrNames[1]] = attrValue
 		}
+	}
 
-		cnt := len(fieldInfos)
-		for i := 1; i <= cnt; i++ {
-			fieldValue = fieldValue + fieldInfos[strconv.Itoa(i)]
-		}
+	cnt := len(fieldInfos)
+	for i := 1; i <= cnt; i++ {
+		fieldValue = fieldValue + fieldInfos[strconv.Itoa(i)]
 	}
 
 	return fieldValue
