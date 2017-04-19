@@ -21,7 +21,7 @@ type StoreDeployment struct {
 type Store interface {
 	StoreNewDeployment(storeDeployment *StoreDeployment) error
 	LoadDeployment() ([]*StoreDeployment, error)
-	// DeleteDeployment(deploymentName string) error
+	DeleteDeployment(deploymentName string) error
 }
 
 func NewStore(config *viper.Viper) (Store, error) {
