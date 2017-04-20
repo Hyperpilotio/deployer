@@ -708,13 +708,16 @@ func (server *Server) logUI(c *gin.Context) {
 			"msg":  "Unable to read deployment log:" + err.Error(),
 			"logs": "",
 		})
-	} else {
-		deploymentLogs := DeploymentLogs{}
-		for _, f := range files {
-			// TODO deployment status: deployed, error
-			deploymentLog := &DeploymentLog{
-				Name: f.Name(),
-				Time: f.ModTime().Format(time.RFC3339),
+		return
+	}
+
+	statusInfos := map[string]string{}
+	typeInfos := map[string]string{}
+	if storeSvc, err := store.NewStore(server.Config); err == nil {
+		if deployments, err := storeSvc.LoadDeployment(); err == nil {
+			for _, deployment := range deployments {
+				statusInfos[deployment.Name] = deployment.Status
+				typeInfos[deployment.Name] = deployment.Type
 			}
 			deploymentLogs = append(deploymentLogs, deploymentLog)
 		}
