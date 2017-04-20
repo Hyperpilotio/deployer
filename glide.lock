@@ -227,9 +227,9 @@ imports:
 - name: gopkg.in/yaml.v2
   version: a3f3340b5840cee44f372bddb5880fcbc419b46a
 - name: k8s.io/apimachinery
-  version: bb0944e83985eee62505a0386e7df9014cc55263
+  version: 75b8dd260ef0469d96d578705a87cffd0e09dab8
 - name: k8s.io/client-go
-  version: d81cb85237595f720d83eda492bae8f6162fc5c0
+  version: 3627aeb7d4f6ade38f995d2c923e459146493c7e
   subpackages:
   - discovery
   - kubernetes

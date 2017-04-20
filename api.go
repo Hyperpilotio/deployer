@@ -47,6 +47,11 @@ func (d DeploymentLogs) Less(i, j int) bool {
 }
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
+type DeploymentStatus struct {
+	DeployedClusters   map[string]*awsecs.DeployedCluster
+	KubernetesClusters *kubernetes.KubernetesClusters
+}
+
 // Server store the stats / data of every deployment
 type Server struct {
 	Config *viper.Viper
