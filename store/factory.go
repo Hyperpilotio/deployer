@@ -30,7 +30,7 @@ func NewStore(config *viper.Viper) (Store, error) {
 	case "simpledb":
 		return NewSimpleDB(config)
 	case "file":
-		return NewFile(config), nil
+		return NewFile(config)
 	default:
 		return nil, errors.New("Unsupported store type: " + storeType)
 	}
