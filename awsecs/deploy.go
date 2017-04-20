@@ -572,46 +572,6 @@ func Max(x, y int) int {
 	return y
 }
 
-// StartTaskOnNode call startTask function
-func StartTaskOnNode(viper *viper.Viper, deployedCluster *DeployedCluster, nodeMapping *apis.NodeMapping) error {
-	sess, err := CreateSession(viper, deployedCluster.Deployment)
-	if err != nil {
-		return errors.New("Unable to create session: " + err.Error())
-	}
-
-	ecsSvc := ecs.New(sess)
-	return startTask(deployedCluster, nodeMapping, ecsSvc)
-}
-
-func startTask(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
-	log := deployedCluster.Logger
-	nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
-	if !ok {
-		return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
-	}
-
-	startTaskInput := &ecs.StartTaskInput{
-		Cluster:            aws.String(deployedCluster.Deployment.Name),
-		TaskDefinition:     aws.String(mapping.Task),
-		ContainerInstances: []*string{&nodeInfo.Arn},
-	}
-
-	log.Infof("Starting task %v")
-	startTaskOutput, err := ecsSvc.StartTask(startTaskInput)
-	if err != nil {
-		return fmt.Errorf("Unable to start task %v\nError: %v", mapping.Task, err)
-	}
-
-	if len(startTaskOutput.Failures) > 0 {
-		return fmt.Errorf(
-			"Unable to start task %v\nMessage: %v",
-			mapping.Task,
-			errorMessageFromFailures(startTaskOutput.Failures))
-	}
-
-	return nil
-}
-
 func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
 	log := deployedCluster.Logger
 	serviceInput := &ecs.CreateServiceInput{
