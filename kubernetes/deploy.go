@@ -573,7 +573,7 @@ func (k8sDeployment *KubernetesDeployment) deleteNetworkInterfaces(ec2Svc *ec2.E
 	}
 
 	for _, nif := range resp.NetworkInterfaces {
-		if nif.Attachment.AttachmentId != nil {
+		if nif.Attachment != nil && nif.Attachment.AttachmentId != nil {
 			detachNetworkInterfaceInput := &ec2.DetachNetworkInterfaceInput{
 				AttachmentId: nif.Attachment.AttachmentId,
 				Force:        aws.Bool(true),
