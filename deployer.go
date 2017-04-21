@@ -26,8 +26,8 @@ func Run(fileConfig string) error {
 	}
 
 	server := NewServer(viper)
-	if err := server.loadDeploymentStatus(); err != nil {
-		glog.Errorln("Unable to load deployment status: " + err.Error())
+	if err := server.reloadClusterState(); err != nil {
+		glog.Errorln("Unable to reload cluster state: " + err.Error())
 	}
 
 	return server.StartServer()
