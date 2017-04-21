@@ -1432,14 +1432,14 @@ func ReloadClusterState(deployment *StoreDeployment, deployedCluster *awsecs.Dep
 
 	if err := k8sDeployment.DownloadKubeConfig(); err != nil {
 		return nil, fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
-	} else {
-		glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
-		if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
-			return nil, fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
-		} else {
-			k8sDeployment.KubeConfig = kubeConfig
-		}
 	}
+
+	glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
+	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
+	}
+	k8sDeployment.KubeConfig = kubeConfig
 
 	return k8sDeployment, nil
 }
