@@ -57,6 +57,21 @@ const (
 	DELETING  = 3
 )
 
+func getStateString(state DeploymentState) string {
+	switch state {
+	case AVAILABLE:
+		return "Available"
+	case CREATING:
+		return "Creating"
+	case UPDATING:
+		return "Updating"
+	case DELETING:
+		return "Deleting"
+	}
+
+	return ""
+}
+
 type DeploymentInfo struct {
 	awsInfo *awsecs.DeployedCluster
 	state   DeploymentState
@@ -118,25 +133,37 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 
 // NewStoreDeployment create deployment that needs to be stored
 func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
-	deployedCluster := server.DeployedClusters[deploymentName]
+	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
-		Name:          deploymentName,
-		Region:        deployedCluster.Deployment.Region,
-		Type:          "ECS",
-		ECSDeployment: deployedCluster.NewECSStoreDeployment(),
+		Name:   deploymentName,
+		Region: deploymentInfo.awsInfo.Deployment.Region,
+		Status: getStateString(deploymentInfo.state),
 	}
 
 	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
 	if ok {
 		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
 		storeDeployment.Type = "K8S"
+	} else {
+		storeDeployment.Type = "ECS"
+		storeDeployment.ECSDeployment = deploymentInfo.awsInfo.NewECSStoreDeployment()
 	}
 
 	return storeDeployment
 }
 
-// ReloadClusterState reload cluster state when deployer restart
-func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) error {
+// reloadClusterState reload cluster state when deployer restart
+func (server *Server) reloadClusterState() error {
+	storeSvc, err := store.NewStore(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to new store: %s", err.Error())
+	}
+
+	deployments, err := storeSvc.LoadDeployment()
+	if err != nil {
+		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	}
+
 	for _, storeDeployment := range deployments {
 		deploymentName := storeDeployment.Name
 		deployment := &apis.Deployment{
@@ -167,7 +194,10 @@ func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) e
 			return errors.New("Unsupported deployment store type: " + storeDeployment.Type)
 		}
 
-		server.DeployedClusters[deploymentName] = deployedCluster
+		server.DeployedClusters[deploymentName] = &DeploymentInfo{
+			awsInfo: deployedCluster,
+			state:   AVAILABLE,
+		}
 	}
 
 	return nil
@@ -183,6 +213,10 @@ func (server *Server) StartServer() error {
 		if !os.IsExist(err) {
 			return errors.New("Unable to create filesPath directory: " + err.Error())
 		}
+	}
+
+	if err := server.reloadClusterState(); err != nil {
+		return errors.New("Unable to reload cluster state: " + err.Error())
 	}
 
 	//gin.SetMode("release")
@@ -409,7 +443,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	}
 
 	server.mutex.Lock()
-	server.storeDeploymentStatus()
+	server.storeDeploymentStatus(deploymentName)
 	server.mutex.Unlock()
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
@@ -530,7 +564,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	// Deployment succeeded, storing deployment status
 	server.mutex.Lock()
-	server.storeDeploymentStatus()
+	server.storeDeploymentStatus(deployment.Name)
 	server.mutex.Unlock()
 
 	deploymentInfo.state = AVAILABLE
@@ -583,7 +617,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 
 	server.mutex.Lock()
 	delete(server.DeployedClusters, c.Param("deployment"))
-	server.storeDeploymentStatus()
+	server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
 	server.mutex.Unlock()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -703,7 +737,8 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 
 func (server *Server) logUI(c *gin.Context) {
 	logPath := path.Join(server.Config.GetString("filesPath"), "log")
-	if files, err := ioutil.ReadDir(logPath); err != nil {
+	files, err := ioutil.ReadDir(logPath)
+	if err != nil {
 		c.HTML(http.StatusNotFound, "index.html", gin.H{
 			"msg":  "Unable to read deployment log:" + err.Error(),
 			"logs": "",
@@ -713,22 +748,42 @@ func (server *Server) logUI(c *gin.Context) {
 
 	statusInfos := map[string]string{}
 	typeInfos := map[string]string{}
+	deploymentLogs := DeploymentLogs{}
 	if storeSvc, err := store.NewStore(server.Config); err == nil {
 		if deployments, err := storeSvc.LoadDeployment(); err == nil {
 			for _, deployment := range deployments {
 				statusInfos[deployment.Name] = deployment.Status
 				typeInfos[deployment.Name] = deployment.Type
 			}
-			deploymentLogs = append(deploymentLogs, deploymentLog)
+		}
+	}
+
+	for _, f := range files {
+		deploymentName := strings.Replace(f.Name(), ".log", "", 1)
+		defaultStatus := "Deleted"
+		status, ok := statusInfos[deploymentName]
+		if ok {
+			defaultStatus = status
+			if defaultStatus == "" {
+				defaultStatus = "Created"
+			}
 		}
 
-		sort.Sort(deploymentLogs)
-
-		c.HTML(http.StatusOK, "index.html", gin.H{
-			"msg":  "Hello hyperpilot!",
-			"logs": deploymentLogs,
-		})
+		deploymentLog := &DeploymentLog{
+			Name:   f.Name(),
+			Time:   f.ModTime().Format(time.RFC3339),
+			Type:   typeInfos[deploymentName],
+			Status: defaultStatus,
+		}
+		deploymentLogs = append(deploymentLogs, deploymentLog)
 	}
+
+	sort.Sort(deploymentLogs)
+
+	c.HTML(http.StatusOK, "index.html", gin.H{
+		"msg":  "Hello hyperpilot!",
+		"logs": deploymentLogs,
+	})
 }
 
 func (server *Server) getDeploymentLog(c *gin.Context) {
@@ -738,7 +793,7 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Unable to read deployment log",
+			"data":  "Unable to read deployment log: " + err.Error(),
 		})
 		return
 	}
@@ -748,6 +803,7 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	scanner.Split(bufio.ScanLines)
 
 	lines := []string{}
+	// TODO: Find a way to pass io.reader to repsonse directly, to avoid copying
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
@@ -767,24 +823,6 @@ func (server *Server) storeDeploymentStatus(deploymentName string) error {
 	deployment := server.NewStoreDeployment(deploymentName)
 	if err := storeSvc.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
-	}
-
-	return nil
-}
-
-func (server *Server) loadDeploymentStatus() error {
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to new store: %s", err.Error())
-	}
-
-	deployments, err := storeSvc.LoadDeployment()
-	if err != nil {
-		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
-	}
-
-	if err := server.ReloadClusterState(deployments); err != nil {
-		return fmt.Errorf("Unable to reload cluster state: %s", err.Error())
 	}
 
 	return nil

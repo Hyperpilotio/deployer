@@ -26,10 +26,6 @@ func Run(fileConfig string) error {
 	}
 
 	server := NewServer(viper)
-	if err := server.loadDeploymentStatus(); err != nil {
-		glog.Errorln(err)
-	}
-
 	return server.StartServer()
 }
 
