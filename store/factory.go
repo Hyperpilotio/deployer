@@ -14,6 +14,7 @@ type StoreDeployment struct {
 	Region        string
 	Type          string
 	Status        string
+	Created       string
 	ECSDeployment *awsecs.StoreDeployment
 	K8SDeployment *kubernetes.StoreDeployment
 }

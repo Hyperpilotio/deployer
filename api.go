@@ -32,7 +32,7 @@ var logFormatter = logging.MustStringFormatter(
 
 type DeploymentLog struct {
 	Name   string
-	Time   string
+	Time   time.Time
 	Type   string
 	Status string
 }
@@ -41,9 +41,7 @@ type DeploymentLogs []*DeploymentLog
 
 func (d DeploymentLogs) Len() int { return len(d) }
 func (d DeploymentLogs) Less(i, j int) bool {
-	t1, _ := time.Parse(time.RFC3339, d[i].Time)
-	t2, _ := time.Parse(time.RFC3339, d[j].Time)
-	return t1.Before(t2)
+	return d[i].Time.Before(d[j].Time)
 }
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
@@ -74,7 +72,16 @@ func getStateString(state DeploymentState) string {
 
 type DeploymentInfo struct {
 	awsInfo *awsecs.DeployedCluster
+	created time.Time
 	state   DeploymentState
+}
+
+func (deploymentInfo *DeploymentInfo) getDeploymentType() string {
+	if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
+		return "K8S"
+	} else {
+		return "ECS"
+	}
 }
 
 // Server store the stats / data of every deployment
@@ -197,6 +204,7 @@ func (server *Server) reloadClusterState() error {
 		server.DeployedClusters[deploymentName] = &DeploymentInfo{
 			awsInfo: deployedCluster,
 			state:   AVAILABLE,
+			created: time.Now(),
 		}
 	}
 
@@ -518,7 +526,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 	server.DeployedClusters[deployment.Name] = deploymentInfo
 	server.mutex.Unlock()
 
-	if deployment.ECSDeployment != nil {
+	switch deploymentInfo.getDeploymentType() {
+	case "ECS":
 		if err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster); err != nil {
 			server.mutex.Lock()
 			delete(server.DeployedClusters, deployment.Name)
@@ -533,7 +542,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
 		})
-	} else if deployment.KubernetesDeployment != nil {
+	case "K8S":
 		response, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 		if err != nil {
 			server.mutex.Lock()
@@ -550,7 +559,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			"error": false,
 			"data":  response,
 		})
-	} else {
+	default:
 		server.mutex.Lock()
 		delete(server.DeployedClusters, deployment.Name)
 		server.mutex.Unlock()
@@ -616,8 +625,8 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	}
 
 	server.mutex.Lock()
-	delete(server.DeployedClusters, c.Param("deployment"))
 	server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+	delete(server.DeployedClusters, c.Param("deployment"))
 	server.mutex.Unlock()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -736,44 +745,17 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 }
 
 func (server *Server) logUI(c *gin.Context) {
-	logPath := path.Join(server.Config.GetString("filesPath"), "log")
-	files, err := ioutil.ReadDir(logPath)
-	if err != nil {
-		c.HTML(http.StatusNotFound, "index.html", gin.H{
-			"msg":  "Unable to read deployment log:" + err.Error(),
-			"logs": "",
-		})
-		return
-	}
-
-	statusInfos := map[string]string{}
-	typeInfos := map[string]string{}
 	deploymentLogs := DeploymentLogs{}
-	if storeSvc, err := store.NewStore(server.Config); err == nil {
-		if deployments, err := storeSvc.LoadDeployment(); err == nil {
-			for _, deployment := range deployments {
-				statusInfos[deployment.Name] = deployment.Status
-				typeInfos[deployment.Name] = deployment.Type
-			}
-		}
-	}
 
-	for _, f := range files {
-		deploymentName := strings.Replace(f.Name(), ".log", "", 1)
-		defaultStatus := "Deleted"
-		status, ok := statusInfos[deploymentName]
-		if ok {
-			defaultStatus = status
-			if defaultStatus == "" {
-				defaultStatus = "Created"
-			}
-		}
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 
+	for name, deploymentInfo := range server.DeployedClusters {
 		deploymentLog := &DeploymentLog{
-			Name:   f.Name(),
-			Time:   f.ModTime().Format(time.RFC3339),
-			Type:   typeInfos[deploymentName],
-			Status: defaultStatus,
+			Name:   name,
+			Time:   deploymentInfo.created,
+			Type:   deploymentInfo.getDeploymentType(),
+			Status: getStateString(deploymentInfo.state),
 		}
 		deploymentLogs = append(deploymentLogs, deploymentLog)
 	}
@@ -781,7 +763,7 @@ func (server *Server) logUI(c *gin.Context) {
 	sort.Sort(deploymentLogs)
 
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"msg":  "Hello hyperpilot!",
+		"msg":  "Hyperpilot Deployments!",
 		"logs": deploymentLogs,
 	})
 }
