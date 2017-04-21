@@ -47,11 +47,41 @@ func (d DeploymentLogs) Less(i, j int) bool {
 }
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
+type DeploymentState int
+
+// Possible deployment states
+const (
+	AVAILABLE = 0
+	CREATING  = 1
+	UPDATING  = 2
+	DELETING  = 3
+)
+
+func getStateString(state DeploymentState) string {
+	switch state {
+	case AVAILABLE:
+		return "Available"
+	case CREATING:
+		return "Creating"
+	case UPDATING:
+		return "Updating"
+	case DELETING:
+		return "Deleting"
+	}
+
+	return ""
+}
+
+type DeploymentInfo struct {
+	awsInfo *awsecs.DeployedCluster
+	state   DeploymentState
+}
+
 // Server store the stats / data of every deployment
 type Server struct {
 	Config *viper.Viper
 	// Maps deployment name to deployed cluster struct
-	DeployedClusters   map[string]*awsecs.DeployedCluster
+	DeployedClusters   map[string]*DeploymentInfo
 	KubernetesClusters *kubernetes.KubernetesClusters
 
 	// Maps file id to location on disk
@@ -63,7 +93,7 @@ type Server struct {
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
 		Config:             config,
-		DeployedClusters:   make(map[string]*awsecs.DeployedCluster),
+		DeployedClusters:   make(map[string]*DeploymentInfo),
 		KubernetesClusters: kubernetes.NewKubernetesClusters(),
 		UploadedFiles:      make(map[string]string),
 	}
@@ -103,25 +133,37 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 
 // NewStoreDeployment create deployment that needs to be stored
 func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
-	deployedCluster := server.DeployedClusters[deploymentName]
+	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
-		Name:          deploymentName,
-		Region:        deployedCluster.Deployment.Region,
-		Type:          "ECS",
-		ECSDeployment: deployedCluster.NewECSStoreDeployment(),
+		Name:   deploymentName,
+		Region: deploymentInfo.awsInfo.Deployment.Region,
+		Status: getStateString(deploymentInfo.state),
 	}
 
 	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
 	if ok {
 		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
 		storeDeployment.Type = "K8S"
+	} else {
+		storeDeployment.Type = "ECS"
+		storeDeployment.ECSDeployment = deploymentInfo.awsInfo.NewECSStoreDeployment()
 	}
 
 	return storeDeployment
 }
 
-// ReloadClusterState reload cluster state when deployer restart
-func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) error {
+// reloadClusterState reload cluster state when deployer restart
+func (server *Server) reloadClusterState() error {
+	storeSvc, err := store.NewStore(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to new store: %s", err.Error())
+	}
+
+	deployments, err := storeSvc.LoadDeployment()
+	if err != nil {
+		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	}
+
 	for _, storeDeployment := range deployments {
 		deploymentName := storeDeployment.Name
 		deployment := &apis.Deployment{
@@ -151,7 +193,11 @@ func (server *Server) ReloadClusterState(deployments []*store.StoreDeployment) e
 		default:
 			return errors.New("Unsupported deployment store type: " + storeDeployment.Type)
 		}
-		server.DeployedClusters[deploymentName] = deployedCluster
+
+		server.DeployedClusters[deploymentName] = &DeploymentInfo{
+			awsInfo: deployedCluster,
+			state:   AVAILABLE,
+		}
 	}
 
 	return nil
@@ -167,6 +213,10 @@ func (server *Server) StartServer() error {
 		if !os.IsExist(err) {
 			return errors.New("Unable to create filesPath directory: " + err.Error())
 		}
+	}
+
+	if err := server.reloadClusterState(); err != nil {
+		return errors.New("Unable to reload cluster state: " + err.Error())
 	}
 
 	//gin.SetMode("release")
@@ -196,7 +246,6 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 
-		daemonsGroup.POST("/:deployment/task", server.startTask)
 		daemonsGroup.GET("/:deployment/tasks/:task/node_address", server.getNodeAddressForTask)
 		daemonsGroup.GET("/:deployment/containers/:container/url", server.getContainerUrl)
 	}
@@ -218,7 +267,7 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	deployedCluster, ok := server.DeployedClusters[deploymentName]
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -228,7 +277,7 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 	}
 
 	nodeId := -1
-	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
+	for _, nodeMapping := range deploymentInfo.awsInfo.Deployment.NodeMapping {
 		if nodeMapping.Task == taskName {
 			nodeId = nodeMapping.Id
 			break
@@ -243,7 +292,7 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 		return
 	}
 
-	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
+	nodeInfo, nodeOk := deploymentInfo.awsInfo.NodeInfos[nodeId]
 	if !nodeOk {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -334,18 +383,6 @@ func (server *Server) deleteFile(c *gin.Context) {
 func (server *Server) updateDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	data, ok := server.DeployedClusters[deploymentName]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Deployment not found",
-		})
-		return
-	}
-
 	// TODO Implement function to update deployment
 	var deployment apis.Deployment
 	if err := c.BindJSON(&deployment); err != nil {
@@ -355,11 +392,37 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	deploymentName = data.Deployment.Name
-	data.Deployment = &deployment
-	data.Deployment.Name = deploymentName
 
-	f, logErr := server.NewLogger(data)
+	server.mutex.Lock()
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
+
+	if deploymentInfo.state != AVAILABLE {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Deployment is not available",
+		})
+		return
+	}
+
+	deployment.Name = deploymentName
+	deploymentInfo.awsInfo.Deployment = &deployment
+	deploymentInfo.state = UPDATING
+	server.mutex.Unlock()
+
+	defer func() {
+		deploymentInfo.state = AVAILABLE
+	}()
+
+	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
 	if logErr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -370,26 +433,22 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	defer f.Close()
 
 	// TODO: Check if it's ECS or kubernetes
-	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, data)
+	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, deploymentInfo.awsInfo)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
 			"data":  "Error update deployment: " + err.Error(),
 		})
-	} else {
-		if err := server.storeDeploymentStatus(deploymentName); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": true,
-				"data":  "Unable to store deployment status:" + err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  "",
-		})
+		return
 	}
+
+	server.mutex.Lock()
+	server.storeDeploymentStatus(deploymentName)
+	server.mutex.Unlock()
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  "",
+	})
 }
 
 func (server *Server) getAllDeployments(c *gin.Context) {
@@ -430,20 +489,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	deployment.Name = createUniqueDeploymentName(deployment.Name)
-
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	if _, ok := server.DeployedClusters[deployment.Name]; ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Already deployed",
-		})
-		return
-	}
-
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
-	server.DeployedClusters[deployment.Name] = deployedCluster
 
 	f, logErr := server.NewLogger(deployedCluster)
 	if logErr != nil {
@@ -455,23 +501,44 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 	defer f.Close()
 
+	server.mutex.Lock()
+	if _, ok := server.DeployedClusters[deployment.Name]; ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Already deployed",
+		})
+		return
+	}
+
+	deploymentInfo := &DeploymentInfo{
+		awsInfo: deployedCluster,
+		state:   CREATING,
+	}
+	server.DeployedClusters[deployment.Name] = deploymentInfo
+	server.mutex.Unlock()
+
 	if deployment.ECSDeployment != nil {
-		err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
-		if err != nil {
+		if err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster); err != nil {
+			server.mutex.Lock()
+			delete(server.DeployedClusters, deployment.Name)
+			server.mutex.Unlock()
+
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
 				"data":  "Unable to create ECS deployment: " + err.Error(),
 			})
 			return
 		}
-
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
-			"data":  "",
 		})
 	} else if deployment.KubernetesDeployment != nil {
-		info, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+		response, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
 		if err != nil {
+			server.mutex.Lock()
+			delete(server.DeployedClusters, deployment.Name)
+			server.mutex.Unlock()
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
 				"data":  "Unable to create Kubernetes deployment: " + err.Error(),
@@ -481,9 +548,13 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 		c.JSON(http.StatusAccepted, gin.H{
 			"error": false,
-			"data":  info,
+			"data":  response,
 		})
 	} else {
+		server.mutex.Lock()
+		delete(server.DeployedClusters, deployment.Name)
+		server.mutex.Unlock()
+
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
 			"data":  "Unsupported container deployment",
@@ -492,130 +563,110 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	// Deployment succeeded, storing deployment status
-	if err := server.storeDeploymentStatus(deployment.Name); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": true,
-			"data":  "Unable to store deployment status:" + err.Error(),
-		})
-		return
-	}
+	server.mutex.Lock()
+	server.storeDeploymentStatus(deployment.Name)
+	server.mutex.Unlock()
+
+	deploymentInfo.state = AVAILABLE
 }
 
-func (server *Server) startTask(c *gin.Context) {
-	deploymentName := c.Param("deployment")
-
+func (server *Server) deleteDeployment(c *gin.Context) {
 	server.mutex.Lock()
-	defer server.mutex.Unlock()
 
-	deployment, ok := server.DeployedClusters[deploymentName]
+	deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]
 	if !ok {
+		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Deployment not found",
+			"data":  c.Param("deployment") + " not found.",
 		})
 		return
 	}
 
-	var nodeMapping apis.NodeMapping
-	if err := c.BindJSON(&nodeMapping); err != nil {
+	if deploymentInfo.state != AVAILABLE {
+		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Error deserializing nodeMapping: " + err.Error(),
+			"data":  c.Param("deployment") + " is not available to delete",
 		})
 		return
 	}
 
-	if err := awsecs.StartTaskOnNode(server.Config, deployment, &nodeMapping); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
+	deploymentInfo.state = DELETING
+	server.mutex.Unlock()
+
+	defer func() {
+		deploymentInfo.state = AVAILABLE
+	}()
+
+	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
+	if logErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to start task: " + err.Error(),
+			"data":  "Error creating deployment logger:" + logErr.Error(),
 		})
 		return
 	}
+	defer f.Close()
+
+	if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
+		server.KubernetesClusters.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+	} else {
+		awsecs.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+	}
+
+	server.mutex.Lock()
+	delete(server.DeployedClusters, c.Param("deployment"))
+	server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+	server.mutex.Unlock()
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
 		"data":  "",
 	})
-}
 
-func (server *Server) deleteDeployment(c *gin.Context) {
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		f, logErr := server.NewLogger(data)
-		if logErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Error creating deployment logger:" + logErr.Error(),
-			})
-			return
-		}
-		defer f.Close()
-
-		// TODO create a batch job to delete the deployment
-		if data.Deployment.KubernetesDeployment != nil {
-			server.KubernetesClusters.DeleteDeployment(server.Config, data)
-		} else {
-			awsecs.DeleteDeployment(server.Config, data)
-		}
-
-		delete(server.DeployedClusters, c.Param("deployment"))
-		if err := server.deleteDeploymentStatus(c.Param("deployment")); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": true,
-				"data":  "Unable to store deployment status:" + err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  "",
-		})
-	} else {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  c.Param("deployment") + " not found.",
-		})
-	}
 }
 
 func (server *Server) getPemFile(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		privateKey := strings.Replace(*data.KeyPair.KeyMaterial, "\\n", "\n", -1)
-		c.String(http.StatusOK, privateKey)
-	} else {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  c.Param("deployment") + " not found.",
-		})
+	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		if deploymentInfo.awsInfo != nil && deploymentInfo.awsInfo.KeyPair != nil {
+			privateKey := strings.Replace(*deploymentInfo.awsInfo.KeyPair.KeyMaterial, "\\n", "\n", -1)
+			c.String(http.StatusOK, privateKey)
+			return
+		}
 	}
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": true,
+		"data":  c.Param("deployment") + " not found.",
+	})
 }
 
 func (server *Server) getKubeConfigFile(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if data, ok := server.KubernetesClusters.Clusters[c.Param("deployment")]; ok {
-		if b, err := ioutil.ReadFile(data.KubeConfigPath); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{
-				"error": true,
-				"data":  "Unable to read kubeConfig file: " + err.Error(),
-			})
-		} else {
-			c.String(http.StatusOK, string(b))
+	if k8sDeployment, ok := server.KubernetesClusters.Clusters[c.Param("deployment")]; ok {
+		if k8sDeployment.KubeConfigPath != "" {
+			if b, err := ioutil.ReadFile(k8sDeployment.KubeConfigPath); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": true,
+					"data":  "Unable to read kubeConfig file: " + err.Error(),
+				})
+			} else {
+				c.String(http.StatusOK, string(b))
+			}
+			return
 		}
-	} else {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  c.Param("deployment") + " not found.",
-		})
 	}
+
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": true,
+		"data":  c.Param("deployment") + " not found.",
+	})
 }
 
 func (server *Server) getContainerUrl(c *gin.Context) {
@@ -625,7 +676,7 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	deployedCluster, ok := server.DeployedClusters[deploymentName]
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -633,6 +684,8 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 		})
 		return
 	}
+
+	deployedCluster := deploymentInfo.awsInfo
 
 	nodePort := ""
 	taskFamilyName := ""
@@ -695,6 +748,7 @@ func (server *Server) logUI(c *gin.Context) {
 
 	statusInfos := map[string]string{}
 	typeInfos := map[string]string{}
+	deploymentLogs := DeploymentLogs{}
 	if storeSvc, err := store.NewStore(server.Config); err == nil {
 		if deployments, err := storeSvc.LoadDeployment(); err == nil {
 			for _, deployment := range deployments {
@@ -704,7 +758,6 @@ func (server *Server) logUI(c *gin.Context) {
 		}
 	}
 
-	deploymentLogs := DeploymentLogs{}
 	for _, f := range files {
 		deploymentName := strings.Replace(f.Name(), ".log", "", 1)
 		defaultStatus := "Deleted"
@@ -740,7 +793,7 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Unable to read deployment log",
+			"data":  "Unable to read deployment log: " + err.Error(),
 		})
 		return
 	}
@@ -750,6 +803,7 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	scanner.Split(bufio.ScanLines)
 
 	lines := []string{}
+	// TODO: Find a way to pass io.reader to repsonse directly, to avoid copying
 	for scanner.Scan() {
 		lines = append(lines, scanner.Text())
 	}
@@ -769,37 +823,6 @@ func (server *Server) storeDeploymentStatus(deploymentName string) error {
 	deployment := server.NewStoreDeployment(deploymentName)
 	if err := storeSvc.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
-	}
-
-	return nil
-}
-
-func (server *Server) loadDeploymentStatus() error {
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to new store: %s", err.Error())
-	}
-
-	deployments, err := storeSvc.LoadDeployment()
-	if err != nil {
-		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
-	}
-
-	if err := server.ReloadClusterState(deployments); err != nil {
-		return fmt.Errorf("Unable to reload cluster state: %s", err.Error())
-	}
-
-	return nil
-}
-
-func (server *Server) deleteDeploymentStatus(deploymentName string) error {
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to new store: %s", err.Error())
-	}
-
-	if err := storeSvc.DeleteDeployment(deploymentName); err != nil {
-		return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 	}
 
 	return nil

@@ -429,7 +429,7 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 	}
 
 	if err := k8sDeployment.deleteElbSecurityGroup(ec2Svc); err != nil {
-		return fmt.Errorf("Unable to deleting elb securityGroups: %s", err.Error())
+		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
 	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, true); err != nil {
@@ -648,7 +648,7 @@ func (k8sDeployment *KubernetesDeployment) deleteElbSecurityGroup(ec2Svc *ec2.EC
 		for _, tag := range securityGroup.Tags {
 			tagKey := aws.StringValue(tag.Key)
 			tagVal := aws.StringValue(tag.Value)
-			if (tagKey == "Name") && (tagVal == "k8s-cluster-security-group") {
+			if tagKey == "Name" && tagVal == "k8s-cluster-security-group" {
 				k8sClusterSgId = aws.StringValue(securityGroup.GroupId)
 				break
 			}
@@ -656,7 +656,7 @@ func (k8sDeployment *KubernetesDeployment) deleteElbSecurityGroup(ec2Svc *ec2.EC
 	}
 
 	if err := k8sDeployment.deleteNetworkInterfaces(ec2Svc, k8sElbSgNames); err != nil {
-		return fmt.Errorf("Unable to delete network interfaces: %s\n", err.Error())
+		log.Warningf("Unable to delete network interfaces: %s", err.Error())
 	}
 
 	for _, sgId := range k8sElbSgIds {
@@ -675,7 +675,7 @@ func (k8sDeployment *KubernetesDeployment) deleteElbSecurityGroup(ec2Svc *ec2.EC
 		}
 
 		if _, err := ec2Svc.RevokeSecurityGroupIngress(revokeSecurityGroupIngressInput); err != nil {
-			return fmt.Errorf("Unable to remove ingress rules from security group: %s", err.Error())
+			log.Warningf("Unable to remove ingress rules from security group: %s", err.Error())
 		}
 
 		params := &ec2.DeleteSecurityGroupInput{
