@@ -50,15 +50,10 @@ type DeployedCluster struct {
 }
 
 type StoreDeployment struct {
-	KeyName     string
-	KeyMaterial string
 }
 
 func (deployedCluster *DeployedCluster) NewECSStoreDeployment() *StoreDeployment {
-	return &StoreDeployment{
-		KeyName:     aws.StringValue(deployedCluster.KeyPair.KeyName),
-		KeyMaterial: aws.StringValue(deployedCluster.KeyPair.KeyMaterial),
-	}
+	return &StoreDeployment{}
 }
 
 // KeyName return a key name according to the Deployment.Name with suffix "-key"

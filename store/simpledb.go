@@ -66,7 +66,7 @@ func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (db *SimpleDB) LoadDeployment() ([]*StoreDeployment, error) {
+func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s`", db.Domain)

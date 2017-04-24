@@ -47,7 +47,7 @@ func (file *File) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (file *File) LoadDeployment() ([]*StoreDeployment, error) {
+func (file *File) LoadDeployments() ([]*StoreDeployment, error) {
 	fileDeployment := &FileDeployment{}
 	if _, err := os.Stat(file.Path); err == nil {
 		if err := common.LoadFileToObject(file.Path, fileDeployment); err != nil {
@@ -84,7 +84,7 @@ func (file *File) DeleteDeployment(deploymentName string) error {
 func (file *File) getDeployInfos() (map[string]*StoreDeployment, error) {
 	deployInfos := map[string]*StoreDeployment{}
 	if _, err := os.Stat(file.Path); err == nil {
-		deployments, err := file.LoadDeployment()
+		deployments, err := file.LoadDeployments()
 		if err != nil {
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}

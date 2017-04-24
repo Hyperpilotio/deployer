@@ -10,18 +10,20 @@ import (
 )
 
 type StoreDeployment struct {
-	Name          string
-	Region        string
-	Type          string
-	Status        string
-	Created       string
+	Name        string
+	Region      string
+	Type        string
+	Status      string
+	Created     string
+	KeyMaterial string
+
 	ECSDeployment *awsecs.StoreDeployment
 	K8SDeployment *kubernetes.StoreDeployment
 }
 
 type Store interface {
 	StoreNewDeployment(storeDeployment *StoreDeployment) error
-	LoadDeployment() ([]*StoreDeployment, error)
+	LoadDeployments() ([]*StoreDeployment, error)
 	DeleteDeployment(deploymentName string) error
 }
 

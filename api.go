@@ -166,7 +166,7 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to new store: %s", err.Error())
 	}
 
-	deployments, err := storeSvc.LoadDeployment()
+	deployments, err := storeSvc.LoadDeployments()
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
@@ -180,7 +180,7 @@ func (server *Server) reloadClusterState() error {
 		deployedCluster := awsecs.NewDeployedCluster(deployment)
 
 		// Reload keypair
-		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster, storeDeployment.ECSDeployment.KeyMaterial); err != nil {
+		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster, storeDeployment.KeyMaterial); err != nil {
 			return fmt.Errorf("Unable to load %s keyPair: %s", deploymentName, err.Error())
 		}
 
