@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
+	v1beta1 "k8s.io/client-go/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -56,6 +57,12 @@ type DeploymentLoadBalancers struct {
 
 type KubernetesClusters struct {
 	Clusters map[string]*KubernetesDeployment
+}
+
+type ClusterInfo struct {
+	Nodes      []v1.Node
+	Pods       []v1.Pod
+	Containers []v1beta1.Deployment
 }
 
 var publicPortType = 1
@@ -1440,4 +1447,42 @@ func ReloadClusterState(deployment *StoreDeployment, deployedCluster *awsecs.Dep
 	}
 
 	return k8sDeployment, nil
+}
+
+func (k8sDeployment *KubernetesDeployment) GetClusterInfo() (*ClusterInfo, error) {
+	kubeConfig := k8sDeployment.KubeConfig
+	if kubeConfig == nil {
+		return nil, errors.New("Empty kubeconfig passed, skipping to get k8s objects")
+	}
+
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to connect to kubernetes during get cluster: " + err.Error())
+	}
+
+	nodes := k8sClient.CoreV1().Nodes()
+	nodeLists, nodeError := nodes.List(metav1.ListOptions{})
+	if nodeError != nil {
+		return nil, fmt.Errorf("Unable to list nodes for get cluster: %s", nodeError.Error())
+	}
+
+	pods := k8sClient.CoreV1().Pods("")
+	podLists, podError := pods.List(metav1.ListOptions{})
+	if podError != nil {
+		return nil, fmt.Errorf("Unable to list pods for get cluster: %s", podError.Error())
+	}
+
+	deploys := k8sClient.Extensions().Deployments("")
+	deployLists, depError := deploys.List(metav1.ListOptions{})
+	if depError != nil {
+		return nil, fmt.Errorf("Unable to list deployments for get cluster: %s", depError.Error())
+	}
+
+	clusterInfo := &ClusterInfo{
+		Nodes:      nodeLists.Items,
+		Pods:       podLists.Items,
+		Containers: deployLists.Items,
+	}
+
+	return clusterInfo, nil
 }

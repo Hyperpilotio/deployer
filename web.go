@@ -30,25 +30,39 @@ func (d DeploymentLogs) Less(i, j int) bool {
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 func (server *Server) logUI(c *gin.Context) {
-	deploymentLogs := DeploymentLogs{}
-
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	for name, deploymentInfo := range server.DeployedClusters {
-		deploymentLog := &DeploymentLog{
-			Name:   name,
-			Time:   deploymentInfo.created,
-			Type:   deploymentInfo.getDeploymentType(),
-			Status: getStateString(deploymentInfo.state),
-		}
-		deploymentLogs = append(deploymentLogs, deploymentLog)
-	}
-
-	sort.Sort(deploymentLogs)
-
+	deploymentLogs := server.getDeploymentLogs()
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"msg":  "Hyperpilot Deployments!",
+		"logs": deploymentLogs,
+	})
+}
+
+func (server *Server) userUI(c *gin.Context) {
+	awsProfiles, err := server.Store.LoadAWSProfiles()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": true,
+			"data":  "Unable to load aws profile: " + err.Error(),
+		})
+		return
+	}
+
+	c.HTML(http.StatusOK, "user.html", gin.H{
+		"error":       false,
+		"awsProfiles": awsProfiles,
+	})
+}
+
+func (server *Server) clusterUI(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentLogs := server.getDeploymentLogs()
+	c.HTML(http.StatusOK, "cluster.html", gin.H{
+		"msg":  "Hyperpilot Clusters!",
 		"logs": deploymentLogs,
 	})
 }
@@ -81,20 +95,20 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	})
 }
 
-func (server *Server) userUI(c *gin.Context) {
-	awsProfiles, err := server.Store.LoadAWSProfiles()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": true,
-			"data":  "Unable to load aws profile: " + err.Error(),
-		})
-		return
+func (server *Server) getDeploymentLogs() []*DeploymentLog {
+	deploymentLogs := DeploymentLogs{}
+	for name, deploymentInfo := range server.DeployedClusters {
+		deploymentLog := &DeploymentLog{
+			Name:   name,
+			Time:   deploymentInfo.created,
+			Type:   deploymentInfo.getDeploymentType(),
+			Status: getStateString(deploymentInfo.state),
+		}
+		deploymentLogs = append(deploymentLogs, deploymentLog)
 	}
 
-	c.HTML(http.StatusOK, "user.html", gin.H{
-		"error":       false,
-		"awsProfiles": awsProfiles,
-	})
+	sort.Sort(deploymentLogs)
+	return deploymentLogs
 }
 
 func (server *Server) storeUser(c *gin.Context) {
@@ -200,4 +214,21 @@ func getAWSProfileParam(c *gin.Context) (*awsecs.AWSProfile, error) {
 	}
 
 	return awsProfile, nil
+}
+
+func (server *Server) getCluster(c *gin.Context) {
+	clusterName := c.Param("clusterName")
+	if clusterName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to find clusterName param",
+		})
+		return
+	}
+
+	clusterInfo, _ := server.KubernetesClusters.Clusters[clusterName].GetClusterInfo()
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  clusterInfo,
+	})
 }

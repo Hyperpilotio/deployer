@@ -4,6 +4,7 @@ html {
     color: #333;
     margin-left: -8px;
 }
+
 header {
     position: fixed;
     top: 0;
@@ -11,6 +12,7 @@ header {
     background-color: #4A4A4A;
     height: 64px;
 }
+
 header .banner {
     float: left;
     color: white;
@@ -20,38 +22,46 @@ header .banner {
     padding: 12px;
     display: inline-block;
 }
+
 header nav {
     height: 100%;
     padding: 0 2em;
 }
+
 header nav li,
 header nav ul {
     display: inline-block;
 }
+
 header nav ul {
     list-style: none;
     float: left;
 }
+
 header nav li {
     font-size: 24px;
     line-height: 32px;
     margin-right: 24px;
 }
+
 header nav li a {
     color: #9B9B9B;
     text-shadow: 0 -1px #333;
 }
+
 header nav li a.active,
 header nav li a:hover {
     color: #F5A623;
     text-shadow: 0 -1px #845913;
     text-decoration: none;
 }
+
 main {
     margin-left: 25%;
     margin-top: 64px;
     padding: 1px 2em;
 }
+
 aside {
     width: 25%;
     height: 100%;
@@ -61,23 +71,30 @@ aside {
     border-right: 1px solid #9B9B9B;
     overflow-y: auto;
 }
+
 table {
     border-collapse: collapse;
     width: 100%;
 }
-table, td, th {
+
+table,
+td,
+th {
     border: 1px solid #ddd;
     text-align: left;
     padding: 15px;
 }
+
 th {
     background-color: #f1f1f1;
 }
+
 .deployment-list {
     margin: 0;
     padding: 0;
     list-style: none;
 }
+
 .deployment-list .deployment {
     position: relative;
     overflow: hidden;
@@ -87,85 +104,107 @@ th {
     cursor: pointer;
     border-bottom: 1px solid #9B9B9B;
 }
+
 .deployment-list .deployment .logName {
     padding: 5px;
 }
+
 .deployment-list .deployment .logTime {
     font-size: 0.8em;
     padding-left: 5px;
     color: #9B9B9B;
 }
+
 .deployment-list .deployment .badge {
     position: absolute;
     bottom: 10px;
     right: 10px;
 }
+
 .deployment-list .deployment:hover {
     background: linear-gradient(#FFE6BC, #e6cfa9);
 }
+
 .deployment-list .active {
     background: linear-gradient(#FFE6BC, #e6cfa9);
 }
+
+
 /* Definition List */
+
 dl dt {
     font-weight: bold;
     width: 100px;
     text-align: right;
 }
+
 dl dt,
 dl dd {
     display: inline-block;
     margin-bottom: 0.25em;
 }
+
 dl dd {
     margin-left: 1em;
 }
+
+
 /* Anchors */
+
 a {
     color: #F5A623;
     text-decoration: none;
 }
+
 a:hover {
     text-decoration: underline;
 }
+
 .badge {
     padding: 3px;
     background-color: #9B9B9B;
     border-radius: 1px;
     box-shadow: -1px -1px 0 #333;
 }
+
 .badge.badge-Available {
     color: white;
     background-color: #599C0F;
     box-shadow: -1px -1px 0 #417505;
     text-shadow: 0 -1px #417505;
 }
+
 .badge.badge-Deleting {
     color: white;
     background-color: #d9534f;
     box-shadow: -1px -1px 0 #d43f3a;
     text-shadow: 0 -1px#d43f3a;
 }
+
 .badge.badge-Creating {
     color: white;
     background-color: #F5A623;
     box-shadow: -1px -1px 0 #845913;
     text-shadow: 0 -1px #845913;
 }
+
 .badge.badge-Updating {
     color: white;
     background-color: #F5A623;
     box-shadow: -1px -1px 0 #845913;
     text-shadow: 0 -1px #845913;
 }
+
 .deployment-btn {
     padding-top: 1em;
     background-color: #FFFFFF;
 }
+
 .deployment-log {
     padding: 1em;
     background-color: #4A4A4A;
 }
+
 .deployment-log .line {
     color: white;
     font-size: 12px;
@@ -173,11 +212,106 @@ a:hover {
     margin-bottom: 0.25em;
     text-shadow: 0 -1px #333;
 }
+
 .user-detail-btn {
     padding-top: 20px;
     padding-bottom: 5px;
     background-color: #FFFFFF;
 }
+
+.cluster-detail {
+    display: none;
+    margin-top: 20px;
+    background-color: #FFFFFF;
+}
+
+.cluster-detail > div {
+    width: 32%;
+    margin-right: 10px;
+    margin-bottom: 10px;
+    float: left;
+    border: solid 1px #c0c0c0;
+}
+
+.cluster-detail div.header {
+    border-bottom: solid 1px #c0c0c0;
+    background-color: #EBEBEB;
+    text-align: center;
+    padding-top: 5px;
+    padding-bottom: 5px;
+}
+
+.cluster-detail div.content {
+    border-bottom: solid 1px #c0c0c0;
+    height: 100px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.cluster-detail div.content:hover {
+    background-color: #f8f8f8;
+}
+
+.cluster-detail div.content:hover .dropdown-content {
+    display: block;
+}
+
+.cluster-detail div.large {
+    font-weight: bold;
+    font-size: 40px;
+    color: red;
+    padding-top: 5px;
+}
+
+.cluster-detail div.small {
+    font-size: 10px;
+}
+
+.cluster-detail div.dropdown {
+    padding-top: 10px;
+}
+
+.dropdown-content {
+    display: none;
+    position: absolute;
+    background-color: #fff;
+    min-width: 280px;
+    margin-top: 8px;
+    box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+    z-index: 1;
+    text-align: left;
+}
+
+.dropdown-content a {
+    color: black;
+    padding: 12px 12px;
+    border-bottom: solid 1px #c0c0c0;
+    text-decoration: none;
+    display: block;
+}
+
+.dropdown-content a:hover {
+    background-color: #f1f1f1
+}
+
+.data-info {
+    clear: both;
+    background-color: #FFFFFF;
+    border: solid 2px #cedfb9;
+    margin-right: 10px;
+    margin-top: 10px;
+    padding: 5px 5px 5px 15px;
+}
+
+.data-header {
+    font-weight: bold;
+    background-color: #FFFFFF;
+}
+
+.data-labels{
+    font-size: 14px;
+}
+
 .btn {
     display: inline-block;
     padding: 6px 12px;
@@ -199,51 +333,61 @@ a:hover {
     border: 1px solid transparent;
     border-radius: 4px;
 }
+
 .btn-default {
     color: #333;
     background-color: #fff;
     border-color: #ccc;
 }
+
 .btn-default:hover {
     color: #333;
     background-color: #e6e6e6;
     border-color: #adadad;
 }
+
 .btn-primary {
     color: #fff;
     background-color: #0275d8;
     border-color: #0275d8;
 }
+
 .btn-primary:hover {
     color: #fff;
     background-color: #025aa5;
     border-color: #01549b;
 }
+
 .btn-warning {
     color: #fff;
     background-color: #f0ad4e;
     border-color: #f0ad4e;
 }
+
 .btn-warning:hover {
     color: #fff;
     background-color: #ec971f;
     border-color: #eb9316;
 }
+
 .btn-danger {
     color: #fff;
     background-color: #d9534f;
     border-color: #d43f3a;
 }
+
 .btn-danger:hover {
     color: #fff;
     background-color: #c9302c;
     border-color: #ac2925;
 }
+
 .btn-success {
     color: #fff;
     background-color: #5cb85c;
     border-color: #5cb85c;
 }
+
 .btn-success:hover {
     color: #fff;
     background-color: #449d44;

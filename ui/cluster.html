@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Deployer</title>
+    <link rel="stylesheet" type="text/css" href="/static/css/style.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/jquery.loadmask.css">
+    <script src="/static/js/jquery-3.2.0.min.js"></script>
+    <script src="/static/js/common.js"></script>
+    <script>
+        $(function() {
+            $('.deployment-list li').click(function() {
+                if ($(this).data('status') == 'Available') {
+                    $('.cluster-detail').show();
+                    getClusterInfo($(this).data('name'));
+                } else {
+                    $('.cluster-detail').hide();
+                }
+            });
+        });
+
+        function getClusterInfo(clusterName) {
+            $.ajax({
+                url: '/ui/clusters/' + clusterName,
+                type: 'GET',
+                dataType: 'json',
+                success: function(json) {
+                    if (json.error == false) {
+                        $('#node-cnt').html(json.data.Nodes.length);
+                        $('#pod-cnt').html(json.data.Pods.length);
+                        $('#container-cnt').html(json.data.Containers.length);
+
+                        $('#node-info').html('');
+                        $.each(json.data.Nodes, function(index, node) {
+                            var nodeName = node.metadata.name;
+                            $('#node-info').append('<a href="#" onclick="showNodeInfo(\'node' + index + '\');">' + nodeName + '</a>');
+
+                            var nodeHtml = '';
+                            nodeHtml += '<div class="data-info" id="node' + index + '" style="display:none">';
+                            nodeHtml += '    <div class="data-header">Node：' + nodeName + '</div>';
+
+                            var labelHtml = '';
+                            for (var key in node.metadata.labels) {
+                                nodeHtml += '    <div class="data-labels">label：' + (key + ":" + node.metadata.labels[key]) + '</div>';
+                            }
+
+                            $.each(json.data.Pods, function(j, pod) {
+                                if (pod.spec.nodeName == nodeName) {
+                                    nodeHtml += '<div class="data-info">';
+                                    nodeHtml += '    <div class="data-header">Pod：' + pod.metadata.name + '</div>';
+                                    nodeHtml += '</div>';
+                                }
+                            });
+
+                            nodeHtml += '</div>';
+
+                            $('#node-detail').append(nodeHtml);
+                        });
+
+                        $('#pod-info').html('');
+                        $.each(json.data.Pods, function(i, pod) {
+                            $('#pod-info').append('<a href="#">' + pod.metadata.name + '</a>')
+                        });
+
+                        $('#container-info').html('');
+                        $.each(json.data.Containers, function(i, container) {
+                            $('#container-info').append('<a href="#">' + container.metadata.name + '</a>')
+                        });
+                    }
+                }
+            });
+        }
+
+        function showNodeInfo(nodeName) {
+            $('#node-detail > div').hide()
+            $('#' + nodeName).show();
+        }
+    </script>
+</head>
+
+<body>
+    <!-- header -->
+    <header>
+        <nav>
+            <a href="/ui" class="banner">Deployer</a>
+            <ul>
+                <li>
+                    <a href="/ui">deploys</a>
+                </li>
+                <li>
+                    <a href="/ui/clusters" class="active">clusters</a>
+                </li>
+                <li>
+                    <a href="/ui/users">users</a>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <!-- sidebar -->
+    <aside>
+        <ul class="deployment-list">
+            {{range $k,$v := .logs}}
+            <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
+                <div class="logName">{{$v.Name}}</div>
+                <span class="logTime">{{$v.Time}}</span>
+                <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
+            </li>
+            {{end}}
+        </ul>
+    </aside>
+
+    <!-- main -->
+    <main>
+        <h1>{{.msg}}!</h1>
+        <div class="cluster-detail">
+            <div>
+                <div class="header">Nodes</div>
+                <div class="content">
+                    <div id="node-cnt" class="large"></div>
+                    <div class="small">Total</div>
+                    <div class="dropdown"><i class="fa fa-caret-down"></i></div>
+                    <div id="node-info" class="dropdown-content">
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="header">Pods</div>
+                <div class="content">
+                    <div id="pod-cnt" class="large"></div>
+                    <div class="small">Total</div>
+                    <div class="dropdown"><i class="fa fa-caret-down"></i></div>
+                    <div id="pod-info" class="dropdown-content"></div>
+                </div>
+            </div>
+            <div>
+                <div class="header">Containers</div>
+                <div class="content">
+                    <div id="container-cnt" class="large"></div>
+                    <div class="small">Total</div>
+                    <div class="dropdown"><i class="fa fa-caret-down"></i></div>
+                    <div id="container-info" class="dropdown-content"></div>
+                </div>
+            </div>
+        </div>
+        <div id="node-detail">
+
+        </div>
+    </main>
+</body>
+
+</html>

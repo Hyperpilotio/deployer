@@ -9,15 +9,10 @@
     <script src="/static/js/jquery-3.2.0.min.js"></script>
     <script src="/static/js/download.js"></script>
     <script src="/static/js/jquery.loadmask.min.js"></script>
+    <script src="/static/js/common.js"></script>
     <script>
         $(function() {
-            var realHeight = $('.deployment-list').height();
-            $(".deployment-list").css('height', (realHeight + 100) + 'px');
-
-            $('.deployment-list').on('click', 'li', function() {
-                $('.deployment-list li').removeClass('active');
-                $(this).addClass('active');
-
+            $('.deployment-list li').click(function() {
                 if ($(this).data('status') == 'Creating') {
                     alert("Waitng for deployment to be available");
                     return false;
@@ -28,7 +23,6 @@
                     return false;
                 }
 
-                $('main h1').remove();
                 $('.deployment-detail').show();
 
                 getDeploymentLog($(this).data('name'));
@@ -156,6 +150,9 @@
             <ul>
                 <li>
                     <a href="/ui" class="active">deploys</a>
+                </li>
+                <li>
+                    <a href="/ui/clusters">clusters</a>
                 </li>
                 <li>
                     <a href="/ui/users">users</a>
