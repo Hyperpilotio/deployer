@@ -54,6 +54,7 @@ type KubernetesDeployment struct {
 }
 
 type Deployment struct {
+	UserId string `form:"userId" json:"userId" binding:"required"`
 	Name   string `form:"name" json:"name" binding:"required"`
 	Region string `form:"region" json:"region" binding:"required"`
 	Files  []struct {

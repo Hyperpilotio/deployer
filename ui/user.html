@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Deployer</title>
+    <link rel="stylesheet" type="text/css" href="/static/css/style.css">
+    <link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
+    <script src="/static/js/jquery-3.2.0.min.js"></script>
+    <script>
+        var userInputHtml = '<input type="text"/>';
+        var awsIdInputHtml = '<input type="text" size="25"/>';
+        var awsSecretInputHtml = '<input type="text" size="50"/>';
+        var registerBtnHtml =
+            '<button type="button" class="btn btn-success"' +
+            '    onclick="registerUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-check"></i> Confirm</button>' +
+            '</button>';
+        var delRowBtnHtml =
+            '<button type="button" class="btn btn-danger"' +
+            '    onclick="$(this).closest(\'tr\').remove();">' +
+            '    <i class="fa fa-trash-o"></i> Delete' +
+            '</button>';
+        var editUserBtnHtml =
+            '<button type="button" class="btn btn-warning"' +
+            '    onclick="editUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-pencil-square-o"></i> Edit' +
+            '</button>';
+        var cancelBtnHtml =
+            '<button type="button" class="btn btn-warning"' +
+            '    onclick="cancelEdit($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-times"></i> Cancel' +
+            '</button>';
+        var updateUserBtnHtml =
+            '<button type="button" class="btn btn-success"' +
+            '    onclick="updateUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-pencil-square-o"></i> Update' +
+            '</button>';
+        var delUserBtnHtml =
+            '<button type="button" class="btn btn-danger"' +
+            '    onclick="deleteUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-trash-o"></i> Delete' +
+            '</button>';
+
+        $(function() {
+            $('#addBtn').click(function() {
+                var rowHtml = '';
+                rowHtml += '<tr>';
+                rowHtml += '    <td>' + userInputHtml + '</td>';
+                rowHtml += '    <td>' + awsIdInputHtml + '</td>';
+                rowHtml += '    <td>' + awsSecretInputHtml + '</td>';
+                rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
+                rowHtml += '</tr>';
+
+                $('#data:last-child').append(rowHtml);
+            });
+        });
+
+        function registerUser($tr) {
+            if (!checkUserData($tr)) {
+                return false;
+            }
+
+            var formdata = {};
+            formdata.userId = $tr.find('td:eq(0) > input:text').val();
+            formdata.awsId = $tr.find('td:eq(1) > input:text').val();
+            formdata.awsSecret = $tr.find('td:eq(2) > input:text').val();
+
+            $.ajax({
+                url: '/ui/users',
+                type: 'POST',
+                data: formdata,
+                dataType: 'json',
+                success: function(data) {
+                    alert('Register user ok');
+                    location.href = "/ui/users";
+                },
+                error: function(xhr, textStatus, error) {
+                    alert('Register user fail');
+                }
+            });
+        }
+
+        function updateUser($tr) {
+            if (!checkUserData($tr, false)) {
+                return false;
+            }
+
+            var formdata = {};
+            formdata.userId = $tr.find('td:eq(0) > input:hidden').val();
+            formdata.awsId = $tr.find('td:eq(1) > input:text').val();
+            formdata.awsSecret = $tr.find('td:eq(2) > input:text').val();
+
+            $.ajax({
+                url: '/ui/users/' + formdata.userId,
+                type: 'PUT',
+                data: formdata,
+                dataType: 'json',
+                success: function(json) {
+                    alert('Update user ok');
+                    location.href = "/ui/users";
+                },
+                error: function(xhr, textStatus, error) {
+                    alert('Update user fail');
+                }
+            });
+        }
+
+        function deleteUser($tr) {
+            var userId = $tr.find('td:eq(0)').html();
+            if (confirm('Delete ' + userId + '?')) {
+                $.ajax({
+                    url: '/ui/users/' + userId,
+                    type: 'DELETE',
+                    dataType: 'json',
+                    success: function(json) {
+                        alert('Delete user ok');
+                        location.href = "/ui/users";
+                    },
+                    error: function(xhr, textStatus, error) {
+                        alert('Delete user fail');
+                    }
+                });
+            }
+        }
+
+        function editUser($tr) {
+            $tr.css('background-color', '#d3efff');
+
+            var userId = $tr.find('td:eq(0)').html();
+            var awsId = $tr.find('td:eq(1)').html();
+            var awsSecret = $tr.find('td:eq(2)').html();
+
+            $tr.find('td:eq(0)').html(userId + '<input type="hidden" value="' + userId + '"/>');
+            $tr.find('td:eq(1)').html('<input type="text" value="' + awsId + '" size="25"/><input type="hidden" value="' + awsId + '"/>');
+            $tr.find('td:eq(2)').html('<input type="text" value="' + awsSecret + '" size="50"/><input type="hidden" value="' + awsSecret + '"/>');
+            $tr.find('td:eq(3)').html(updateUserBtnHtml + '&nbsp;' + cancelBtnHtml);
+        }
+
+        function cancelEdit($tr) {
+            var userId = $tr.find('td:eq(0) > input:hidden').val();
+            var awsId = $tr.find('td:eq(1) > input:hidden').val();
+            var awsSecret = $tr.find('td:eq(2) > input:hidden').val();
+            $tr.find('td:eq(0)').html(userId)
+            $tr.find('td:eq(1)').html(awsId)
+            $tr.find('td:eq(2)').html(awsSecret)
+            $tr.find('td:eq(3)').html(editUserBtnHtml + '&nbsp;' + delUserBtnHtml);
+            $tr.css('background-color', '');
+        }
+
+        function checkUserData($tr, addMode) {
+            var userId = $tr.find('td:eq(0) > input:text').val();
+            if (addMode && userId == '') {
+                alert('Please enter a userId');
+                return false;
+            }
+
+            var awsId = $tr.find('td:eq(1) > input:text').val();
+            if (awsId == '') {
+                alert('Please enter a awsId');
+                return false;
+            }
+
+            var awsSecret = $tr.find('td:eq(2) > input:text').val();
+            if (awsSecret == '') {
+                alert('Please enter a awsSecret');
+                return false;
+            }
+
+            return true;
+        }
+    </script>
+    <style>
+        main {
+            margin-left: 0%;
+        }
+        
+        button {
+            width: 90px;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- header -->
+    <header>
+        <nav>
+            <a href="/ui" class="banner">Deployer</a>
+            <ul>
+                <li>
+                    <a href="/ui">deploys</a>
+                </li>
+                <li>
+                    <a href="/ui/users" class="active">users</a>
+                </li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <div class="user-detail-btn">
+            <button id="addBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
+        </div>
+        <div class="user-detail">
+            <table>
+                <tbody>
+                    <tr>
+                        <th width="10%">USER_ID</th>
+                        <th width="25%">AWS_ACCESS_KEY_ID</th>
+                        <th width="40%">AWS_SECRET_ACCESS_KEY</th>
+                        <th width="25%">&nbsp;</th>
+                    </tr>
+                </tbody>
+                <tbody id="data">
+                    {{range $index,$user := .awsProfiles}}
+                    <tr>
+                        <td>{{$user.UserId}}</td>
+                        <td>{{$user.AwsId}}</td>
+                        <td>{{$user.AwsSecret}}</td>
+                        <td style="text-align:center">
+                            <button type="button" class="btn btn-warning" onclick="editUser($(this).closest('tr'));">
+                                <i class="fa fa-pencil-square-o"></i> Edit
+                            </button>
+                            <button type="button" class="btn btn-danger" onclick="deleteUser($(this).closest('tr'));">
+                                <i class="fa fa-trash-o"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                    {{end}}
+                </tbody>
+            </table>
+        </div>
+    </main>
+</body>
+
+</html>

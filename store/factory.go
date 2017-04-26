@@ -16,6 +16,7 @@ type StoreDeployment struct {
 	Status      string
 	Created     string
 	KeyMaterial string
+	UserId      string
 
 	ECSDeployment *awsecs.StoreDeployment
 	K8SDeployment *kubernetes.StoreDeployment
@@ -25,6 +26,10 @@ type Store interface {
 	StoreNewDeployment(storeDeployment *StoreDeployment) error
 	LoadDeployments() ([]*StoreDeployment, error)
 	DeleteDeployment(deploymentName string) error
+	StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error
+	LoadAWSProfiles() ([]*awsecs.AWSProfile, error)
+	LoadAWSProfile(userId string) (*awsecs.AWSProfile, error)
+	DeleteAWSProfile(userId string) error
 }
 
 func NewStore(config *viper.Viper) (Store, error) {

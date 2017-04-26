@@ -13,8 +13,6 @@ import (
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 
-	"github.com/spf13/viper"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudformation"
@@ -168,9 +166,9 @@ func (k8sDeployment *KubernetesDeployment) getExistingNamespaces(k8sClient *k8s.
 	return namespaces, nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, uploadedFiles map[string]string) error {
+func (k8sDeployment *KubernetesDeployment) deployCluster(awsProfile *awsecs.AWSProfile, uploadedFiles map[string]string) error {
 	deployedCluster := k8sDeployment.DeployedCluster
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
@@ -190,7 +188,7 @@ func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, up
 	}
 
 	if err := k8sDeployment.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+		k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
@@ -200,37 +198,37 @@ func (k8sDeployment *KubernetesDeployment) deployCluster(config *viper.Viper, up
 	}
 
 	if err := k8sDeployment.tagKubeNodes(k8sClient); err != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+		k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, false); err != nil {
-		k8sDeployment.deleteDeploymentOnFailure(config)
+	if err := k8sDeployment.deployKubernetesObjects(awsProfile, k8sClient, false); err != nil {
+		k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deployKubernetesObjects(config *viper.Viper, k8sClient *k8s.Clientset, skipDelete bool) error {
+func (k8sDeployment *KubernetesDeployment) deployKubernetesObjects(awsProfile *awsecs.AWSProfile, k8sClient *k8s.Clientset, skipDelete bool) error {
 	namespaces, namespacesErr := k8sDeployment.getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		if !skipDelete {
-			k8sDeployment.deleteDeploymentOnFailure(config)
+			k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := k8sDeployment.createSecrets(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployment.deleteDeploymentOnFailure(config)
+			k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := k8sDeployment.deployServices(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployment.deleteDeploymentOnFailure(config)
+			k8sDeployment.deleteDeploymentOnFailure(awsProfile)
 		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -372,7 +370,7 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 
 // CreateDeployment start a deployment
 func (k8sClusters *KubernetesClusters) CreateDeployment(
-	config *viper.Viper,
+	awsProfile *awsecs.AWSProfile,
 	uploadedFiles map[string]string,
 	deployedCluster *awsecs.DeployedCluster) (*CreateDeploymentResponse, error) {
 	log := deployedCluster.Logger
@@ -383,7 +381,7 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(
 	}
 
 	k8sClusters.Clusters[deployedCluster.Deployment.Name] = k8sDeployment
-	if err := k8sDeployment.deployCluster(config, uploadedFiles); err != nil {
+	if err := k8sDeployment.deployCluster(awsProfile, uploadedFiles); err != nil {
 		return nil, errors.New("Unable to deploy kubernetes: " + err.Error())
 	}
 
@@ -398,7 +396,7 @@ func (k8sClusters *KubernetesClusters) CreateDeployment(
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
+func (k8sClusters *KubernetesClusters) UpdateDeployment(awsProfile *awsecs.AWSProfile, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
 	log := deployedCluster.Logger
 	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
 	if !ok {
@@ -416,7 +414,7 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
 	}
@@ -432,7 +430,7 @@ func (k8sClusters *KubernetesClusters) UpdateDeployment(config *viper.Viper, dep
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	if err := k8sDeployment.deployKubernetesObjects(config, k8sClient, true); err != nil {
+	if err := k8sDeployment.deployKubernetesObjects(awsProfile, k8sClient, true); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
 
@@ -1000,17 +998,17 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) deleteDeploymentOnFailure(config *viper.Viper) {
+func (k8sDeployment *KubernetesDeployment) deleteDeploymentOnFailure(awsProfile *awsecs.AWSProfile) {
 	log := k8sDeployment.DeployedCluster.Logger
 	if k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
 		log.Warning("Skipping delete deployment on failure")
 		return
 	}
 
-	k8sDeployment.deleteDeployment(config)
+	k8sDeployment.deleteDeployment(awsProfile)
 }
 
-func (k8sDeployment *KubernetesDeployment) deleteDeployment(config *viper.Viper) {
+func (k8sDeployment *KubernetesDeployment) deleteDeployment(awsProfile *awsecs.AWSProfile) {
 	deployedCluster := k8sDeployment.DeployedCluster
 	log := deployedCluster.Logger
 	// Deleting kubernetes deployment
@@ -1019,7 +1017,7 @@ func (k8sDeployment *KubernetesDeployment) deleteDeployment(config *viper.Viper)
 		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
-	sess, sessionErr := awsecs.CreateSession(config, deployedCluster.Deployment)
+	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
 		log.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
 		return
@@ -1043,7 +1041,7 @@ func (k8sDeployment *KubernetesDeployment) deleteDeployment(config *viper.Viper)
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
-func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, deployedCluster *awsecs.DeployedCluster) {
+func (k8sClusters *KubernetesClusters) DeleteDeployment(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.DeployedCluster) {
 	log := deployedCluster.Logger
 	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
 	if !ok {
@@ -1051,7 +1049,7 @@ func (k8sClusters *KubernetesClusters) DeleteDeployment(config *viper.Viper, dep
 		return
 	}
 
-	k8sDeployment.deleteDeployment(config)
+	k8sDeployment.deleteDeployment(awsProfile)
 
 	delete(k8sClusters.Clusters, deployedCluster.Deployment.Name)
 }

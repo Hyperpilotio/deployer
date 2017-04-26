@@ -18,47 +18,56 @@
                 $('.deployment-list li').removeClass('active');
                 $(this).addClass('active');
 
+                if ($(this).data('status') == 'Creating') {
+                    alert("Waitng for deployment to be available");
+                    return false;
+                }
+
+                if ($(this).data('status') == 'Deleting') {
+                    alert("Waitng for deployment to be deleted");
+                    return false;
+                }
+
                 $('main h1').remove();
                 $('.deployment-detail').show();
 
                 getDeploymentLog($(this).data('name'));
 
-                if ($(this).data('status') == 'Deleted') {
-                    $('.deployment-btn').hide();
-                } else {
+                if ($(this).data('status') == 'Available') {
                     $('.deployment-btn').show();
                     if ($(this).data('type') == 'K8S') {
                         $('#downloadKubeconfigBtn').show();
                     } else if ($(this).data('type') == 'ECS') {
                         $('#downloadKubeconfigBtn').hide();
                     }
+                } else {
+                    $('.deployment-btn').hide();
                 }
             });
 
             $('#deleteBtn').click(function() {
-                var logFileName = $('.deployment-list .active').data('name');
-                var deploymentName = logFileName.replace('.log', '');
+                var deploymentName = $('.deployment-list .active').data('name');
                 if (confirm('Delete ' + deploymentName + 'deployment?')) {
-                    $('body').mask('Waiting...');
+                    $('html').mask('Waiting...');
                     $('.loadmask-msg').css('top', $(window).height() / 2);
                     $.ajax({
                         url: '/v1/deployments/' + deploymentName,
                         type: 'DELETE',
                         success: function(json) {
-                            $('body').unmask();
-                            getDeploymentLog(logFileName);
-                            if (json.error == false) {
-                                alert('Delete ok');
-                            } else {
-                                alert('Delete fail');
-                            }
+                            $('html').unmask();
+                            alert('Delete ok');
+                            location.href = "/ui";
+                        },
+                        error: function(xhr, textStatus, error) {
+                            $('html').unmask();
+                            alert('Delete fail');
                         }
                     });
                 }
             });
 
             $('#downloadSshKeyBtn').click(function() {
-                var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+                var deploymentName = $('.deployment-list .active').data('name');
                 $.ajax({
                     url: '/v1/deployments/' + deploymentName + '/ssh_key',
                     success: download.bind(true, 'text/plain', deploymentName + '-key')
@@ -66,7 +75,7 @@
             });
 
             $('#downloadKubeconfigBtn').click(function() {
-                var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+                var deploymentName = $('.deployment-list .active').data('name');
                 $.ajax({
                     url: '/v1/deployments/' + deploymentName + '/kubeconfig',
                     success: download.bind(true, 'text/plain', 'kubeconfig')
@@ -76,7 +85,7 @@
 
         function getDeploymentLog(logFileName) {
             $.ajax({
-                url: '/ui/list/' + logFileName,
+                url: '/ui/logs/' + logFileName,
                 type: 'GET',
                 dataType: 'json',
                 success: function(json) {
@@ -147,6 +156,9 @@
             <ul>
                 <li>
                     <a href="/ui" class="active">deploys</a>
+                </li>
+                <li>
+                    <a href="/ui/users">users</a>
                 </li>
             </ul>
         </nav>

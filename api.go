@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,26 +24,13 @@ import (
 	"github.com/spf13/viper"
 
 	"net/http"
+
+	"github.com/aws/aws-sdk-go/aws"
 )
 
 var logFormatter = logging.MustStringFormatter(
 	` %{level:.1s}%{time:0102 15:04:05.999999} %{pid} %{shortfile}] %{message}`,
 )
-
-type DeploymentLog struct {
-	Name   string
-	Time   time.Time
-	Type   string
-	Status string
-}
-
-type DeploymentLogs []*DeploymentLog
-
-func (d DeploymentLogs) Len() int { return len(d) }
-func (d DeploymentLogs) Less(i, j int) bool {
-	return d[i].Time.Before(d[j].Time)
-}
-func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 type DeploymentState int
 
@@ -88,7 +73,9 @@ func (deploymentInfo *DeploymentInfo) getDeploymentType() string {
 
 // Server store the stats / data of every deployment
 type Server struct {
-	Config *viper.Viper
+	Config      *viper.Viper
+	Store       store.Store
+	AWSProfiles map[string]*awsecs.AWSProfile
 	// Maps deployment name to deployed cluster struct
 	DeployedClusters   map[string]*DeploymentInfo
 	KubernetesClusters *kubernetes.KubernetesClusters
@@ -96,7 +83,6 @@ type Server struct {
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
 	mutex         sync.Mutex
-	storeSvc      store.Store
 }
 
 // NewServer return an instance of Server struct.
@@ -145,9 +131,11 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
 	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
-		Name:   deploymentName,
-		Region: deploymentInfo.awsInfo.Deployment.Region,
-		Status: getStateString(deploymentInfo.state),
+		Name:        deploymentName,
+		Region:      deploymentInfo.awsInfo.Deployment.Region,
+		UserId:      deploymentInfo.awsInfo.Deployment.UserId,
+		KeyMaterial: aws.StringValue(deploymentInfo.awsInfo.KeyPair.KeyMaterial),
+		Status:      getStateString(deploymentInfo.state),
 	}
 
 	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
@@ -164,33 +152,46 @@ func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDepl
 
 // reloadClusterState reload cluster state when deployer restart
 func (server *Server) reloadClusterState() error {
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to new store: %s", err.Error())
+	awsProfiles, profileErr := server.Store.LoadAWSProfiles()
+	if profileErr != nil {
+		return fmt.Errorf("Unable to load aws profile: %s", profileErr.Error())
 	}
 
-	deployments, err := storeSvc.LoadDeployments()
+	awsProfileInfos := map[string]*awsecs.AWSProfile{}
+	for _, awsProfile := range awsProfiles {
+		awsProfileInfos[awsProfile.UserId] = awsProfile
+	}
+	server.AWSProfiles = awsProfileInfos
+
+	deployments, err := server.Store.LoadDeployments()
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
 	for _, storeDeployment := range deployments {
+		userId := storeDeployment.UserId
+		awsProfile, ok := awsProfileInfos[userId]
+		if !ok {
+			return fmt.Errorf("Unable to find %s aws profile", userId)
+		}
+
 		deploymentName := storeDeployment.Name
 		deployment := &apis.Deployment{
+			UserId: userId,
 			Name:   deploymentName,
 			Region: storeDeployment.Region,
 		}
 		deployedCluster := awsecs.NewDeployedCluster(deployment)
 
 		// Reload keypair
-		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster, storeDeployment.KeyMaterial); err != nil {
+		if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
 			glog.Warningf("Unable to load %s keyPair: %s", deploymentName, err.Error())
 		}
 
 		switch storeDeployment.Type {
 		case "ECS":
 			deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
-			if err := awsecs.ReloadClusterState(server.Config, deployedCluster); err != nil {
+			if err := awsecs.ReloadClusterState(awsProfile, deployedCluster); err != nil {
 				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
 			}
 		case "K8S":
@@ -226,6 +227,12 @@ func (server *Server) StartServer() error {
 		}
 	}
 
+	storeSvc, err := store.NewStore(server.Config)
+	if err != nil {
+		return errors.New("Unable to new store: " + err.Error())
+	}
+	server.Store = storeSvc
+
 	if err := server.reloadClusterState(); err != nil {
 		return errors.New("Unable to reload cluster state: " + err.Error())
 	}
@@ -243,8 +250,13 @@ func (server *Server) StartServer() error {
 	uiGroup := router.Group("/ui")
 	{
 		uiGroup.GET("", server.logUI)
-		uiGroup.GET("/refresh", server.refreshUI)
-		uiGroup.GET("/list/:logFile", server.getDeploymentLog)
+		uiGroup.GET("/logs/:logFile", server.getDeploymentLog)
+
+		uiGroup.GET("/users", server.userUI)
+		uiGroup.POST("/users", server.storeUser)
+		uiGroup.GET("/users/:userId", server.getUser)
+		uiGroup.DELETE("/users/:userId", server.deleteUser)
+		uiGroup.PUT("/users/:userId", server.storeUser)
 	}
 
 	daemonsGroup := router.Group("/v1/deployments")
@@ -268,12 +280,6 @@ func (server *Server) StartServer() error {
 		filesGroup.POST("/:fileId", server.uploadFile)
 		filesGroup.DELETE("/:fileId", server.deleteFile)
 	}
-
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to initialize new store: %s", err.Error())
-	}
-	server.storeSvc = storeSvc
 
 	return router.Run(":" + server.Config.GetString("port"))
 }
@@ -431,6 +437,16 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		return
 	}
 
+	awsProfile, ok := server.AWSProfiles[deployment.UserId]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to find aws profile for user: " + deployment.UserId,
+		})
+		return
+	}
+
 	deployment.Name = deploymentName
 	deploymentInfo.awsInfo.Deployment = &deployment
 	deploymentInfo.state = UPDATING
@@ -451,7 +467,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		}()
 		defer f.Close()
 		// TODO: Check if it's ECS or kubernetes
-		err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, deploymentInfo.awsInfo)
+		err := server.KubernetesClusters.UpdateDeployment(awsProfile, &deployment, deploymentInfo.awsInfo)
 		if err != nil {
 			deploymentInfo.awsInfo.Logger.Infof("Error update deployment: " + err.Error())
 			return
@@ -526,6 +542,16 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
+	awsProfile, ok := server.AWSProfiles[deployment.UserId]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to find aws profile",
+		})
+		return
+	}
+
 	deploymentInfo := &DeploymentInfo{
 		awsInfo: deployedCluster,
 		state:   CREATING,
@@ -537,7 +563,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		defer f.Close()
 		switch deploymentInfo.getDeploymentType() {
 		case "ECS":
-			if err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster); err != nil {
+			if err := awsecs.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster); err != nil {
 				server.mutex.Lock()
 				delete(server.DeployedClusters, deployment.Name)
 				server.mutex.Unlock()
@@ -546,7 +572,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			}
 			deployedCluster.Logger.Infof("Create ECS deployment successfully!")
 		case "K8S":
-			response, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+			response, err := server.KubernetesClusters.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster)
 			if err != nil {
 				server.mutex.Lock()
 				delete(server.DeployedClusters, deployment.Name)
@@ -600,6 +626,16 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		return
 	}
 
+	awsProfile, ok := server.AWSProfiles[deploymentInfo.awsInfo.Deployment.UserId]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to find aws profile for user: " + deploymentInfo.awsInfo.Deployment.UserId,
+		})
+		return
+	}
+
 	deploymentInfo.state = DELETING
 	server.mutex.Unlock()
 
@@ -616,12 +652,12 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		defer f.Close()
 
 		if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
-			server.KubernetesClusters.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+			server.KubernetesClusters.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		} else {
-			awsecs.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+			awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		}
 
-		if err := server.storeSvc.DeleteDeployment(deploymentInfo.awsInfo.Deployment.Name); err != nil {
+		if err := server.Store.DeleteDeployment(deploymentInfo.awsInfo.Deployment.Name); err != nil {
 			glog.Warningf("Unable to delete deployment from store: " + err.Error())
 		}
 
@@ -746,72 +782,9 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
 }
 
-func (server *Server) logUI(c *gin.Context) {
-	deploymentLogs := server.getDeploymentLogs(c)
-	c.HTML(http.StatusOK, "index.html", gin.H{
-		"logs": deploymentLogs,
-	})
-}
-
-func (server *Server) refreshUI(c *gin.Context) {
-	deploymentLogs := server.getDeploymentLogs(c)
-	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  deploymentLogs,
-	})
-}
-
-func (server *Server) getDeploymentLogs(c *gin.Context) DeploymentLogs {
-	deploymentLogs := DeploymentLogs{}
-
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	for name, deploymentInfo := range server.DeployedClusters {
-		deploymentLog := &DeploymentLog{
-			Name:   name,
-			Time:   deploymentInfo.created,
-			Type:   deploymentInfo.getDeploymentType(),
-			Status: getStateString(deploymentInfo.state),
-		}
-		deploymentLogs = append(deploymentLogs, deploymentLog)
-	}
-
-	sort.Sort(deploymentLogs)
-	return deploymentLogs
-}
-
-func (server *Server) getDeploymentLog(c *gin.Context) {
-	logFile := c.Param("logFile")
-	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile+".log")
-	file, err := os.Open(logPath)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to read deployment log: " + err.Error(),
-		})
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	scanner.Split(bufio.ScanLines)
-
-	lines := []string{}
-	// TODO: Find a way to pass io.reader to repsonse directly, to avoid copying
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  lines,
-	})
-}
-
 func (server *Server) storeDeploymentStatus(deploymentName string) error {
 	deployment := server.NewStoreDeployment(deploymentName)
-	if err := server.storeSvc.StoreNewDeployment(deployment); err != nil {
+	if err := server.Store.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 	}
 
