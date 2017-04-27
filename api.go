@@ -259,7 +259,7 @@ func (server *Server) StartServer() error {
 		uiGroup.PUT("/users/:userId", server.storeUser)
 
 		uiGroup.GET("/clusters", server.clusterUI)
-		uiGroup.GET("/clusters/:clusterName", server.getCluster)
+		uiGroup.GET("/clusters/:deploymentType/:clusterName", server.getCluster)
 	}
 
 	daemonsGroup := router.Group("/v1/deployments")

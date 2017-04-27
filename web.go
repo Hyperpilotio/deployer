@@ -217,6 +217,15 @@ func getAWSProfileParam(c *gin.Context) (*awsecs.AWSProfile, error) {
 }
 
 func (server *Server) getCluster(c *gin.Context) {
+	deploymentType := c.Param("deploymentType")
+	if deploymentType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to find deploymentType param",
+		})
+		return
+	}
+
 	clusterName := c.Param("clusterName")
 	if clusterName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -226,9 +235,93 @@ func (server *Server) getCluster(c *gin.Context) {
 		return
 	}
 
-	clusterInfo, _ := server.KubernetesClusters.Clusters[clusterName].GetClusterInfo()
-	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  clusterInfo,
-	})
+	switch deploymentType {
+	case "ECS":
+		server.mutex.Lock()
+		deploymentInfo, ok := server.DeployedClusters[clusterName]
+		if !ok {
+			server.mutex.Unlock()
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Deployment not found",
+			})
+			return
+		}
+		server.mutex.Unlock()
+
+		deployments, err := server.Store.LoadDeployments()
+		if err != nil {
+			server.mutex.Unlock()
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Unable to load deployment status:" + err.Error(),
+			})
+			return
+		}
+
+		userId := ""
+		for _, deployment := range deployments {
+			if deployment.Name == clusterName {
+				userId = deployment.UserId
+				break
+			}
+		}
+
+		server.mutex.Lock()
+		awsProfile, ok := server.AWSProfiles[userId]
+		if !ok {
+			server.mutex.Unlock()
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to find aws profile",
+			})
+			return
+		}
+		server.mutex.Unlock()
+
+		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.awsInfo)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to get ecs cluster:" + err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"error": false,
+			"data":  clusterInfo,
+		})
+	case "K8S":
+		server.mutex.Lock()
+		k8sDeployment, ok := server.KubernetesClusters.Clusters[clusterName]
+		if !ok {
+			server.mutex.Unlock()
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Deployment not found",
+			})
+			return
+		}
+		server.mutex.Unlock()
+
+		clusterInfo, err := k8sDeployment.GetClusterInfo()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to get kubernetes cluster:" + err.Error(),
+			})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"error": false,
+			"data":  clusterInfo,
+		})
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unsupported deployment type",
+		})
+	}
 }

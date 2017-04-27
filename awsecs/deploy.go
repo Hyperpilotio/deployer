@@ -56,6 +56,12 @@ type AWSProfile struct {
 type StoreDeployment struct {
 }
 
+type ClusterInfo struct {
+	ContainerInstances []*ecs.ContainerInstance
+	Reservations       []*ec2.Reservation
+	Tasks              []*ecs.Task
+}
+
 func (deployedCluster *DeployedCluster) NewECSStoreDeployment() *StoreDeployment {
 	return &StoreDeployment{}
 }
@@ -1352,7 +1358,7 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 func ReloadClusterState(awsProfile *AWSProfile, deployedCluster *DeployedCluster) error {
 	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
-		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
 	}
 
 	ec2Svc := ec2.New(sess)
@@ -1363,27 +1369,29 @@ func ReloadClusterState(awsProfile *AWSProfile, deployedCluster *DeployedCluster
 		Cluster: aws.String(deploymentName),
 	}
 
-	if listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput); err != nil {
-		return fmt.Errorf("Unable to list container instances: %s" + err.Error())
-	} else {
-		ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
-			Cluster:            aws.String(deploymentName),
-			ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
-		}
+	listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to list container instances: %s", err.Error())
+	}
 
-		if ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput); err != nil {
-			return fmt.Errorf("Unable to describe container instances: %s" + err.Error())
-		} else {
-			var instanceIds []*string
-			for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
-				instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
-			}
-			deployedCluster.InstanceIds = instanceIds
+	ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
+		Cluster:            aws.String(deploymentName),
+		ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
+	}
 
-			if err := checkVPC(ec2Svc, deployedCluster); err != nil {
-				return fmt.Errorf("Unable to find VPC: %s", err.Error())
-			}
-		}
+	ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe container instances: %s", err.Error())
+	}
+
+	var instanceIds []*string
+	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
+		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
+	}
+	deployedCluster.InstanceIds = instanceIds
+
+	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
+		return fmt.Errorf("Unable to find VPC: %s", err.Error())
 	}
 
 	return nil
@@ -1393,7 +1401,7 @@ func ReloadClusterState(awsProfile *AWSProfile, deployedCluster *DeployedCluster
 func ReloadKeyPair(awsProfile *AWSProfile, deployedCluster *DeployedCluster, keyMaterial string) error {
 	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
-		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
 	}
 
 	ec2Svc := ec2.New(sess)
@@ -1403,20 +1411,92 @@ func ReloadKeyPair(awsProfile *AWSProfile, deployedCluster *DeployedCluster, key
 		},
 	}
 
-	if describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput); err != nil {
-		return fmt.Errorf("Unable to describe keyPairs: %s" + err.Error())
-	} else {
-		if len(describeKeyPairsOutput.KeyPairs) == 0 {
-			return fmt.Errorf("Unable to find %s keyPairs...", deployedCluster.Deployment.Name)
-		}
-
-		keyPair := &ec2.CreateKeyPairOutput{
-			KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
-			KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
-			KeyMaterial:    aws.String(keyMaterial),
-		}
-		deployedCluster.KeyPair = keyPair
+	describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe keyPairs: %s", err.Error())
 	}
 
+	if len(describeKeyPairsOutput.KeyPairs) == 0 {
+		return fmt.Errorf("Unable to find %s keyPairs", deployedCluster.Deployment.Name)
+	}
+
+	keyPair := &ec2.CreateKeyPairOutput{
+		KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
+		KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
+		KeyMaterial:    aws.String(keyMaterial),
+	}
+	deployedCluster.KeyPair = keyPair
+
 	return nil
+}
+
+func GetClusterInfo(awsProfile *AWSProfile, deployedCluster *DeployedCluster) (*ClusterInfo, error) {
+	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return nil, fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	ecsSvc := ecs.New(sess)
+
+	deploymentName := deployedCluster.Deployment.Name
+	listInstancesInput := &ecs.ListContainerInstancesInput{
+		Cluster: aws.String(deploymentName),
+	}
+
+	listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to list container instances: %s", err.Error())
+	}
+
+	ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
+		Cluster:            aws.String(deploymentName),
+		ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
+	}
+
+	ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to describe container instances: %s", err.Error())
+	}
+
+	var instanceIds []*string
+	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
+		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
+	}
+
+	ec2DescribeInstancesInput := &ec2.DescribeInstancesInput{
+		InstanceIds: instanceIds,
+	}
+
+	ec2DescribeInstanceOutput, err := ec2Svc.DescribeInstances(ec2DescribeInstancesInput)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to describe ec2 instances: %s", err.Error())
+	}
+
+	listTasksInput := &ecs.ListTasksInput{
+		Cluster: aws.String(deploymentName),
+	}
+
+	listTasksOutput, err := ecsSvc.ListTasks(listTasksInput)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to list ecs tasks: %s", err.Error())
+	}
+
+	describeTasksInput := &ecs.DescribeTasksInput{
+		Tasks:   listTasksOutput.TaskArns,
+		Cluster: aws.String(deploymentName),
+	}
+
+	describeTasksOutput, err := ecsSvc.DescribeTasks(describeTasksInput)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to describe ecs tasks: %s", err.Error())
+	}
+
+	clusterInfo := &ClusterInfo{
+		ContainerInstances: ecsDescribeInstancesOutput.ContainerInstances,
+		Reservations:       ec2DescribeInstanceOutput.Reservations,
+		Tasks:              describeTasksOutput.Tasks,
+	}
+
+	return clusterInfo, nil
 }
