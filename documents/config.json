@@ -1,0 +1,11 @@
+{
+  "awsId": "",
+  "awsSecret": "",
+  "port": 7777,
+  "filesPath": "/tmp/deployer",
+  "store": {
+    "type": "simpledb",
+    "region": "us-east-1",
+    "domain": "Deployment"
+  }
+}
