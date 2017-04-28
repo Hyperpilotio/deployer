@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -508,7 +509,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
-	defer f.Close()
 
 	server.mutex.Lock()
 	if _, ok := server.DeployedClusters[deployment.Name]; ok {
@@ -527,57 +527,50 @@ func (server *Server) createDeployment(c *gin.Context) {
 	server.DeployedClusters[deployment.Name] = deploymentInfo
 	server.mutex.Unlock()
 
-	switch deploymentInfo.getDeploymentType() {
-	case "ECS":
-		if err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster); err != nil {
+	go func() {
+		defer f.Close()
+		switch deploymentInfo.getDeploymentType() {
+		case "ECS":
+			if err := awsecs.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster); err != nil {
+				server.mutex.Lock()
+				delete(server.DeployedClusters, deployment.Name)
+				server.mutex.Unlock()
+				deployedCluster.Logger.Infof("Unable to create ECS deployment: " + err.Error())
+				return
+			}
+			deployedCluster.Logger.Infof("Create ECS deployment successfully!")
+		case "K8S":
+			response, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
+			if err != nil {
+				server.mutex.Lock()
+				delete(server.DeployedClusters, deployment.Name)
+				server.mutex.Unlock()
+				deployedCluster.Logger.Infof("Unable to create Kubernetes deployment: " + err.Error())
+				return
+			}
+			resJson, _ := json.Marshal(*response)
+			deployedCluster.Logger.Infof(string(resJson))
+			deployedCluster.Logger.Infof("Create Kubernetes deployment successfully!")
+		default:
 			server.mutex.Lock()
 			delete(server.DeployedClusters, deployment.Name)
 			server.mutex.Unlock()
-
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to create ECS deployment: " + err.Error(),
-			})
-			return
-		}
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-		})
-	case "K8S":
-		response, err := server.KubernetesClusters.CreateDeployment(server.Config, server.UploadedFiles, deployedCluster)
-		if err != nil {
-			server.mutex.Lock()
-			delete(server.DeployedClusters, deployment.Name)
-			server.mutex.Unlock()
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to create Kubernetes deployment: " + err.Error(),
-			})
+			deployedCluster.Logger.Infof("Unsupported container deployment")
 			return
 		}
 
-		c.JSON(http.StatusAccepted, gin.H{
-			"error": false,
-			"data":  response,
-		})
-	default:
+		// Deployment succeeded, storing deployment status
 		server.mutex.Lock()
-		delete(server.DeployedClusters, deployment.Name)
+		server.storeDeploymentStatus(deployment.Name)
 		server.mutex.Unlock()
 
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": true,
-			"data":  "Unsupported container deployment",
-		})
-		return
-	}
+		deploymentInfo.state = AVAILABLE
+	}()
 
-	// Deployment succeeded, storing deployment status
-	server.mutex.Lock()
-	server.storeDeploymentStatus(deployment.Name)
-	server.mutex.Unlock()
-
-	deploymentInfo.state = AVAILABLE
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "Creating deployment " + deployedCluster.Deployment.Name + "......",
+	})
 }
 
 func (server *Server) deleteDeployment(c *gin.Context) {
