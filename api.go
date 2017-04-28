@@ -428,10 +428,6 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	deploymentInfo.state = UPDATING
 	server.mutex.Unlock()
 
-	defer func() {
-		deploymentInfo.state = AVAILABLE
-	}()
-
 	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
 	if logErr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -440,24 +436,28 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	defer f.Close()
 
-	// TODO: Check if it's ECS or kubernetes
-	err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, deploymentInfo.awsInfo)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": true,
-			"data":  "Error update deployment: " + err.Error(),
-		})
-		return
-	}
+	go func() {
+		defer func() {
+			deploymentInfo.state = AVAILABLE
+		}()
+		defer f.Close()
+		// TODO: Check if it's ECS or kubernetes
+		err := server.KubernetesClusters.UpdateDeployment(server.Config, &deployment, deploymentInfo.awsInfo)
+		if err != nil {
+			deploymentInfo.awsInfo.Logger.Infof("Error update deployment: " + err.Error())
+			return
+		}
 
-	server.mutex.Lock()
-	server.storeDeploymentStatus(deploymentName)
-	server.mutex.Unlock()
+		server.mutex.Lock()
+		server.storeDeploymentStatus(deploymentName)
+		server.mutex.Unlock()
+		deploymentInfo.awsInfo.Logger.Infof("Update deployment successfully!")
+	}()
+
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "",
+		"data":  "Start to update deployment " + deploymentName + "......",
 	})
 }
 
@@ -574,9 +574,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 }
 
 func (server *Server) deleteDeployment(c *gin.Context) {
-	server.mutex.Lock()
+	deploymentName := c.Param("deployment")
 
-	deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]
+	server.mutex.Lock()
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
 	if !ok {
 		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
@@ -598,10 +599,6 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	deploymentInfo.state = DELETING
 	server.mutex.Unlock()
 
-	defer func() {
-		deploymentInfo.state = AVAILABLE
-	}()
-
 	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
 	if logErr != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -610,24 +607,27 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		})
 		return
 	}
-	defer f.Close()
 
-	if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
-		server.KubernetesClusters.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
-	} else {
-		awsecs.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
-	}
+	go func() {
+		defer f.Close()
 
-	server.mutex.Lock()
-	server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
-	delete(server.DeployedClusters, c.Param("deployment"))
-	server.mutex.Unlock()
+		if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
+			server.KubernetesClusters.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+		} else {
+			awsecs.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
+		}
+
+		server.mutex.Lock()
+		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+		delete(server.DeployedClusters, c.Param("deployment"))
+		server.mutex.Unlock()
+		deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
+	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
-		"data":  "",
+		"data":  "Start to delete deployment " + deploymentName + "......",
 	})
-
 }
 
 func (server *Server) getPemFile(c *gin.Context) {
