@@ -43,6 +43,7 @@
                         showClusterNodes(deploymentType, json.data);
                         showClusterNodesDetail(deploymentType, json.data);
                         showClusterPods(deploymentType, json.data);
+                        showClusterTasks(deploymentType, json.data);
                         showClusterContainers(deploymentType, json.data);
                     }
                 }
@@ -58,8 +59,15 @@
                     break;
                 case 'ECS':
                     $('#node-cnt').html(data.ContainerInstances.length);
-                    // $('#pod-cnt').html(data.Pods.length);
-                    // $('#container-cnt').html(data.Containers.length);
+                    $('#task-cnt').html(data.Tasks.length);
+
+                    var containerCnt = 0;
+                    $.each(data.Tasks, function(i, task) {
+                        $.each(task.Containers, function(j, container) {
+                            containerCnt++;
+                        });
+                    });
+                    $('#container-cnt').html(containerCnt);
                     break;
                 default:
                     console.log('Unsupported deploymentType type: ' + deploymentType + '.');
@@ -114,10 +122,15 @@
                 case 'ECS':
                     $('#node-info').html('');
                     $.each(data.Reservations, function(index, reservation) {
+                        var nodeIconHtml = addTaskIcon(reservation.Instances[0].PublicDnsName, data);
+
                         var nodeName = '';
                         nodeName += '<table>';
                         nodeName += '    <tr>';
                         nodeName += '        <td width="500px">' + reservation.Instances[0].PublicDnsName + '</td>';
+                        nodeName += '        <td>';
+                        nodeName += '            <div class="node-icon">' + addTaskIcon(reservation.Instances[0].PublicDnsName, data) + '</div>';
+                        nodeName += '        </td>';
                         nodeName += '    </tr>';
                         nodeName += '</table>';
 
@@ -179,7 +192,38 @@
                     });
                     break;
                 case 'ECS':
-                    // TODO: 
+                    $.each(data.Reservations, function(i, reservation) {
+                        var nodeName = reservation.Instances[0].PublicDnsName;
+                        var instanceId = reservation.Instances[0].InstanceId;
+                        var containerInstanceArn = '';
+                        $.each(data.ContainerInstances, function(j, containerInstance) {
+                            if (containerInstance.Ec2InstanceId == instanceId) {
+                                containerInstanceArn = containerInstance.ContainerInstanceArn;
+                            }
+                        });
+
+                        var nodesDetails = [];
+                        nodesDetails.push('<div class="data-info" id="node' + i + '" style="display:none">');
+                        nodesDetails.push('<div class="data-header">Node：' + nodeName + '</div>');
+
+                        $.each(data.Tasks, function(k, task) {
+                            if (task.ContainerInstanceArn == containerInstanceArn) {
+                                var taskName = task.TaskDefinitionArn.split('task-definition/')[1];
+                                nodesDetails.push('<div class="data-info">');
+                                nodesDetails.push('<div class="data-header">Task：' + taskName + '</div>');
+
+                                $.each(task.Containers, function(m, container) {
+                                    nodesDetails.push('<div class="data-info">');
+                                    nodesDetails.push('<div class="data-header">Container: ' + container.Name + '</div>');
+                                    nodesDetails.push('</div>');
+                                });
+                                nodesDetails.push('</div>');
+                            }
+                        });
+                        nodesDetails.push('</div>');
+
+                        $('#node-detail').append(nodesDetails.join(''));
+                    });
                     break;
                 default:
                     console.log('Unsupported deploymentType type: ' + deploymentType + '.');
@@ -197,6 +241,18 @@
             });
         }
 
+        function showClusterTasks(deploymentType, data) {
+            if (deploymentType != 'ECS') {
+                return;
+            }
+
+            $('#task-info').html('');
+            $.each(data.Tasks, function(i, task) {
+                var taskName = task.TaskDefinitionArn.split('task-definition/')[1];
+                $('#task-info').append('<a href="#">' + taskName + '</a>')
+            });
+        }
+
         function showClusterContainers(deploymentType, data) {
             switch (deploymentType) {
                 case 'K8S':
@@ -206,7 +262,12 @@
                     });
                     break;
                 case 'ECS':
-                    // TODO: 
+                    $('#container-info').html('');
+                    $.each(data.Tasks, function(i, task) {
+                        $.each(task.Containers, function(j, container) {
+                            $('#container-info').append('<a href="#">' + container.Name + '</a>')
+                        });
+                    });
                     break;
                 default:
                     console.log('Unsupported deploymentType type: ' + deploymentType + '.');
@@ -245,6 +306,31 @@
                 }
             });
             return podHtml;
+        }
+
+        function addTaskIcon(publicDnsName, data) {
+            var taskHtml = '';
+            var instanceId = '';
+            $.each(data.Reservations, function(i, reservation) {
+                if (reservation.Instances[0].PublicDnsName == publicDnsName) {
+                    instanceId = reservation.Instances[0].InstanceId;
+                }
+            });
+
+            var containerInstanceArn = '';
+            $.each(data.ContainerInstances, function(i, containerInstance) {
+                if (containerInstance.Ec2InstanceId == instanceId) {
+                    containerInstanceArn = containerInstance.ContainerInstanceArn;
+                }
+            });
+
+            $.each(data.Tasks, function(i, task) {
+                if (task.ContainerInstanceArn == containerInstanceArn) {
+                    var bgColor = (task.LastStatus == 'RUNNING' ? '#00FF00' : '#FF0000');
+                    taskHtml += '<div class="pod-icon" style="background-color: ' + bgColor + '"></div>';
+                }
+            });
+            return taskHtml;
         }
     </script>
 </head>
