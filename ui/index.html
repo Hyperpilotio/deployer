@@ -14,7 +14,7 @@
             var realHeight = $('.deployment-list').height();
             $(".deployment-list").css('height', (realHeight + 100) + 'px');
 
-            $('.deployment-list li').click(function() {
+            $('.deployment-list').on('click', 'li', function() {
                 $('.deployment-list li').removeClass('active');
                 $(this).addClass('active');
 
@@ -76,7 +76,7 @@
 
         function getDeploymentLog(logFileName) {
             $.ajax({
-                url: '/ui/' + logFileName + '/list',
+                url: '/ui/list/' + logFileName,
                 type: 'GET',
                 dataType: 'json',
                 success: function(json) {
@@ -89,6 +89,53 @@
                 }
             });
         }
+
+       (function refresh() {
+         setInterval(function(){
+             $.ajax({
+                 url: '/ui/refresh',
+                 type: 'GET',
+                 dataType: 'json',
+                 success: function(json) {
+                     if (json.error == false) {
+
+                       let activeDeployment;
+                       $( 'li.deployment' ).not(':first').each(function() {
+                         if ($(this).hasClass('active')) {
+                           activeDeployment = $(this).attr('data-name');
+                         }
+                         $(this).remove();
+                       });
+
+                       $(json.data).each(function(index, element) {
+                         let deployment = $( '#deploymentTemplate' ).clone();
+                         if (element.Name === activeDeployment) {
+                           deployment.addClass('active');
+                         }
+                         deployment.attr('data-name', element.Name);
+                         deployment.attr('data-type', element.Type);
+                         deployment.attr('data-status', element.Status);
+                         deployment.find('.logName').text(element.Name);
+                         deployment.find('.logTime').text(element.Time);
+                         deployment.find('.badge').text(element.Status);
+                         deployment.find('.badge').addClass('badge-' + element.Status);
+                         deployment.removeAttr('id style');
+                         deployment.insertAfter('li.deployment:last');
+                       })
+                     }
+                 }
+             });
+
+             let active = $( "li[class~='active']" ).get(0);
+             if ( active ) {
+               if ($(active).attr('data-status') !== 'Available') {
+                 getDeploymentLog($( "li[class~='active']" ).get(0).dataset.name)
+               }
+             } else {
+               $('.deployment-log').html('');
+             }
+           }, 2000);
+         })();
     </script>
 </head>
 
@@ -108,19 +155,23 @@
     <!-- sidebar -->
     <aside>
         <ul class="deployment-list">
-            {{range $k,$v := .logs}}
-            <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
-                <div class="logName">{{$v.Name}}</div>
-                <span class="logTime">{{$v.Time}}</span>
-                <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
-            </li>
-            {{end}}
+          <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
+            <div class="logName"></div>
+            <span class="logTime"></span>
+            <span class="badge"></span>
+          </li>
+          {{range $k,$v := .logs}}
+          <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
+              <div class="logName">{{$v.Name}}</div>
+              <span class="logTime">{{$v.Time}}</span>
+              <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
+          </li>
+          {{end}}
         </ul>
     </aside>
 
     <!-- main -->
     <main>
-        <h1>{{.msg}}!</h1>
         <div class="deployment-detail" style="display: none;">
             <div class="deployment-btn">
                 <span id="deleteBtn" class="btn btn-danger"><i class="fa fa-trash-o"></i> Delete</span>
