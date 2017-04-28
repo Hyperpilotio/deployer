@@ -1,10 +1,10 @@
-FROM alpine:3.4
+FROM golang:1.8.1-alpine
 
-RUN apk --no-cache add ca-certificates && update-ca-certificates
-COPY deployer /usr/local/bin/deployer
-COPY ./documents/config.json /etc/deployer/
-COPY ./ui /ui
+RUN mkdir /lib64 && ln -s /lib/libc.musl-x86_64.so.1 /lib64/ld-linux-x86-64.so.2
+RUN mkdir -p /etc/deployer
 
-EXPOSE 7777
+COPY ./ui/ /go/src/github.com/hyperpilotio/deployer/ui/
+ADD ./documents/template.config /etc/deployer/config.json
+ADD deployer /usr/local/bin/deployer
 
-ENTRYPOINT ["deployer"]
+ENTRYPOINT deployer

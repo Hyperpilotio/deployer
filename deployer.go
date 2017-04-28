@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"os"
 
 	"github.com/golang/glog"
 
@@ -16,8 +17,8 @@ func Run(fileConfig string) error {
 	if fileConfig == "" {
 		viper.SetConfigName("config")
 		viper.AddConfigPath("/etc/deployer")
-		viper.BindEnv("awsId")
-		viper.BindEnv("awsSecret")
+		viper.Set("awsId", os.Getenv("AWS_ACCESS_KEY_ID"))
+		viper.Set("awsSecret", os.Getenv("AWS_SECRET_ACCESS_KEY"))
 	} else {
 		viper.SetConfigFile(fileConfig)
 	}

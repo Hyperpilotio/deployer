@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,8 +245,10 @@ func (server *Server) StartServer() error {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	router.LoadHTMLGlob("ui/*.html")
-	router.Static("/static", "./ui/static")
+	router.LoadHTMLGlob(filepath.Join(os.Getenv("GOPATH"),
+		"src/github.com/hyperpilotio/deployer/ui/*.html"))
+	router.Static("/static", filepath.Join(os.Getenv("GOPATH"),
+		"src/github.com/hyperpilotio/deployer/ui/static"))
 
 	uiGroup := router.Group("/ui")
 	{
