@@ -240,7 +240,8 @@ func (server *Server) StartServer() error {
 	uiGroup := router.Group("/ui")
 	{
 		uiGroup.GET("", server.logUI)
-		uiGroup.GET("/:logFile/list", server.getDeploymentLog)
+		uiGroup.GET("/refresh", server.refreshUI)
+		uiGroup.GET("/list/:logFile", server.getDeploymentLog)
 	}
 
 	daemonsGroup := router.Group("/v1/deployments")
@@ -745,6 +746,21 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 }
 
 func (server *Server) logUI(c *gin.Context) {
+	deploymentLogs := server.getDeploymentLogs(c)
+	c.HTML(http.StatusOK, "index.html", gin.H{
+		"logs": deploymentLogs,
+	})
+}
+
+func (server *Server) refreshUI(c *gin.Context) {
+	deploymentLogs := server.getDeploymentLogs(c)
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  deploymentLogs,
+	})
+}
+
+func (server *Server) getDeploymentLogs(c *gin.Context) DeploymentLogs {
 	deploymentLogs := DeploymentLogs{}
 
 	server.mutex.Lock()
@@ -761,11 +777,7 @@ func (server *Server) logUI(c *gin.Context) {
 	}
 
 	sort.Sort(deploymentLogs)
-
-	c.HTML(http.StatusOK, "index.html", gin.H{
-		"msg":  "Hyperpilot Deployments!",
-		"logs": deploymentLogs,
-	})
+	return deploymentLogs
 }
 
 func (server *Server) getDeploymentLog(c *gin.Context) {
