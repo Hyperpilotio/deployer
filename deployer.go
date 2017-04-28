@@ -16,6 +16,8 @@ func Run(fileConfig string) error {
 	if fileConfig == "" {
 		viper.SetConfigName("config")
 		viper.AddConfigPath("/etc/deployer")
+		viper.BindEnv("awsId")
+		viper.BindEnv("awsSecret")
 	} else {
 		viper.SetConfigFile(fileConfig)
 	}
