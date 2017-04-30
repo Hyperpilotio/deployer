@@ -1359,27 +1359,29 @@ func ReloadClusterState(viper *viper.Viper, deployedCluster *DeployedCluster) er
 		Cluster: aws.String(deploymentName),
 	}
 
-	if listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput); err != nil {
+	listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
+	if err != nil {
 		return fmt.Errorf("Unable to list container instances: %s" + err.Error())
-	} else {
-		ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
-			Cluster:            aws.String(deploymentName),
-			ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
-		}
+	}
 
-		if ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput); err != nil {
-			return fmt.Errorf("Unable to describe container instances: %s" + err.Error())
-		} else {
-			var instanceIds []*string
-			for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
-				instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
-			}
-			deployedCluster.InstanceIds = instanceIds
+	ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
+		Cluster:            aws.String(deploymentName),
+		ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
+	}
 
-			if err := checkVPC(ec2Svc, deployedCluster); err != nil {
-				return fmt.Errorf("Unable to find VPC: %s", err.Error())
-			}
-		}
+	ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe container instances: %s" + err.Error())
+	}
+
+	var instanceIds []*string
+	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
+		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
+	}
+	deployedCluster.InstanceIds = instanceIds
+
+	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
+		return fmt.Errorf("Unable to find VPC: %s", err.Error())
 	}
 
 	return nil
@@ -1399,20 +1401,21 @@ func ReloadKeyPair(viper *viper.Viper, deployedCluster *DeployedCluster, keyMate
 		},
 	}
 
-	if describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput); err != nil {
+	describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput)
+	if err != nil {
 		return fmt.Errorf("Unable to describe keyPairs: %s" + err.Error())
-	} else {
-		if len(describeKeyPairsOutput.KeyPairs) == 0 {
-			return fmt.Errorf("Unable to find %s keyPairs...", deployedCluster.Deployment.Name)
-		}
-
-		keyPair := &ec2.CreateKeyPairOutput{
-			KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
-			KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
-			KeyMaterial:    aws.String(keyMaterial),
-		}
-		deployedCluster.KeyPair = keyPair
 	}
+
+	if len(describeKeyPairsOutput.KeyPairs) == 0 {
+		return fmt.Errorf("Unable to find %s keyPairs", deployedCluster.Deployment.Name)
+	}
+
+	keyPair := &ec2.CreateKeyPairOutput{
+		KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
+		KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
+		KeyMaterial:    aws.String(keyMaterial),
+	}
+	deployedCluster.KeyPair = keyPair
 
 	return nil
 }
