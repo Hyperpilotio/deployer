@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/kubernetes"
@@ -95,6 +96,7 @@ type Server struct {
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
 	mutex         sync.Mutex
+	storeSvc      store.Store
 }
 
 // NewServer return an instance of Server struct.
@@ -182,7 +184,7 @@ func (server *Server) reloadClusterState() error {
 
 		// Reload keypair
 		if err := awsecs.ReloadKeyPair(server.Config, deployedCluster, storeDeployment.KeyMaterial); err != nil {
-			return fmt.Errorf("Unable to load %s keyPair: %s", deploymentName, err.Error())
+			glog.Warningf("Unable to load %s keyPair: %s", deploymentName, err.Error())
 		}
 
 		switch storeDeployment.Type {
@@ -266,6 +268,12 @@ func (server *Server) StartServer() error {
 		filesGroup.POST("/:fileId", server.uploadFile)
 		filesGroup.DELETE("/:fileId", server.deleteFile)
 	}
+
+	storeSvc, err := store.NewStore(server.Config)
+	if err != nil {
+		return fmt.Errorf("Unable to initialize new store: %s", err.Error())
+	}
+	server.storeSvc = storeSvc
 
 	return router.Run(":" + server.Config.GetString("port"))
 }
@@ -449,9 +457,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 			return
 		}
 
-		server.mutex.Lock()
 		server.storeDeploymentStatus(deploymentName)
-		server.mutex.Unlock()
 		deploymentInfo.awsInfo.Logger.Infof("Update deployment successfully!")
 	}()
 
@@ -560,9 +566,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		}
 
 		// Deployment succeeded, storing deployment status
-		server.mutex.Lock()
 		server.storeDeploymentStatus(deployment.Name)
-		server.mutex.Unlock()
 
 		deploymentInfo.state = AVAILABLE
 	}()
@@ -617,10 +621,14 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			awsecs.DeleteDeployment(server.Config, deploymentInfo.awsInfo)
 		}
 
+		if err := server.storeSvc.DeleteDeployment(deploymentInfo.awsInfo.Deployment.Name); err != nil {
+			glog.Warningf("Unable to delete deployment from store: " + err.Error())
+		}
+
 		server.mutex.Lock()
-		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
 		delete(server.DeployedClusters, c.Param("deployment"))
 		server.mutex.Unlock()
+
 		deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
 	}()
 
@@ -802,13 +810,8 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 }
 
 func (server *Server) storeDeploymentStatus(deploymentName string) error {
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return fmt.Errorf("Unable to new store: %s", err.Error())
-	}
-
 	deployment := server.NewStoreDeployment(deploymentName)
-	if err := storeSvc.StoreNewDeployment(deployment); err != nil {
+	if err := server.storeSvc.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 	}
 

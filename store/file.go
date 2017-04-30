@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sync"
 
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/spf13/viper"
@@ -13,18 +14,22 @@ type FileDeployment struct {
 	Deployments []*StoreDeployment
 }
 
-type File struct {
-	Path string
+type FileStore struct {
+	Path  string
+	mutex sync.Mutex
 }
 
-func NewFile(config *viper.Viper) (*File, error) {
+func NewFile(config *viper.Viper) (*FileStore, error) {
 	depStatPath := path.Join(config.GetString("filesPath"), "Deployment")
-	return &File{
+	return &FileStore{
 		Path: depStatPath,
 	}, nil
 }
 
-func (file *File) StoreNewDeployment(deployment *StoreDeployment) error {
+func (file *FileStore) StoreNewDeployment(deployment *StoreDeployment) error {
+	file.mutex.Lock()
+	defer file.mutex.Unlock()
+
 	deployInfos, err := file.getDeployInfos()
 	if err != nil {
 		return fmt.Errorf("Unable to get deployment info: %s", err.Error())
@@ -47,7 +52,10 @@ func (file *File) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (file *File) LoadDeployments() ([]*StoreDeployment, error) {
+func (file *FileStore) LoadDeployments() ([]*StoreDeployment, error) {
+	file.mutex.Lock()
+	defer file.mutex.Unlock()
+
 	fileDeployment := &FileDeployment{}
 	if _, err := os.Stat(file.Path); err == nil {
 		if err := common.LoadFileToObject(file.Path, fileDeployment); err != nil {
@@ -58,7 +66,10 @@ func (file *File) LoadDeployments() ([]*StoreDeployment, error) {
 	return fileDeployment.Deployments, nil
 }
 
-func (file *File) DeleteDeployment(deploymentName string) error {
+func (file *FileStore) DeleteDeployment(deploymentName string) error {
+	file.mutex.Lock()
+	defer file.mutex.Unlock()
+
 	deployInfos, err := file.getDeployInfos()
 	if err != nil {
 		return fmt.Errorf("Unable to get deployment info: %s", err.Error())
@@ -81,7 +92,7 @@ func (file *File) DeleteDeployment(deploymentName string) error {
 	return nil
 }
 
-func (file *File) getDeployInfos() (map[string]*StoreDeployment, error) {
+func (file *FileStore) getDeployInfos() (map[string]*StoreDeployment, error) {
 	deployInfos := map[string]*StoreDeployment{}
 	if _, err := os.Stat(file.Path); err == nil {
 		deployments, err := file.LoadDeployments()
