@@ -171,6 +171,11 @@ func (server *Server) reloadClusterState() error {
 
 	for _, storeDeployment := range deployments {
 		userId := storeDeployment.UserId
+		if userId == "" {
+			glog.Warning("Skip loading deployment with unspecified user id")
+			continue
+		}
+
 		awsProfile, ok := awsProfileInfos[userId]
 		if !ok {
 			return fmt.Errorf("Unable to find %s aws profile", userId)
@@ -553,7 +558,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to find aws profile",
+			"data":  "Unable to find aws profile for user: " + deployment.UserId,
 		})
 		return
 	}

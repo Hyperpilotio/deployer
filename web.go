@@ -69,7 +69,7 @@ func (server *Server) clusterUI(c *gin.Context) {
 
 func (server *Server) getDeploymentLog(c *gin.Context) {
 	logFile := c.Param("logFile")
-	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile)
+	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile+".log")
 	file, err := os.Open(logPath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
