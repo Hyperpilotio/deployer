@@ -41,6 +41,8 @@ const (
 	CREATING  = 1
 	UPDATING  = 2
 	DELETING  = 3
+	DELETED   = 4
+	FAILED    = 5
 )
 
 func getStateString(state DeploymentState) string {
@@ -53,6 +55,10 @@ func getStateString(state DeploymentState) string {
 		return "Updating"
 	case DELETING:
 		return "Deleting"
+	case DELETED:
+		return "Deleted"
+	case FAILED:
+		return "Failed"
 	}
 
 	return ""
@@ -258,7 +264,8 @@ func (server *Server) StartServer() error {
 	uiGroup := router.Group("/ui")
 	{
 		uiGroup.GET("", server.logUI)
-		uiGroup.GET("/logs/:logFile", server.getDeploymentLog)
+		uiGroup.GET("/logs/:logFile", server.getDeploymentLogContent)
+		uiGroup.GET("/list/:status", server.refreshUI)
 
 		uiGroup.GET("/users", server.userUI)
 		uiGroup.POST("/users", server.storeUser)
@@ -601,11 +608,9 @@ func (server *Server) createDeployment(c *gin.Context) {
 			deployedCluster.Logger.Infof("Unsupported container deployment")
 			return
 		}
-
+		deploymentInfo.state = AVAILABLE
 		// Deployment succeeded, storing deployment status
 		server.storeDeploymentStatus(deployment.Name)
-
-		deploymentInfo.state = AVAILABLE
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -623,7 +628,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " not found.",
+			"data":  deploymentName + " not found.",
 		})
 		return
 	}
@@ -632,7 +637,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " is not available to delete",
+			"data":  deploymentName + " is not available to delete",
 		})
 		return
 	}
@@ -668,12 +673,10 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		}
 
-		if err := server.Store.DeleteDeployment(deploymentInfo.awsInfo.Deployment.Name); err != nil {
-			glog.Warningf("Unable to delete deployment from store: " + err.Error())
-		}
-
 		server.mutex.Lock()
-		delete(server.DeployedClusters, c.Param("deployment"))
+		deploymentInfo.state = DELETED
+		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+		delete(server.DeployedClusters, deploymentName)
 		server.mutex.Unlock()
 
 		deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
