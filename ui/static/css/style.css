@@ -10,7 +10,7 @@ header {
     top: 0;
     width: 100%;
     background-color: #4A4A4A;
-    height: 64px;
+    height: 65px;
 }
 
 header .banner {
@@ -41,7 +41,8 @@ header nav ul {
 header nav li {
     font-size: 24px;
     line-height: 32px;
-    margin-right: 24px;
+    margin-righ: 24px;
+    padding: 15px;
 }
 
 header nav li a {
@@ -64,9 +65,10 @@ main {
 
 aside {
     width: 25%;
-    height: 100%;
+    height: 90%;
     position: fixed;
     top: 0;
+    margin-top: 65px;
     background-color: #D8D8D8;
     border-right: 1px solid #9B9B9B;
     overflow-y: auto;
@@ -83,6 +85,7 @@ aside {
     overflow: hidden;
     width: 100%;
     height: 75px;
+    padding-left: 10px;
     background: linear-gradient(#F6F6F6, #e6e6e6);
     cursor: pointer;
     border-bottom: 1px solid #9B9B9B;
