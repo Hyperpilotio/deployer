@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -28,8 +29,14 @@ const (
 func getTypeString(domainType DomainType) string {
 	switch domainType {
 	case DEPLOYMENT:
+		if domain := os.Getenv("DEPLOYMENT_DOMAIN"); domain != "" {
+			return domain
+		}
 		return "Deployment"
 	case AWSPROFILE:
+		if domain := os.Getenv("AWSPROFILE_DOMAIN"); domain != "" {
+			return domain
+		}
 		return "AWSProfile"
 	}
 
