@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"sort"
@@ -30,13 +31,26 @@ func (d DeploymentLogs) Less(i, j int) bool {
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 func (server *Server) logUI(c *gin.Context) {
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	deploymentLogs := server.getDeploymentLogs()
+	deploymentLogs, _ := server.getDeploymentLogs(c)
 	c.HTML(http.StatusOK, "index.html", gin.H{
 		"msg":  "Hyperpilot Deployments!",
 		"logs": deploymentLogs,
+	})
+}
+
+func (server *Server) refreshUI(c *gin.Context) {
+	deploymentLogs, err := server.getDeploymentLogs(c)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"error": true,
+			"data":  "",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  deploymentLogs,
 	})
 }
 
@@ -57,17 +71,14 @@ func (server *Server) userUI(c *gin.Context) {
 }
 
 func (server *Server) clusterUI(c *gin.Context) {
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	deploymentLogs := server.getDeploymentLogs()
+	deploymentLogs, _ := server.getDeploymentLogs(c)
 	c.HTML(http.StatusOK, "cluster.html", gin.H{
 		"msg":  "Hyperpilot Clusters!",
 		"logs": deploymentLogs,
 	})
 }
 
-func (server *Server) getDeploymentLog(c *gin.Context) {
+func (server *Server) getDeploymentLogContent(c *gin.Context) {
 	logFile := c.Param("logFile")
 	logPath := path.Join(server.Config.GetString("filesPath"), "log", logFile+".log")
 	file, err := os.Open(logPath)
@@ -95,20 +106,42 @@ func (server *Server) getDeploymentLog(c *gin.Context) {
 	})
 }
 
-func (server *Server) getDeploymentLogs() []*DeploymentLog {
+func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) {
 	deploymentLogs := DeploymentLogs{}
-	for name, deploymentInfo := range server.DeployedClusters {
-		deploymentLog := &DeploymentLog{
-			Name:   name,
-			Time:   deploymentInfo.created,
-			Type:   deploymentInfo.getDeploymentType(),
-			Status: getStateString(deploymentInfo.state),
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	switch status := c.Param("status"); status {
+	case "Deleted", "Failed":
+		deployments, err := server.Store.LoadDeployments()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}
-		deploymentLogs = append(deploymentLogs, deploymentLog)
+		for _, deployment := range deployments {
+			if deployment.Status == status {
+				deploymentLog := &DeploymentLog{
+					Name:   deployment.Name,
+					Type:   deployment.Type,
+					Status: deployment.Status,
+				}
+				deploymentLogs = append(deploymentLogs, deploymentLog)
+			}
+		}
+	default:
+		for name, deploymentInfo := range server.DeployedClusters {
+			deploymentLog := &DeploymentLog{
+				Name:   name,
+				Time:   deploymentInfo.created,
+				Type:   deploymentInfo.getDeploymentType(),
+				Status: getStateString(deploymentInfo.state),
+			}
+			deploymentLogs = append(deploymentLogs, deploymentLog)
+		}
 	}
 
 	sort.Sort(deploymentLogs)
-	return deploymentLogs
+	return deploymentLogs, nil
 }
 
 func (server *Server) storeUser(c *gin.Context) {

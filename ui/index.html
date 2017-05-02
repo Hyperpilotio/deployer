@@ -2,144 +2,11 @@
 <html>
 
 <head>
-    <title>Deployer</title>
-    <link rel="stylesheet" type="text/css" href="/static/css/style.css">
-    <link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
-    <link rel="stylesheet" type="text/css" href="/static/css/jquery.loadmask.css">
-    <script src="/static/js/jquery-3.2.0.min.js"></script>
-    <script src="/static/js/download.js"></script>
-    <script src="/static/js/jquery.loadmask.min.js"></script>
-    <script src="/static/js/common.js"></script>
-    <script>
-        $(function() {
-            $('.deployment-list li').click(function() {
-                if ($(this).data('status') == 'Creating') {
-                    alert("Waitng for deployment to be available");
-                    return false;
-                }
-
-                if ($(this).data('status') == 'Deleting') {
-                    alert("Waitng for deployment to be deleted");
-                    return false;
-                }
-
-                $('.deployment-detail').show();
-
-                getDeploymentLog($(this).data('name'));
-
-                if ($(this).data('status') == 'Available') {
-                    $('.deployment-btn').show();
-                    if ($(this).data('type') == 'K8S') {
-                        $('#downloadKubeconfigBtn').show();
-                    } else if ($(this).data('type') == 'ECS') {
-                        $('#downloadKubeconfigBtn').hide();
-                    }
-                } else {
-                    $('.deployment-btn').hide();
-                }
-            });
-
-            $('#deleteBtn').click(function() {
-                var deploymentName = $('.deployment-list .active').data('name');
-                if (confirm('Delete ' + deploymentName + 'deployment?')) {
-                    $('html').mask('Waiting...');
-                    $('.loadmask-msg').css('top', $(window).height() / 2);
-                    $.ajax({
-                        url: '/v1/deployments/' + deploymentName,
-                        type: 'DELETE',
-                        success: function(json) {
-                            $('html').unmask();
-                            alert('Delete ok');
-                            location.href = "/ui";
-                        },
-                        error: function(xhr, textStatus, error) {
-                            $('html').unmask();
-                            alert('Delete fail');
-                        }
-                    });
-                }
-            });
-
-            $('#downloadSshKeyBtn').click(function() {
-                var deploymentName = $('.deployment-list .active').data('name');
-                $.ajax({
-                    url: '/v1/deployments/' + deploymentName + '/ssh_key',
-                    success: download.bind(true, 'text/plain', deploymentName + '-key')
-                });
-            });
-
-            $('#downloadKubeconfigBtn').click(function() {
-                var deploymentName = $('.deployment-list .active').data('name');
-                $.ajax({
-                    url: '/v1/deployments/' + deploymentName + '/kubeconfig',
-                    success: download.bind(true, 'text/plain', 'kubeconfig')
-                });
-            });
-        });
-
-        function getDeploymentLog(logFileName) {
-            $.ajax({
-                url: '/ui/logs/' + logFileName,
-                type: 'GET',
-                dataType: 'json',
-                success: function(json) {
-                    if (json.error == false) {
-                        $('.deployment-log').html('');
-                        $.each(json.data, function(i, line) {
-                            $('.deployment-log').append('<p class="line">' + line + '</p>');
-                        });
-                    }
-                }
-            });
-        }
-
-       (function refresh() {
-         setInterval(function(){
-             $.ajax({
-                 url: '/ui/refresh',
-                 type: 'GET',
-                 dataType: 'json',
-                 success: function(json) {
-                     if (json.error == false) {
-
-                       let activeDeployment;
-                       $( 'li.deployment' ).not(':first').each(function() {
-                         if ($(this).hasClass('active')) {
-                           activeDeployment = $(this).attr('data-name');
-                         }
-                         $(this).remove();
-                       });
-
-                       $(json.data).each(function(index, element) {
-                         let deployment = $( '#deploymentTemplate' ).clone();
-                         if (element.Name === activeDeployment) {
-                           deployment.addClass('active');
-                         }
-                         deployment.attr('data-name', element.Name);
-                         deployment.attr('data-type', element.Type);
-                         deployment.attr('data-status', element.Status);
-                         deployment.find('.logName').text(element.Name);
-                         deployment.find('.logTime').text(element.Time);
-                         deployment.find('.badge').text(element.Status);
-                         deployment.find('.badge').addClass('badge-' + element.Status);
-                         deployment.removeAttr('id style');
-                         deployment.insertAfter('li.deployment:last');
-                       })
-                     }
-                 }
-             });
-
-             let active = $( "li[class~='active']" ).get(0);
-             if ( active ) {
-               if ($(active).attr('data-status') !== 'Available') {
-                 getDeploymentLog($( "li[class~='active']" ).get(0).dataset.name)
-               }
-             } else {
-               $('.deployment-log').html('');
-             }
-           }, 10000);
-         })();
-    </script>
+<title>Deployer</title>
+<link rel="stylesheet" type="text/css" href="/static/css/style.css">
+<link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
+<link rel="stylesheet" type="text/css" href="/static/css/jquery.loadmask.css">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
 </head>
 
 <body>
@@ -149,7 +16,7 @@
             <a href="/ui" class="banner">Deployer</a>
             <ul>
                 <li>
-                    <a href="/ui" class="active">deploys</a>
+                    <a href="/ui" class="active">deployments</a>
                 </li>
                 <li>
                     <a href="/ui/clusters">clusters</a>
@@ -163,20 +30,25 @@
 
     <!-- sidebar -->
     <aside>
-        <ul class="deployment-list">
-          <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
-            <div class="logName"></div>
-            <span class="logTime"></span>
-            <span class="badge"></span>
-          </li>
-          {{range $k,$v := .logs}}
-          <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
-              <div class="logName">{{$v.Name}}</div>
-              <span class="logTime">{{$v.Time}}</span>
-              <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
-          </li>
-          {{end}}
-        </ul>
+      <ul class="nav nav-tabs">
+        <li class="active"><a href="#" data-status="Running">Running</a></li>
+        <li><a href="#" data-status="Deleted">Deleted</a></li>
+        <li><a href="#" data-status="Failed">Failed</a></li>
+      </ul>
+      <ul class="deployment-list">
+        <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
+          <div class="logName"></div>
+          <span class="logTime"></span>
+          <span class="badge"></span>
+        </li>
+        {{range $k,$v := .logs}}
+        <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
+            <div class="logName">{{$v.Name}}</div>
+            <span class="logTime">{{$v.Time}}</span>
+            <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
+        </li>
+        {{end}}
+      </ul>
     </aside>
 
     <!-- main -->
@@ -193,5 +65,154 @@
         </div>
     </main>
 </body>
+<script src="/static/js/jquery-3.2.0.min.js"></script>
+<script src="/static/js/download.js"></script>
+<script src="/static/js/jquery.loadmask.min.js"></script>
+<script src="/static/js/common.js"></script>
+<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
+<script>
+  var runningInterval = null;
 
+  $(function() {
+    var realHeight = $('.deployment-list').height();
+    $(".deployment-list").css('height', (realHeight + 100) + 'px');
+
+    $('ul.nav-tabs a').on('click', function(event) {
+      event.preventDefault();
+      $('ul.nav-tabs li').removeClass('active');
+      $(this).parent().addClass('active');
+      refreshUI($(this).data('status'));
+    });
+
+    $('.deployment-list').on('click', 'li', function() {
+      $('.deployment-list li').removeClass('active');
+      $(this).addClass('active');
+
+      $('main h1').remove();
+      $('.deployment-detail').show();
+
+      getDeploymentLogContent($(this).data('name'));
+
+      if ($(this).data('status') == 'Deleted') {
+        $('.deployment-btn').hide();
+      } else {
+        $('.deployment-btn').show();
+        if ($(this).data('type') == 'K8S') {
+          $('#downloadKubeconfigBtn').show();
+        } else if ($(this).data('type') == 'ECS') {
+          $('#downloadKubeconfigBtn').hide();
+        }
+      }
+    });
+
+    $('#deleteBtn').click(function() {
+      var logFileName = $('.deployment-list .active').data('name');
+      var deploymentName = logFileName.replace('.log', '');
+      if (confirm('Delete ' + deploymentName + 'deployment?')) {
+        $('body').mask('Waiting...');
+        $('.loadmask-msg').css('top', $(window).height() / 2);
+        $.ajax({
+          url: '/v1/deployments/' + deploymentName,
+          type: 'DELETE',
+          success: function(json) {
+            $('body').unmask();
+            getDeploymentLog(logFileName);
+            if (json.error == false) {
+                alert('Delete ok');
+            } else {
+                alert('Delete fail');
+            }
+          }
+        });
+      }
+    });
+
+    $('#downloadSshKeyBtn').click(function() {
+      var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+      $.ajax({
+        url: '/v1/deployments/' + deploymentName + '/ssh_key',
+        success: download.bind(true, 'text/plain', deploymentName + '-key')
+      });
+    });
+
+    $('#downloadKubeconfigBtn').click(function() {
+      var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+      $.ajax({
+        url: '/v1/deployments/' + deploymentName + '/kubeconfig',
+        success: download.bind(true, 'text/plain', 'kubeconfig')
+      });
+    });
+
+    refreshUI('Running');
+  });
+
+  function refreshUI(status) {
+    clearInterval(runningInterval);
+    runningInterval = setInterval(function fetchLog(){
+      $.ajax({
+        url: '/ui/list/' + status,
+        type: 'GET',
+        dataType: 'json',
+        success: function(json) {
+          if (json.error == false) {
+            let activeDeployment;
+            $( 'li.deployment' ).not(':first').each(function() {
+              if ($(this).hasClass('active')) {
+                activeDeployment = $(this).data('name');
+              }
+              $(this).remove();
+            });
+
+            $.each(json.data, function(index, element) {
+              let deployment = $( '#deploymentTemplate' ).clone();
+              if (activeDeployment && element.Name === activeDeployment) {
+                deployment.addClass('active');
+              }
+
+              deployment.attr('data-name', element.Name);
+              deployment.attr('data-type', element.Type);
+              deployment.attr('data-status', element.Status);
+              deployment.find('.logName').text(element.Name);
+              deployment.find('.logTime').text(element.Time);
+              deployment.find('.badge').text(element.Status);
+              deployment.find('.badge').addClass('badge-' + element.Status);
+              deployment.removeAttr('id style');
+              deployment.insertAfter('li.deployment:last');
+            })
+          }
+
+          if (status === 'Running') {
+            let active = $('ul.deployment-list li[class~="active"]').get(0);
+            if (active) {
+              getDeploymentLogContent(active.dataset.name)
+            } else {
+              $('.deployment-log').hide();
+            }
+          }
+        }
+      });
+
+      return fetchLog;
+    }(), 10000);
+
+    $('.deployment-log').hide();
+  };
+
+  function getDeploymentLogContent(logFileName) {
+    $.ajax({
+      url: '/ui/logs/' + logFileName,
+      type: 'GET',
+      dataType: 'json',
+      success: function(json) {
+        if (json.error == false) {
+          $('.deployment-log').html('');
+          $.each(json.data, function(i, line) {
+              $('.deployment-log').append('<p class="line">' + line + '</p>');
+          });
+          $('.deployment-log').show();
+        }
+      }
+    });
+  }
+</script>
 </html>
