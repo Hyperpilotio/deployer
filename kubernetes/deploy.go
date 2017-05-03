@@ -3,6 +3,7 @@ package kubernetes
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"strconv"
 	"strings"
@@ -370,6 +371,10 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 		return errors.New("Unable to parse kube config: " + err.Error())
 	} else {
 		k8sDeployment.KubeConfig = kubeConfig
+	}
+
+	if err := k8sDeployment.UploadSshKeyToBastion(); err != nil {
+		return errors.New("Unable to upload sshKey: " + err.Error())
 	}
 
 	return nil
@@ -1423,6 +1428,43 @@ func (k8sDeployment *KubernetesDeployment) DownloadKubeConfig() error {
 	}
 
 	k8sDeployment.KubeConfigPath = kubeconfigFilePath
+	return nil
+}
+
+// UploadSshKeyToBastion upload sshKey to bastion-host
+func (k8sDeployment *KubernetesDeployment) UploadSshKeyToBastion() error {
+	deployedCluster := k8sDeployment.DeployedCluster
+	baseDir := deployedCluster.Deployment.Name + "_sshkey"
+	basePath := "/tmp/" + baseDir
+	sshKeyFilePath := basePath + "/" + deployedCluster.KeyName() + ".pem"
+
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		os.Mkdir(basePath, os.ModePerm)
+	}
+
+	os.Remove(sshKeyFilePath)
+
+	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+	if err := ioutil.WriteFile(sshKeyFilePath, []byte(privateKey), 0400); err != nil {
+		return fmt.Errorf("Unable to create %s sshKey file: %s",
+			deployedCluster.Deployment.Name, err.Error())
+	}
+
+	clientConfig, err := deployedCluster.SshConfig("ubuntu")
+	if err != nil {
+		return errors.New("Unable to create ssh config: " + err.Error())
+	}
+
+	address := k8sDeployment.BastionIp + ":22"
+	scpClient := common.NewSshClient(address, clientConfig, "")
+
+	remotePath := "/home/ubuntu/" + k8sDeployment.DeployedCluster.KeyName() + ".pem"
+	if err := scpClient.CopyLocalFileToRemote(sshKeyFilePath, remotePath); err != nil {
+		errorMsg := fmt.Sprintf("Unable to upload file %s to server %s: %s",
+			k8sDeployment.DeployedCluster.KeyName(), address, err.Error())
+		return errors.New(errorMsg)
+	}
+
 	return nil
 }
 
