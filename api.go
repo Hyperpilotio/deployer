@@ -41,6 +41,8 @@ const (
 	CREATING  = 1
 	UPDATING  = 2
 	DELETING  = 3
+	DELETED   = 4
+	FAILED    = 5
 )
 
 func getStateString(state DeploymentState) string {
@@ -53,6 +55,10 @@ func getStateString(state DeploymentState) string {
 		return "Updating"
 	case DELETING:
 		return "Deleting"
+	case DELETED:
+		return "Deleted"
+	case FAILED:
+		return "Failed"
 	}
 
 	return ""
@@ -132,11 +138,14 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
 	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
-		Name:        deploymentName,
-		Region:      deploymentInfo.awsInfo.Deployment.Region,
-		UserId:      deploymentInfo.awsInfo.Deployment.UserId,
-		KeyMaterial: aws.StringValue(deploymentInfo.awsInfo.KeyPair.KeyMaterial),
-		Status:      getStateString(deploymentInfo.state),
+		Name:   deploymentName,
+		Region: deploymentInfo.awsInfo.Deployment.Region,
+		UserId: deploymentInfo.awsInfo.Deployment.UserId,
+		Status: getStateString(deploymentInfo.state),
+	}
+
+	if deploymentInfo.awsInfo.KeyPair != nil {
+		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.awsInfo.KeyPair.KeyMaterial)
 	}
 
 	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
@@ -170,6 +179,10 @@ func (server *Server) reloadClusterState() error {
 	}
 
 	for _, storeDeployment := range deployments {
+		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+			continue
+		}
+
 		userId := storeDeployment.UserId
 		if userId == "" {
 			glog.Warning("Skip loading deployment with unspecified user id")
@@ -258,7 +271,8 @@ func (server *Server) StartServer() error {
 	uiGroup := router.Group("/ui")
 	{
 		uiGroup.GET("", server.logUI)
-		uiGroup.GET("/logs/:logFile", server.getDeploymentLog)
+		uiGroup.GET("/logs/:logFile", server.getDeploymentLogContent)
+		uiGroup.GET("/list/:status", server.refreshUI)
 
 		uiGroup.GET("/users", server.userUI)
 		uiGroup.POST("/users", server.storeUser)
@@ -572,40 +586,40 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	go func() {
 		defer f.Close()
+
+		var err error
 		switch deploymentInfo.getDeploymentType() {
 		case "ECS":
-			if err := awsecs.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster); err != nil {
-				server.mutex.Lock()
-				delete(server.DeployedClusters, deployment.Name)
-				server.mutex.Unlock()
+			if err = awsecs.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster); err != nil {
 				deployedCluster.Logger.Infof("Unable to create ECS deployment: " + err.Error())
-				return
+			} else {
+				deployedCluster.Logger.Infof("Create ECS deployment successfully!")
 			}
-			deployedCluster.Logger.Infof("Create ECS deployment successfully!")
 		case "K8S":
-			response, err := server.KubernetesClusters.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster)
+			var response *kubernetes.CreateDeploymentResponse
+			response, err = server.KubernetesClusters.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster)
 			if err != nil {
-				server.mutex.Lock()
-				delete(server.DeployedClusters, deployment.Name)
-				server.mutex.Unlock()
 				deployedCluster.Logger.Infof("Unable to create Kubernetes deployment: " + err.Error())
-				return
+			} else {
+				resJson, _ := json.Marshal(*response)
+				deployedCluster.Logger.Infof(string(resJson))
+				deployedCluster.Logger.Infof("Create Kubernetes deployment successfully!")
 			}
-			resJson, _ := json.Marshal(*response)
-			deployedCluster.Logger.Infof(string(resJson))
-			deployedCluster.Logger.Infof("Create Kubernetes deployment successfully!")
 		default:
-			server.mutex.Lock()
-			delete(server.DeployedClusters, deployment.Name)
-			server.mutex.Unlock()
+			err = errors.New("")
 			deployedCluster.Logger.Infof("Unsupported container deployment")
-			return
 		}
 
-		// Deployment succeeded, storing deployment status
-		server.storeDeploymentStatus(deployment.Name)
-
-		deploymentInfo.state = AVAILABLE
+		server.mutex.Lock()
+		if err != nil {
+			deploymentInfo.state = FAILED
+			server.storeDeploymentStatus(deployment.Name)
+			delete(server.DeployedClusters, deployment.Name)
+		} else {
+			deploymentInfo.state = AVAILABLE
+			server.storeDeploymentStatus(deployment.Name)
+		}
+		server.mutex.Unlock()
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -623,7 +637,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " not found.",
+			"data":  deploymentName + " not found.",
 		})
 		return
 	}
@@ -632,7 +646,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " is not available to delete",
+			"data":  deploymentName + " is not available to delete",
 		})
 		return
 	}
@@ -662,21 +676,24 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	go func() {
 		defer f.Close()
 
+		var err error
 		if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
 			server.KubernetesClusters.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		} else {
-			awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
-		}
-
-		if err := server.Store.DeleteDeployment(deploymentInfo.awsInfo.Deployment.Name); err != nil {
-			glog.Warningf("Unable to delete deployment from store: " + err.Error())
+			err = awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		}
 
 		server.mutex.Lock()
-		delete(server.DeployedClusters, c.Param("deployment"))
+		if err != nil {
+			deploymentInfo.state = FAILED
+			deploymentInfo.awsInfo.Logger.Error("Unable to delete deployment")
+		} else {
+			deploymentInfo.state = DELETED
+			deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
+		}
+		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+		delete(server.DeployedClusters, deploymentName)
 		server.mutex.Unlock()
-
-		deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
