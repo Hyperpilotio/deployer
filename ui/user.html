@@ -3,10 +3,8 @@
 
 <head>
     <title>Deployer</title>
-    <link rel="stylesheet" type="text/css" href="/static/css/style.css">
-    <link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
-    <script src="/static/js/jquery-3.2.0.min.js"></script>
-    <script src="/static/js/common.js"></script>
+    <link rel="import" href="/static/common/linkCss.html">
+    <link rel="import" href="/static/common/linkJs.html">
     <script>
         var userInputHtml = '<input type="text"/>';
         var awsIdInputHtml = '<input type="text" size="25"/>';
@@ -174,7 +172,7 @@
         main {
             margin-left: 0%;
         }
-        
+
         .user-detail button {
             width: 90px;
         }
@@ -203,7 +201,7 @@
             <a href="/ui" class="banner">Deployer</a>
             <ul>
                 <li>
-                    <a href="/ui">deploys</a>
+                    <a href="/ui">deployments</a>
                 </li>
                 <li>
                     <a href="/ui/clusters">clusters</a>
