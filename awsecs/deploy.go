@@ -1268,12 +1268,12 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 }
 
 // DeleteDeployment clean up the cluster from AWS ECS.
-func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) {
+func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) error {
 	log := deployedCluster.Logger
 	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
 		log.Errorf("Unable to create session: %s" + sessionErr.Error())
-		return
+		return sessionErr
 	}
 
 	ec2Svc := ec2.New(sess)
@@ -1282,6 +1282,7 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 	log.Infof("Checking VPC for deletion")
 	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to find VPC: %s", err.Error())
+		return err
 	}
 
 	if deployedCluster.Deployment.ECSDeployment != nil {
@@ -1289,12 +1290,14 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 		log.Infof("Stopping all ECS services")
 		if err := stopECSServices(ecsSvc, deployedCluster); err != nil {
 			log.Errorf("Unable to stop ECS services: ", err.Error())
+			return err
 		}
 
 		// delete all the task definitions
 		log.Infof("Deleting task definitions")
 		if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
 			log.Errorf("Unable to delete task definitions: %s", err.Error())
+			return err
 		}
 	}
 
@@ -1302,6 +1305,7 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 	log.Infof("Deleting EC2 instances")
 	if err := deleteEC2(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete task definitions: %s", err.Error())
+		return err
 	}
 
 	// NOTE if we create autoscaling, delete it. Wait until the deletes all the instance.
@@ -1313,36 +1317,42 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 	log.Infof("Deleting IAM role")
 	if err := deleteIAM(iamSvc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete IAM: %s", err.Error())
+		return err
 	}
 
 	// delete key pair
 	log.Infof("Deleting key pair")
 	if err := DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete key pair: %s", err.Error())
+		return err
 	}
 
 	// delete security group
 	log.Infof("Deleting security group")
 	if err := deleteSecurityGroup(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete security group: %s", err.Error())
+		return err
 	}
 
 	// delete internet gateway.
 	log.Infof("Deleting internet gateway")
 	if err := deleteInternetGateway(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete internet gateway: %s", err.Error())
+		return err
 	}
 
 	// delete subnet.
 	log.Infof("Deleting subnet")
 	if err := deleteSubnet(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete subnet: %s", err.Error())
+		return err
 	}
 
 	// Delete VPC
 	log.Infof("Deleting VPC")
 	if err := deleteVPC(ec2Svc, deployedCluster); err != nil {
 		log.Errorf("Unable to delete VPC: %s", err)
+		return err
 	}
 
 	if deployedCluster.Deployment.ECSDeployment != nil {
@@ -1350,8 +1360,11 @@ func DeleteDeployment(awsProfile *AWSProfile, deployedCluster *DeployedCluster) 
 		log.Infof("Deleting ECS cluster")
 		if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
 			log.Errorf("Unable to delete ECS cluster: %s", err)
+			return err
 		}
 	}
+
+	return nil
 }
 
 // ReloadClusterState reload EC2 cluster state
