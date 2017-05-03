@@ -25,12 +25,12 @@ const (
 	AWSPROFILE = 1
 )
 
-func getTypeString(domainType DomainType) string {
+func getTypeString(config *viper.Viper, domainType DomainType) string {
 	switch domainType {
 	case DEPLOYMENT:
-		return "Deployment"
+		return config.GetString("store.deploymentDomain")
 	case AWSPROFILE:
-		return "AWSProfile"
+		return config.GetString("store.awsProfileDomain")
 	}
 
 	return ""
@@ -38,6 +38,7 @@ func getTypeString(domainType DomainType) string {
 
 type SimpleDB struct {
 	Region string
+	Config *viper.Viper
 	Sess   *session.Session
 }
 
@@ -49,21 +50,22 @@ func NewSimpleDB(config *viper.Viper) (*SimpleDB, error) {
 	}
 
 	domainTypes := []DomainType{DEPLOYMENT, AWSPROFILE}
-	if err := createDomains(session, domainTypes); err != nil {
+	if err := createDomains(session, config, domainTypes); err != nil {
 		return nil, err
 	}
 
 	return &SimpleDB{
 		Region: region,
+		Config: config,
 		Sess:   session,
 	}, nil
 }
 
-func createDomains(sess *session.Session, domainTypes []DomainType) error {
+func createDomains(sess *session.Session, config *viper.Viper, domainTypes []DomainType) error {
 	simpledbSvc := simpledb.New(sess)
 	for _, domainType := range domainTypes {
 		createDomainInput := &simpledb.CreateDomainInput{
-			DomainName: aws.String(getTypeString(domainType)),
+			DomainName: aws.String(getTypeString(config, domainType)),
 		}
 
 		if _, err := simpledbSvc.CreateDomain(createDomainInput); err != nil {
@@ -75,7 +77,7 @@ func createDomains(sess *session.Session, domainTypes []DomainType) error {
 }
 
 func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
-	domainName := getTypeString(DEPLOYMENT)
+	domainName := getTypeString(db.Config, DEPLOYMENT)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	attributes := []*simpledb.ReplaceableAttribute{}
@@ -95,7 +97,7 @@ func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
 }
 
 func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
-	domainName := getTypeString(DEPLOYMENT)
+	domainName := getTypeString(db.Config, DEPLOYMENT)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
@@ -133,7 +135,7 @@ func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
 }
 
 func (db *SimpleDB) DeleteDeployment(deploymentName string) error {
-	domainName := getTypeString(DEPLOYMENT)
+	domainName := getTypeString(db.Config, DEPLOYMENT)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s` where itemName()='%s'", domainName, deploymentName)
@@ -163,7 +165,7 @@ func (db *SimpleDB) DeleteDeployment(deploymentName string) error {
 }
 
 func (db *SimpleDB) StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error {
-	domainName := getTypeString(AWSPROFILE)
+	domainName := getTypeString(db.Config, AWSPROFILE)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	attributes := []*simpledb.ReplaceableAttribute{}
@@ -183,7 +185,7 @@ func (db *SimpleDB) StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error {
 }
 
 func (db *SimpleDB) LoadAWSProfiles() ([]*awsecs.AWSProfile, error) {
-	domainName := getTypeString(AWSPROFILE)
+	domainName := getTypeString(db.Config, AWSPROFILE)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
@@ -218,7 +220,7 @@ func (db *SimpleDB) LoadAWSProfiles() ([]*awsecs.AWSProfile, error) {
 }
 
 func (db *SimpleDB) LoadAWSProfile(userId string) (*awsecs.AWSProfile, error) {
-	domainName := getTypeString(AWSPROFILE)
+	domainName := getTypeString(db.Config, AWSPROFILE)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
@@ -257,7 +259,7 @@ func (db *SimpleDB) LoadAWSProfile(userId string) (*awsecs.AWSProfile, error) {
 }
 
 func (db *SimpleDB) DeleteAWSProfile(userId string) error {
-	domainName := getTypeString(AWSPROFILE)
+	domainName := getTypeString(db.Config, AWSPROFILE)
 	simpledbSvc := simpledb.New(db.Sess)
 
 	selectExpression := fmt.Sprintf("select * from `%s` where UserId='%s'", domainName, userId)

@@ -127,7 +127,7 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 	consoleLogBackend := logging.NewBackendFormatter(consoleLog, logFormatter)
 	fileLogBackend := logging.NewBackendFormatter(fileLog, logFormatter)
 
-	logging.SetBackend(fileLogBackend, consoleLogBackend)
+	log.SetBackend(logging.SetBackend(fileLogBackend, consoleLogBackend))
 
 	deployedCluster.Logger = log
 
