@@ -3,10 +3,7 @@
 
 <head>
 <title>Deployer</title>
-<link rel="stylesheet" type="text/css" href="/static/css/style.css">
-<link rel="stylesheet" type="text/css" href="/static/css/font-awesome.min.css">
-<link rel="stylesheet" type="text/css" href="/static/css/jquery.loadmask.css">
-<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css" integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u" crossorigin="anonymous">
+<link rel="import" href="/static/common/linkCss.html">
 </head>
 
 <body>
@@ -65,10 +62,9 @@
         </div>
     </main>
 </body>
-<script src="/static/js/jquery-3.2.0.min.js"></script>
+<link rel="import" href="/static/common/linkJs.html">
 <script src="/static/js/download.js"></script>
 <script src="/static/js/jquery.loadmask.min.js"></script>
-<script src="/static/js/common.js"></script>
 <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
 <script>
   var runningInterval = null;
@@ -81,6 +77,9 @@
       event.preventDefault();
       $('ul.nav-tabs li').removeClass('active');
       $(this).parent().addClass('active');
+      if ($(this).data('status') !== 'Running') {
+        $('.deployment-btn').hide();
+      }
       refreshUI($(this).data('status'));
     });
 
@@ -88,14 +87,7 @@
       $('.deployment-list li').removeClass('active');
       $(this).addClass('active');
 
-      $('main h1').remove();
-      $('.deployment-detail').show();
-
-      getDeploymentLogContent($(this).data('name'));
-
-      if ($(this).data('status') == 'Deleted') {
-        $('.deployment-btn').hide();
-      } else {
+      if ($('ul.nav-tabs li').first().hasClass('active')) {
         $('.deployment-btn').show();
         if ($(this).data('type') == 'K8S') {
           $('#downloadKubeconfigBtn').show();
@@ -103,6 +95,10 @@
           $('#downloadKubeconfigBtn').hide();
         }
       }
+
+      $('main h1').remove();
+      $('.deployment-detail').show();
+      getDeploymentLogContent($(this).data('name'));
     });
 
     $('#deleteBtn').click(function() {
