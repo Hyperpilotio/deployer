@@ -204,7 +204,8 @@ func (server *Server) reloadClusterState() error {
 
 		// Reload keypair
 		if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
-			glog.Warningf("Unable to load %s keyPair: %s", deploymentName, err.Error())
+			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+			continue
 		}
 
 		switch storeDeployment.Type {
