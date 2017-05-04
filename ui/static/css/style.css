@@ -9,7 +9,7 @@ header {
     position: fixed;
     top: 0;
     width: 100%;
-    background-color: #4A4A4A;
+    background-color: #286090;
     height: 65px;
 }
 
@@ -41,7 +41,7 @@ header nav ul {
 header nav li {
     font-size: 24px;
     line-height: 32px;
-    margin-righ: 24px;
+    margin-right: 24px;
     padding: 15px;
 }
 
