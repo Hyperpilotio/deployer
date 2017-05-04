@@ -292,7 +292,7 @@ func (k8sDeployment *KubernetesDeployment) deployKubernetes(sess *session.Sessio
 			},
 			{
 				ParameterKey:   aws.String("QSS3KeyPrefix"),
-				ParameterValue: aws.String("heptio/kubernetes/latest"),
+				ParameterValue: aws.String("heptio/kubernetes/master"),
 			},
 			{
 				ParameterKey:   aws.String("AvailabilityZone"),
