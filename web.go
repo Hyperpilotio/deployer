@@ -20,6 +20,7 @@ type DeploymentLog struct {
 	Time   time.Time
 	Type   string
 	Status string
+	UserId string
 }
 
 type DeploymentLogs []*DeploymentLog
@@ -33,8 +34,9 @@ func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 func (server *Server) logUI(c *gin.Context) {
 	deploymentLogs, _ := server.getDeploymentLogs(c)
 	c.HTML(http.StatusOK, "index.html", gin.H{
-		"msg":  "Hyperpilot Deployments!",
-		"logs": deploymentLogs,
+		"msg":   "Hyperpilot Deployments!",
+		"logs":  deploymentLogs,
+		"users": server.getDeploymentUsers(c),
 	})
 }
 
@@ -124,6 +126,7 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 					Name:   deployment.Name,
 					Type:   deployment.Type,
 					Status: deployment.Status,
+					UserId: deployment.UserId,
 				}
 				if logTime, err := time.Parse(time.RFC822, deployment.Created); err == nil {
 					deploymentLog.Time = logTime
@@ -138,13 +141,36 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 				Time:   deploymentInfo.created,
 				Type:   deploymentInfo.getDeploymentType(),
 				Status: getStateString(deploymentInfo.state),
+				UserId: deploymentInfo.awsInfo.Deployment.UserId,
 			}
 			deploymentLogs = append(deploymentLogs, deploymentLog)
 		}
 	}
 
-	sort.Sort(deploymentLogs)
-	return deploymentLogs, nil
+	userId, _ := c.GetQuery("userId")
+	userDeploymentLogs := DeploymentLogs{}
+	if userId != "" {
+		for _, deploymentLog := range deploymentLogs {
+			if deploymentLog.UserId == userId {
+				userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
+			}
+		}
+	}
+
+	if len(userDeploymentLogs) == 0 {
+		userDeploymentLogs = deploymentLogs
+	}
+
+	sort.Sort(userDeploymentLogs)
+	return userDeploymentLogs, nil
+}
+
+func (server *Server) getDeploymentUsers(c *gin.Context) []string {
+	userIds := []string{}
+	for _, awsProfile := range server.AWSProfiles {
+		userIds = append(userIds, awsProfile.UserId)
+	}
+	return userIds
 }
 
 func (server *Server) storeUser(c *gin.Context) {
