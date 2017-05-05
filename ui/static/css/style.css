@@ -28,33 +28,40 @@ header nav {
     padding: 0 2em;
 }
 
-header nav li,
-header nav ul {
+header nav > ul > li,
+header nav > ul {
     display: inline-block;
 }
 
-header nav ul {
+header nav > ul {
     list-style: none;
     float: left;
 }
 
-header nav li {
+header nav > ul > li {
     font-size: 24px;
     line-height: 32px;
     margin-right: 24px;
     padding: 15px;
 }
 
-header nav li a {
+header nav > ul > li a {
     color: #9B9B9B;
     text-shadow: 0 -1px #333;
 }
 
-header nav li a.active,
-header nav li a:hover {
+header nav > ul > li a.active,
+header nav > ul > li a:hover {
     color: #F5A623;
     text-shadow: 0 -1px #845913;
     text-decoration: none;
+}
+
+.filterUser {
+    position: absolute;
+    width: 250px;
+    top: 15px;
+    right: 10px;
 }
 
 main {
@@ -89,6 +96,12 @@ aside {
     background: linear-gradient(#F6F6F6, #e6e6e6);
     cursor: pointer;
     border-bottom: 1px solid #9B9B9B;
+}
+
+.deployment-list .deployment .logUser {
+    position: absolute;
+    top: 5px;
+    right: 12px;
 }
 
 .deployment-list .deployment .logName {
