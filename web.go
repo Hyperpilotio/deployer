@@ -125,6 +125,9 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 					Type:   deployment.Type,
 					Status: deployment.Status,
 				}
+				if logTime, err := time.Parse(time.RFC822, deployment.Created); err == nil {
+					deploymentLog.Time = logTime
+				}
 				deploymentLogs = append(deploymentLogs, deploymentLog)
 			}
 		}
