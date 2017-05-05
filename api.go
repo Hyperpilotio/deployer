@@ -138,10 +138,11 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
 	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
-		Name:   deploymentName,
-		Region: deploymentInfo.awsInfo.Deployment.Region,
-		UserId: deploymentInfo.awsInfo.Deployment.UserId,
-		Status: getStateString(deploymentInfo.state),
+		Name:    deploymentName,
+		Region:  deploymentInfo.awsInfo.Deployment.Region,
+		UserId:  deploymentInfo.awsInfo.Deployment.UserId,
+		Status:  getStateString(deploymentInfo.state),
+		Created: deploymentInfo.created.Format(time.RFC822),
 	}
 
 	if deploymentInfo.awsInfo.KeyPair != nil {
@@ -580,6 +581,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	deploymentInfo := &DeploymentInfo{
 		awsInfo: deployedCluster,
+		created: time.Now(),
 		state:   CREATING,
 	}
 	server.DeployedClusters[deployment.Name] = deploymentInfo

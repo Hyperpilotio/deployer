@@ -71,6 +71,7 @@
   $(function() {
     var realHeight = $('.deployment-list').height();
     $(".deployment-list").css('height', (realHeight + 100) + 'px');
+
     $('ul.nav-tabs a').on('click', function(event) {
       event.preventDefault();
       $('ul.nav-tabs li').removeClass('active');
@@ -80,6 +81,7 @@
       }
       refreshUI($(this).data('status'));
     });
+
     $('.deployment-list').on('click', 'li', function() {
       $('.deployment-list li').removeClass('active');
       $(this).addClass('active');
@@ -95,27 +97,21 @@
       $('.deployment-detail').show();
       getDeploymentLogContent($(this).data('name'));
     });
+
     $('#deleteBtn').click(function() {
       var logFileName = $('.deployment-list .active').data('name');
       var deploymentName = logFileName.replace('.log', '');
       if (confirm('Delete ' + deploymentName + 'deployment?')) {
-        $('body').mask('Waiting...');
-        $('.loadmask-msg').css('top', $(window).height() / 2);
         $.ajax({
           url: '/v1/deployments/' + deploymentName,
           type: 'DELETE',
           success: function(json) {
-            $('body').unmask();
-            getDeploymentLog(logFileName);
-            if (json.error == false) {
-                alert('Delete ok');
-            } else {
-                alert('Delete fail');
-            }
+            return;
           }
         });
       }
     });
+
     $('#downloadSshKeyBtn').click(function() {
       var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
       $.ajax({
@@ -123,6 +119,7 @@
         success: download.bind(true, 'text/plain', deploymentName + '-key')
       });
     });
+
     $('#downloadKubeconfigBtn').click(function() {
       var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
       $.ajax({
@@ -132,6 +129,7 @@
     });
     refreshUI('Running');
   });
+
   function refreshUI(status) {
     clearInterval(runningInterval);
     runningInterval = setInterval(function fetchLog(){
@@ -178,6 +176,7 @@
     }(), 10000);
     $('.deployment-log').hide();
   };
+
   function getDeploymentLogContent(logFileName) {
     $.ajax({
       url: '/ui/logs/' + logFileName,
