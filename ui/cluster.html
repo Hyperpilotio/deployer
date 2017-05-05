@@ -91,7 +91,7 @@
                         nodeName += '</table>';
 
                         for (var key in node.metadata.labels) {
-                            if (node.metadata.labels[key] == 'master') {
+                            if (key == 'node-role.kubernetes.io/master') {
                                 $('#node-info').append('<a href="#" onclick="showNodeInfo(\'node' + index + '\');">' + nodeName + '</a>');
                             }
                         }
