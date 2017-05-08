@@ -154,7 +154,7 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 		}
 	}
 
-	if len(userDeploymentLogs) == 0 {
+	if userId == "" {
 		userDeploymentLogs = deploymentLogs
 	}
 
@@ -163,6 +163,9 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 }
 
 func (server *Server) getDeploymentUsers(c *gin.Context) []string {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
 	userIds := []string{}
 	for _, awsProfile := range server.AWSProfiles {
 		userIds = append(userIds, awsProfile.UserId)
