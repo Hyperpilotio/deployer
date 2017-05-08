@@ -64,6 +64,8 @@ type ClusterInfo struct {
 	Nodes      []v1.Node
 	Pods       []v1.Pod
 	Containers []v1beta1.Deployment
+	BastionIp  string
+	MasterIp   string
 }
 
 var publicPortType = 1
@@ -1524,6 +1526,8 @@ func (k8sDeployment *KubernetesDeployment) GetClusterInfo() (*ClusterInfo, error
 		Nodes:      nodeLists.Items,
 		Pods:       podLists.Items,
 		Containers: deployLists.Items,
+		BastionIp:  k8sDeployment.BastionIp,
+		MasterIp:   k8sDeployment.MasterIp,
 	}
 
 	return clusterInfo, nil

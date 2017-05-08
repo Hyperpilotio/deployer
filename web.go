@@ -275,19 +275,17 @@ func (server *Server) getCluster(c *gin.Context) {
 	case "ECS":
 		server.mutex.Lock()
 		deploymentInfo, ok := server.DeployedClusters[clusterName]
+		server.mutex.Unlock()
 		if !ok {
-			server.mutex.Unlock()
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": true,
 				"data":  "Deployment not found",
 			})
 			return
 		}
-		server.mutex.Unlock()
 
 		deployments, err := server.Store.LoadDeployments()
 		if err != nil {
-			server.mutex.Unlock()
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": true,
 				"data":  "Unable to load deployment status:" + err.Error(),
@@ -305,8 +303,8 @@ func (server *Server) getCluster(c *gin.Context) {
 
 		server.mutex.Lock()
 		awsProfile, ok := server.AWSProfiles[userId]
+		server.mutex.Unlock()
 		if !ok {
-			server.mutex.Unlock()
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
 				"data":  "Unable to find aws profile",
@@ -331,15 +329,14 @@ func (server *Server) getCluster(c *gin.Context) {
 	case "K8S":
 		server.mutex.Lock()
 		k8sDeployment, ok := server.KubernetesClusters.Clusters[clusterName]
+		server.mutex.Unlock()
 		if !ok {
-			server.mutex.Unlock()
 			c.JSON(http.StatusNotFound, gin.H{
 				"error": true,
 				"data":  "Deployment not found",
 			})
 			return
 		}
-		server.mutex.Unlock()
 
 		clusterInfo, err := k8sDeployment.GetClusterInfo()
 		if err != nil {
@@ -357,7 +354,7 @@ func (server *Server) getCluster(c *gin.Context) {
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unsupported deployment type",
+			"data":  "Unsupported deployment type: " + deploymentType,
 		})
 	}
 }
