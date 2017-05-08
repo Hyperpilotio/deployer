@@ -2,8 +2,8 @@
 <html>
 
 <head>
-<title>Deployer</title>
-<link rel="import" href="/static/common/linkCss.html">
+    <title>Deployer</title>
+    <link rel="import" href="/static/common/linkCss.html">
 </head>
 
 <body>
@@ -39,6 +39,7 @@
 
     <!-- sidebar -->
     <aside>
+<<<<<<< HEAD
       <ul class="nav nav-tabs">
         <li class="active"><a href="#" data-status="Running">Running</a></li>
         <li><a href="#" data-status="Deleted">Deleted</a></li>
@@ -60,6 +61,29 @@
         </li>
         {{end}}
       </ul>
+=======
+        <ul class="nav nav-tabs">
+            <li class="active"><a href="#" data-status="Running">Running</a></li>
+            <li><a href="#" data-status="Deleted">Deleted</a></li>
+            <li><a href="#" data-status="Failed">Failed</a></li>
+        </ul>
+        <ul class="deployment-list">
+            <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
+                <div class="logName"></div>
+                <span class="logUser"></span>
+                <span class="logTime"></span>
+                <span class="badge"></span>
+            </li>
+            {{range $k,$v := .logs}}
+            <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
+                <div class="logName">{{$v.Name}}</div>
+                <span class="logUser">{{$v.UserId}}</span>
+                <span class="logTime">{{$v.Time}}</span>
+                <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
+            </li>
+            {{end}}
+        </ul>
+>>>>>>> 063fc39f9653ecf149e8ef6b370d3e7695d60b54
     </aside>
 
     <!-- main -->
