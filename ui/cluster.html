@@ -36,12 +36,21 @@
                 dataType: 'json',
                 success: function(json) {
                     if (json.error == false) {
+                        if (json.BastionIp) {
+                          $('div.alert-info span').text(json.BastionIp);
+                          $('div.alert-info').show();
+                        } else {
+                          $('div.alert-info').hide();
+                        }
+
                         showClusterCnt(deploymentType, json.data);
                         showClusterNodes(deploymentType, json.data);
                         showClusterNodesDetail(deploymentType, json.data);
                         showClusterPods(deploymentType, json.data);
                         showClusterTasks(deploymentType, json.data);
                         showClusterContainers(deploymentType, json.data);
+                    } else {
+                        alert(json.data)
                     }
                 }
             });
@@ -367,6 +376,7 @@
     <!-- main -->
     <main>
         <h1>{{.msg}}!</h1>
+        <div class="alert alert-info" role="alert" style="display: none; margin-top: 3px; font-size: 20px;"><strong>Bastion IP : </strong><span></span></div>
         <div class="cluster-detail">
             <div>
                 <div class="header">Nodes</div>
