@@ -155,9 +155,7 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 				userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
 			}
 		}
-	}
-
-	if userId == "" {
+	} else {
 		userDeploymentLogs = deploymentLogs
 	}
 
