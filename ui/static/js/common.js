@@ -16,7 +16,7 @@ $(function() {
             $('#filterUserId').val($(this).data('value'));
         });
 
-        $('#filterUserId').blur(function() {
+        $('#filterUserId').change(function() {
             $('#userId').val($(this).val());
         });
     }
