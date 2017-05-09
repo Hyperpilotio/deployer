@@ -375,8 +375,9 @@ func (server *Server) getCluster(c *gin.Context) {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  clusterInfo,
+			"error":     false,
+			"data":      clusterInfo,
+			"BastionIp": k8sDeployment.BastionIp,
 		})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
