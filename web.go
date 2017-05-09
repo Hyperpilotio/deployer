@@ -126,6 +126,10 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}
 		for _, deployment := range deployments {
+			if deployment.UserId != userId {
+				continue
+			}
+
 			if deployment.Status == status {
 				deploymentLog := &DeploymentLog{
 					Name:   deployment.Name,
@@ -141,6 +145,10 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 		}
 	default:
 		for name, deploymentInfo := range server.DeployedClusters {
+			if deploymentInfo.awsInfo.Deployment.UserId != userId {
+				continue
+			}
+
 			deploymentLog := &DeploymentLog{
 				Name:   name,
 				Time:   deploymentInfo.created,
@@ -152,15 +160,8 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 		}
 	}
 
-	userDeploymentLogs := DeploymentLogs{}
-	for _, deploymentLog := range deploymentLogs {
-		if deploymentLog.UserId == userId {
-			userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
-		}
-	}
-
-	sort.Sort(userDeploymentLogs)
-	return userDeploymentLogs, nil
+	sort.Sort(deploymentLogs)
+	return deploymentLogs, nil
 }
 
 func (server *Server) getDeploymentUsers(c *gin.Context) []string {
