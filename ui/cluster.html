@@ -36,12 +36,23 @@
                 dataType: 'json',
                 success: function(json) {
                     if (json.error == false) {
-                        showClusterCnt(deploymentType, json.data);
-                        showClusterNodes(deploymentType, json.data);
-                        showClusterNodesDetail(deploymentType, json.data);
-                        showClusterPods(deploymentType, json.data);
-                        showClusterTasks(deploymentType, json.data);
-                        showClusterContainers(deploymentType, json.data);
+                        let clusterInfo = json.data;
+                        if (clusterInfo.BastionIp && clusterInfo.MasterIp) {
+                          $('div.alert-info span#bastionIp').text(clusterInfo.BastionIp);
+                          $('div.alert-info span#masterIp').text(clusterInfo.MasterIp);
+                          $('div.alert-info').show();
+                        } else {
+                          $('div.alert-info').hide();
+                        }
+
+                        showClusterCnt(deploymentType, clusterInfo);
+                        showClusterNodes(deploymentType, clusterInfo);
+                        showClusterNodesDetail(deploymentType, clusterInfo);
+                        showClusterPods(deploymentType, clusterInfo);
+                        showClusterTasks(deploymentType, clusterInfo);
+                        showClusterContainers(deploymentType, clusterInfo);
+                    } else {
+                        alert(json.data)
                     }
                 }
             });
@@ -367,6 +378,10 @@
     <!-- main -->
     <main>
         <h1>{{.msg}}!</h1>
+        <div class="alert alert-info" role="alert" style="display: none;">
+          <strong>Bastion IP : </strong><span id="bastionIp"></span><br>
+          <strong>Master IP : </strong><span id="masterIp"></span>
+        </div>
         <div class="cluster-detail">
             <div>
                 <div class="header">Nodes</div>
