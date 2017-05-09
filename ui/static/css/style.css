@@ -200,8 +200,10 @@ a:hover {
 }
 
 .deployment-log {
+    height: 445px;
     padding: 1em;
     background-color: #4A4A4A;
+    overflow-y: auto;
 }
 
 .deployment-log .line {
@@ -210,6 +212,11 @@ a:hover {
     margin: 0;
     margin-bottom: 0.25em;
     text-shadow: 0 -1px #333;
+}
+
+div.alert {
+  margin-top: 3px;
+  font-size: 20px;
 }
 
 .user-detail-btn {
@@ -226,8 +233,7 @@ a:hover {
 
 .cluster-detail > div {
     width: 32%;
-    margin-right: 10px;
-    margin-bottom: 10px;
+    margin: 0 5px;
     float: left;
     border: solid 1px #c0c0c0;
 }
