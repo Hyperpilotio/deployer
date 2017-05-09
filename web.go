@@ -111,6 +111,11 @@ func (server *Server) getDeploymentLogContent(c *gin.Context) {
 func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) {
 	deploymentLogs := DeploymentLogs{}
 
+	userId, _ := c.GetQuery("userId")
+	if userId == "" {
+		return deploymentLogs, nil
+	}
+
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
@@ -147,16 +152,11 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 		}
 	}
 
-	userId, _ := c.GetQuery("userId")
 	userDeploymentLogs := DeploymentLogs{}
-	if userId != "" {
-		for _, deploymentLog := range deploymentLogs {
-			if deploymentLog.UserId == userId {
-				userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
-			}
+	for _, deploymentLog := range deploymentLogs {
+		if deploymentLog.UserId == userId {
+			userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
 		}
-	} else {
-		userDeploymentLogs = deploymentLogs
 	}
 
 	sort.Sort(userDeploymentLogs)
