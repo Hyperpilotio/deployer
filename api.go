@@ -216,6 +216,11 @@ func (server *Server) reloadClusterState() error {
 				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
 			}
 		case "K8S":
+			if err := kubernetes.CheckClusterState(awsProfile, deployedCluster); err != nil {
+				glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
+				continue
+			}
+
 			deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
 			k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
 			if err != nil {
