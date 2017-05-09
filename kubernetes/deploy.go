@@ -1512,7 +1512,7 @@ func CheckClusterState(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.De
 
 	stackStatus := aws.StringValue(describeStacksOutput.Stacks[0].StackStatus)
 	if stackStatus != "CREATE_COMPLETE" {
-		return errors.New("Unable to reload stack because status is not ready")
+		return errors.New("Unable to reload stack because status is not ready, current status: " + stackStatus)
 	}
 
 	return nil

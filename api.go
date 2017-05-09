@@ -220,7 +220,7 @@ func (server *Server) reloadClusterState() error {
 		case "K8S":
 			if err := kubernetes.CheckClusterState(awsProfile, deployedCluster); err != nil {
 				if err := server.Store.DeleteDeployment(deploymentName); err != nil {
-					glog.Warningf("Unable to delete %s deployment: %s", deploymentName, err.Error())
+					glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
 				}
 				glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
 				continue
