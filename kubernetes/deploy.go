@@ -1479,12 +1479,19 @@ func CheckClusterState(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.De
 
 	cfSvc := cloudformation.New(sess)
 
+	stackName := deployedCluster.StackName()
 	describeStacksInput := &cloudformation.DescribeStacksInput{
-		StackName: aws.String(deployedCluster.Deployment.Name),
+		StackName: aws.String(stackName),
 	}
 
-	if _, err := cfSvc.DescribeStacks(describeStacksInput); err != nil {
+	describeStacksOutput, err := cfSvc.DescribeStacks(describeStacksInput)
+	if err != nil {
 		return errors.New("Unable to get stack outputs: " + err.Error())
+	}
+
+	stackStatus := aws.StringValue(describeStacksOutput.Stacks[0].StackStatus)
+	if stackStatus != "CREATE_COMPLETE" {
+		return errors.New("Unable to reload stack because status is not ready")
 	}
 
 	return nil
