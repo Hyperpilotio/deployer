@@ -25,6 +25,7 @@ import (
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
 	v1beta1 "k8s.io/client-go/pkg/apis/extensions/v1beta1"
+	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -1318,9 +1319,29 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		deploy := k8sClient.Extensions().Deployments(namespace)
 		_, err := deploy.Create(deploySpec)
 		if err != nil {
-			return fmt.Errorf("Unabel to create k8s deployment: %s", err)
+			return fmt.Errorf("Unable to create k8s deployment: %s", err)
 		}
 		log.Infof("%s deployment created", family)
+	}
+
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "cluster-admin",
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: "hyperpilot",
+			},
+		},
+	}
+	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
+		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
