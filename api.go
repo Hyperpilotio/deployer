@@ -209,27 +209,33 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
+		reloaded := true
 		switch storeDeployment.Type {
 		case "ECS":
 			deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
 			if err := awsecs.ReloadClusterState(awsProfile, deployedCluster); err != nil {
-				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+				glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
+				reloaded = false
 			}
 		case "K8S":
 			deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
 			k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
 			if err != nil {
-				return fmt.Errorf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+				glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
+				reloaded = false
 			}
 			server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
 		default:
-			return errors.New("Unsupported deployment store type: " + storeDeployment.Type)
+			reloaded = false
+			glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
 		}
 
-		server.DeployedClusters[deploymentName] = &DeploymentInfo{
-			awsInfo: deployedCluster,
-			state:   AVAILABLE,
-			created: time.Now(),
+		if reloaded {
+			server.DeployedClusters[deploymentName] = &DeploymentInfo{
+				awsInfo: deployedCluster,
+				state:   AVAILABLE,
+				created: time.Now(),
+			}
 		}
 	}
 
