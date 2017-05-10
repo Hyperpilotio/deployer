@@ -64,6 +64,7 @@
 
     <!-- main -->
     <main>
+        <h3 id="statusMsg"></h3>
         <div class="deployment-detail" style="display: none;">
             <div class="deployment-btn">
                 <span id="deleteBtn" class="btn btn-danger"><i class="fa fa-trash-o"></i> Delete</span>
@@ -179,6 +180,13 @@
               $('.deployment-detail').hide();
             }
           }
+          if (json.data.length == 0) {
+            $('#statusMsg').show();
+            $('#statusMsg').html('no deployments found');
+          } else {
+            $('#statusMsg').hide();
+            $('#statusMsg').html('');
+          } 
         }
       });
       return fetchLog;
