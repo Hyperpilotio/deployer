@@ -109,12 +109,7 @@ func (server *Server) getDeploymentLogContent(c *gin.Context) {
 }
 
 func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) {
-	deploymentLogs := DeploymentLogs{}
-
-	userId, _ := c.GetQuery("userId")
-	if userId == "" {
-		return deploymentLogs, nil
-	}
+	allDeploymentLogs := DeploymentLogs{}
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
@@ -126,10 +121,6 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}
 		for _, deployment := range deployments {
-			if deployment.UserId != userId {
-				continue
-			}
-
 			if deployment.Status == status {
 				deploymentLog := &DeploymentLog{
 					Name:   deployment.Name,
@@ -140,15 +131,11 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 				if logTime, err := time.Parse(time.RFC822, deployment.Created); err == nil {
 					deploymentLog.Time = logTime
 				}
-				deploymentLogs = append(deploymentLogs, deploymentLog)
+				allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
 			}
 		}
 	default:
 		for name, deploymentInfo := range server.DeployedClusters {
-			if deploymentInfo.awsInfo.Deployment.UserId != userId {
-				continue
-			}
-
 			deploymentLog := &DeploymentLog{
 				Name:   name,
 				Time:   deploymentInfo.created,
@@ -156,12 +143,24 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 				Status: getStateString(deploymentInfo.state),
 				UserId: deploymentInfo.awsInfo.Deployment.UserId,
 			}
-			deploymentLogs = append(deploymentLogs, deploymentLog)
+			allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
 		}
 	}
 
-	sort.Sort(deploymentLogs)
-	return deploymentLogs, nil
+	userDeploymentLogs := DeploymentLogs{}
+	userId, _ := c.GetQuery("userId")
+	if userId != "" {
+		for _, deploymentLog := range allDeploymentLogs {
+			if deploymentLog.UserId == userId {
+				userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
+			}
+		}
+	} else {
+		userDeploymentLogs = allDeploymentLogs
+	}
+
+	sort.Sort(userDeploymentLogs)
+	return userDeploymentLogs, nil
 }
 
 func (server *Server) getDeploymentUsers(c *gin.Context) []string {

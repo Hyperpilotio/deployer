@@ -1491,6 +1491,33 @@ func (k8sDeployment *KubernetesDeployment) UploadSshKeyToBastion() error {
 	return nil
 }
 
+// CheckClusterState check kubernetes cluster state is exist
+func CheckClusterState(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.DeployedCluster) error {
+	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
+	}
+
+	cfSvc := cloudformation.New(sess)
+
+	stackName := deployedCluster.StackName()
+	describeStacksInput := &cloudformation.DescribeStacksInput{
+		StackName: aws.String(stackName),
+	}
+
+	describeStacksOutput, err := cfSvc.DescribeStacks(describeStacksInput)
+	if err != nil {
+		return errors.New("Unable to get stack outputs: " + err.Error())
+	}
+
+	stackStatus := aws.StringValue(describeStacksOutput.Stacks[0].StackStatus)
+	if stackStatus != "CREATE_COMPLETE" {
+		return errors.New("Unable to reload stack because status is not ready")
+	}
+
+	return nil
+}
+
 // ReloadClusterState reload kubernetes cluster state
 func ReloadClusterState(deployment *StoreDeployment, deployedCluster *awsecs.DeployedCluster) (*KubernetesDeployment, error) {
 	deploymentName := deployedCluster.Deployment.Name
