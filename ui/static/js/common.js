@@ -14,10 +14,14 @@ $(function() {
         $('.dropdown-menu a').click(function() {
             $('#userId').val($(this).data('value'));
             $('#filterUserId').val($(this).data('value'));
+            $('#statusMsg').show();
+            $('#statusMsg').html('querying...');
         });
 
-        $('#filterUserId').change(function() {
+        $('#filterUserId').on('keyup blur change', function(e) {
             $('#userId').val($(this).val());
+            $('#statusMsg').show();
+            $('#statusMsg').html('querying...');
         });
     }
 });
