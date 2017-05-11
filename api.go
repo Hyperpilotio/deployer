@@ -17,6 +17,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
+	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/kubernetes"
 	"github.com/hyperpilotio/deployer/store"
 	logging "github.com/op/go-logging"
@@ -580,6 +581,30 @@ func (server *Server) createDeployment(c *gin.Context) {
 		} else {
 			deploymentInfo.state = AVAILABLE
 			server.storeDeploymentStatus(deployment.Name)
+
+			// Auto shutDown cluster
+			deleteFunc := func() {
+				netClient := &http.Client{
+					Timeout: time.Second * 10,
+				}
+
+				deleteUrl := fmt.Sprintf("http://%s/v1/deployments/%s", c.Request.Host, deployment.Name)
+				req, err := http.NewRequest("DELETE", deleteUrl, nil)
+				if err != nil {
+					glog.Warningf("Unable to new delete request: " + err.Error())
+					return
+				}
+
+				_, deleteErr := netClient.Do(req)
+				if deleteErr != nil {
+					glog.Warningf("Unable to auto shutdown cluster: " + deleteErr.Error())
+					return
+				}
+			}
+
+			scheduler, _ := job.NewScheduler(server.Config)
+			scheduler.AddFunc(deleteFunc)
+			scheduler.Run()
 		}
 		server.mutex.Unlock()
 	}()
