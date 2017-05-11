@@ -3,6 +3,7 @@
     "awsSecret": "",
     "port": 7777,
     "filesPath": "/tmp/deployer",
+    "shutDownTime": "6h",
     "store": {
         "type": "simpledb",
         "region": "us-east-1",
