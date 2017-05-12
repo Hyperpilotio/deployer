@@ -68,6 +68,8 @@ type Deployment struct {
 
 	*ECSDeployment        `form:"ecs" json:"ecs,omitempty"`
 	*KubernetesDeployment `form:"kubernetes" json:"kubernetes,omitempty"`
+
+	ShutDownTime string `form:"shutDownTime" json:"shutDownTime,omitempty"`
 }
 
 // IamRole store the information of iam role
