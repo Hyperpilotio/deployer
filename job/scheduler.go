@@ -2,6 +2,7 @@ package job
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/golang/glog"
@@ -9,16 +10,14 @@ import (
 )
 
 type Scheduler struct {
-	Name       string
-	CreateTime time.Time
-	StartTime  time.Duration
-	NewTime    time.Duration
-	ExecFunc   func()
-	Reset      chan bool
-	Quit       chan bool
+	Name      string
+	StartTime time.Duration
+	ExecFunc  func()
+	Quit      chan bool
+	Mutex     sync.Mutex
 }
 
-func NewScheduler(config *viper.Viper, deploymentName string, custShutDownTime string) (*Scheduler, error) {
+func NewScheduler(config *viper.Viper, deploymentName string, custShutDownTime string, fn func()) (*Scheduler, error) {
 	scheduleRunTime := ""
 	if custShutDownTime != "" {
 		scheduleRunTime = custShutDownTime
@@ -32,44 +31,53 @@ func NewScheduler(config *viper.Viper, deploymentName string, custShutDownTime s
 	}
 	glog.Infof("New %s schedule at %s", deploymentName, time.Now().Add(startTime))
 
-	return &Scheduler{
-		Name:       deploymentName,
-		CreateTime: time.Now(),
-		StartTime:  startTime,
-		Reset:      make(chan bool),
-		Quit:       make(chan bool),
-	}, nil
+	scheduler := &Scheduler{
+		Name:      deploymentName,
+		StartTime: startTime,
+		ExecFunc:  fn,
+		Quit:      make(chan bool),
+	}
+	scheduler.start()
+	return scheduler, nil
 }
 
-func (scheduler *Scheduler) AddFunc(fn func()) {
-	scheduler.ExecFunc = fn
-}
-
-func (scheduler *Scheduler) Run() {
-	timer := time.NewTimer(scheduler.StartTime)
+func (scheduler *Scheduler) start() {
+	scheduler.Quit = make(chan bool)
+	c := make(chan bool, 1)
 	go func() {
 		for {
 			select {
-			case <-timer.C:
-				glog.Infof("Run %s scheduler", scheduler.Name)
+			case <-c:
 				scheduler.ExecFunc()
-				timer.Stop()
 				return
-			case <-scheduler.Reset:
-				timer.Reset(scheduler.NewTime)
 			case <-scheduler.Quit:
-				glog.Infof("Stoping %s scheduler", scheduler.Name)
 				return
+			default:
+				time.Sleep(time.Second * 1)
 			}
 		}
 	}()
+
+	select {
+	case <-time.After(scheduler.StartTime):
+		glog.Infof("Run %s scheduler", scheduler.Name)
+		c <- true
+	}
 }
 
 func (scheduler *Scheduler) ResetTimer(newTime time.Duration) {
-	scheduler.NewTime = newTime
-	scheduler.Reset <- true
+	scheduler.Mutex.Lock()
+	defer scheduler.Mutex.Unlock()
+
+	scheduler.StartTime = newTime
+	scheduler.Quit <- true
+	scheduler.start()
 }
 
 func (scheduler *Scheduler) Stop() {
+	scheduler.Mutex.Lock()
+	defer scheduler.Mutex.Unlock()
+
+	glog.Infof("Stoping %s scheduler", scheduler.Name)
 	scheduler.Quit <- true
 }
