@@ -65,12 +65,10 @@ func getStateString(state DeploymentState) string {
 }
 
 type DeploymentInfo struct {
-	awsInfo *awsecs.DeployedCluster
-	created time.Time
-	state   DeploymentState
-
-	// Temporarily stored here until the refactored code is merged
-	logFile *os.File
+	awsInfo   *awsecs.DeployedCluster
+	scheduler *job.Scheduler
+	created   time.Time
+	state     DeploymentState
 }
 
 func (deploymentInfo *DeploymentInfo) getDeploymentType() string {
@@ -183,6 +181,11 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
+	scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
+	if err != nil {
+		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
+	}
+
 	for _, storeDeployment := range deployments {
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			continue
@@ -251,7 +254,29 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		if reloaded {
-			server.DeployedClusters[deploymentName] = deploymentInfo
+			server.DeployedClusters[deploymentName] = &DeploymentInfo{
+				awsInfo: deployedCluster,
+				state:   AVAILABLE,
+				created: time.Now(),
+			}
+
+			// Add auto shutDown cluster schedule
+			newScheduleRunTime := ""
+			if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
+				realScheduleRunTime := createdTime.Add(scheduleRunTime)
+				if realScheduleRunTime.After(time.Now()) {
+					newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
+				}
+			}
+
+			scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime)
+			if scheduleErr != nil {
+				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
+			} else {
+				scheduler.AddFunc(server.getShutDownClusterFunc(deploymentName))
+				scheduler.Run()
+				server.DeployedClusters[deploymentName].scheduler = scheduler
+			}
 		}
 	}
 
@@ -582,29 +607,15 @@ func (server *Server) createDeployment(c *gin.Context) {
 			deploymentInfo.state = AVAILABLE
 			server.storeDeploymentStatus(deployment.Name)
 
-			// Auto shutDown cluster
-			deleteFunc := func() {
-				netClient := &http.Client{
-					Timeout: time.Second * 10,
-				}
-
-				deleteUrl := fmt.Sprintf("http://%s/v1/deployments/%s", c.Request.Host, deployment.Name)
-				req, err := http.NewRequest("DELETE", deleteUrl, nil)
-				if err != nil {
-					glog.Warningf("Unable to new delete request: " + err.Error())
-					return
-				}
-
-				_, deleteErr := netClient.Do(req)
-				if deleteErr != nil {
-					glog.Warningf("Unable to auto shutdown cluster: " + deleteErr.Error())
-					return
-				}
+			// Add auto shutDown cluster schedule
+			scheduler, scheduleErr := job.NewScheduler(server.Config, deployment.Name, deployment.ShutDownTime)
+			if scheduleErr != nil {
+				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
+			} else {
+				scheduler.AddFunc(server.getShutDownClusterFunc(deployment.Name))
+				scheduler.Run()
+				deploymentInfo.scheduler = scheduler
 			}
-
-			scheduler, _ := job.NewScheduler(server.Config)
-			scheduler.AddFunc(deleteFunc)
-			scheduler.Run()
 		}
 		server.mutex.Unlock()
 	}()
@@ -663,6 +674,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			deploymentInfo.state = FAILED
 			deploymentInfo.awsInfo.Logger.Error("Unable to delete deployment: " + err.Error())
 		} else {
+			defer deploymentInfo.scheduler.Stop()
 			deploymentInfo.state = DELETED
 			deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
 		}
@@ -763,4 +775,31 @@ func (server *Server) storeDeploymentStatus(deploymentName string) error {
 	}
 
 	return nil
+}
+
+func (server *Server) getShutDownClusterFunc(deploymentName string) func() {
+	return func() {
+		httpClient := &http.Client{
+			Timeout: time.Second * 10,
+		}
+
+		deleteUrl := fmt.Sprintf("http://127.0.0.1:7777/v1/deployments/%s", deploymentName)
+		req, err := http.NewRequest("DELETE", deleteUrl, nil)
+		if err != nil {
+			glog.Warningf("Unable to new delete request: %s", err.Error())
+			return
+		}
+
+		resp, deleteErr := httpClient.Do(req)
+		if deleteErr != nil {
+			glog.Warningf("Unable to auto shutdown cluster: %s", deleteErr.Error())
+			return
+		}
+
+		if resp.StatusCode != 202 {
+			responseData, _ := ioutil.ReadAll(resp.Body)
+			glog.Warningf("Unable to auto shutdown cluster: %s", string(responseData))
+			return
+		}
+	}
 }

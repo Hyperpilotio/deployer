@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/spf13/viper"
 )
 
 type Scheduler struct {
+	Name       string
 	CreateTime time.Time
 	StartTime  time.Duration
 	NewTime    time.Duration
@@ -16,15 +18,24 @@ type Scheduler struct {
 	Quit       chan bool
 }
 
-func NewScheduler(config *viper.Viper) (*Scheduler, error) {
-	shutDownTime, err := time.ParseDuration(config.GetString("shutDownTime"))
-	if err != nil {
-		return nil, fmt.Errorf("Unable to parse shutDownTime %s: %s", shutDownTime, err.Error())
+func NewScheduler(config *viper.Viper, deploymentName string, custShutDownTime string) (*Scheduler, error) {
+	scheduleRunTime := ""
+	if custShutDownTime != "" {
+		scheduleRunTime = custShutDownTime
+	} else {
+		scheduleRunTime = config.GetString("shutDownTime")
 	}
 
+	startTime, err := time.ParseDuration(scheduleRunTime)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
+	}
+	glog.Infof("New %s schedule at %s", deploymentName, time.Now().Add(startTime))
+
 	return &Scheduler{
+		Name:       deploymentName,
 		CreateTime: time.Now(),
-		StartTime:  shutDownTime,
+		StartTime:  startTime,
 		Reset:      make(chan bool),
 		Quit:       make(chan bool),
 	}, nil
@@ -40,12 +51,14 @@ func (scheduler *Scheduler) Run() {
 		for {
 			select {
 			case <-timer.C:
+				glog.Infof("Run %s scheduler", scheduler.Name)
 				scheduler.ExecFunc()
 				timer.Stop()
 				return
 			case <-scheduler.Reset:
 				timer.Reset(scheduler.NewTime)
 			case <-scheduler.Quit:
+				glog.Infof("Stoping %s scheduler", scheduler.Name)
 				return
 			}
 		}
