@@ -261,12 +261,11 @@ func (server *Server) reloadClusterState() error {
 				}
 			}
 
-			scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime)
+			scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime,
+				server.getShutDownClusterFunc(deploymentName))
 			if scheduleErr != nil {
 				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
 			} else {
-				scheduler.AddFunc(server.getShutDownClusterFunc(deploymentName))
-				scheduler.Run()
 				server.DeployedClusters[deploymentName].scheduler = scheduler
 			}
 		}
@@ -662,12 +661,11 @@ func (server *Server) createDeployment(c *gin.Context) {
 			server.storeDeploymentStatus(deployment.Name)
 
 			// Add auto shutDown cluster schedule
-			scheduler, scheduleErr := job.NewScheduler(server.Config, deployment.Name, deployment.ShutDownTime)
+			scheduler, scheduleErr := job.NewScheduler(server.Config, deployment.Name, deployment.ShutDownTime,
+				server.getShutDownClusterFunc(deployment.Name))
 			if scheduleErr != nil {
 				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
 			} else {
-				scheduler.AddFunc(server.getShutDownClusterFunc(deployment.Name))
-				scheduler.Run()
 				deploymentInfo.scheduler = scheduler
 			}
 		}
