@@ -138,10 +138,10 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 		for name, deploymentInfo := range server.DeployedClusters {
 			deploymentLog := &DeploymentLog{
 				Name:   name,
-				Time:   deploymentInfo.created,
-				Type:   deploymentInfo.getDeploymentType(),
-				Status: getStateString(deploymentInfo.state),
-				UserId: deploymentInfo.awsInfo.Deployment.UserId,
+				Time:   deploymentInfo.Created,
+				Type:   deploymentInfo.GetDeploymentType(),
+				Status: awsecs.GetStateString(deploymentInfo.State),
+				UserId: deploymentInfo.AwsInfo.Deployment.UserId,
 			}
 			allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
 		}
@@ -340,7 +340,7 @@ func (server *Server) getCluster(c *gin.Context) {
 		}
 		server.mutex.Unlock()
 
-		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.awsInfo)
+		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.AwsInfo)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -354,30 +354,30 @@ func (server *Server) getCluster(c *gin.Context) {
 			"data":  clusterInfo,
 		})
 	case "K8S":
-		server.mutex.Lock()
-		k8sDeployment, ok := server.KubernetesClusters.Clusters[clusterName]
-		server.mutex.Unlock()
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Deployment not found",
-			})
-			return
-		}
+		// server.mutex.Lock()
+		// k8sDeployment, ok := server.KubernetesClusters.Clusters[clusterName]
+		// server.mutex.Unlock()
+		// if !ok {
+		// 	c.JSON(http.StatusNotFound, gin.H{
+		// 		"error": true,
+		// 		"data":  "Deployment not found",
+		// 	})
+		// 	return
+		// }
 
-		clusterInfo, err := k8sDeployment.GetClusterInfo()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to get kubernetes cluster:" + err.Error(),
-			})
-			return
-		}
+		// clusterInfo, err := k8sDeployment.GetClusterInfo()
+		// if err != nil {
+		// 	c.JSON(http.StatusBadRequest, gin.H{
+		// 		"error": true,
+		// 		"data":  "Unable to get kubernetes cluster:" + err.Error(),
+		// 	})
+		// 	return
+		// }
 
-		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  clusterInfo,
-		})
+		// c.JSON(http.StatusOK, gin.H{
+		// 	"error": false,
+		// 	"data":  clusterInfo,
+		// })
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,

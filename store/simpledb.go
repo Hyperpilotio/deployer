@@ -13,7 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/simpledb"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/kubernetes"
 	"github.com/spf13/viper"
 )
 
@@ -123,8 +122,8 @@ func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
 		}
 
 		deployment := &StoreDeployment{
-			ECSDeployment: &awsecs.StoreDeployment{},
-			K8SDeployment: &kubernetes.StoreDeployment{},
+			ECSDeployment: &awsecs.ECSStoreDeployment{},
+			K8SDeployment: &awsecs.K8SStoreDeployment{},
 		}
 		recursiveSetValue(deployment, resp.Attributes)
 
@@ -300,10 +299,10 @@ func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
 		switch field.Kind() {
 		case reflect.Ptr:
 			if fieldName == "ECSDeployment" {
-				recursiveSetValue(field.Interface().(*awsecs.StoreDeployment), attributes)
+				recursiveSetValue(field.Interface().(*awsecs.ECSStoreDeployment), attributes)
 			}
 			if fieldName == "K8SDeployment" {
-				recursiveSetValue(field.Interface().(*kubernetes.StoreDeployment), attributes)
+				recursiveSetValue(field.Interface().(*awsecs.K8SStoreDeployment), attributes)
 			}
 		default:
 			attrValue := restoreValue(fieldName, attributes)
@@ -329,10 +328,10 @@ func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}
 		switch field.Kind() {
 		case reflect.Ptr:
 			if fieldName == "ECSDeployment" {
-				recursiveStructField(attrs, field.Interface().(*awsecs.StoreDeployment))
+				recursiveStructField(attrs, field.Interface().(*awsecs.ECSStoreDeployment))
 			}
 			if fieldName == "K8SDeployment" {
-				recursiveStructField(attrs, field.Interface().(*kubernetes.StoreDeployment))
+				recursiveStructField(attrs, field.Interface().(*awsecs.K8SStoreDeployment))
 			}
 		default:
 			appendAttributes(attrs, fieldName, fieldValue)
