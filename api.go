@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,80 +13,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/hyperpilotio/deployer/deploy"
 	"github.com/hyperpilotio/deployer/store"
-	logging "github.com/op/go-logging"
-	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 
 	"net/http"
-
-	"github.com/aws/aws-sdk-go/aws"
 )
-
-var logFormatter = logging.MustStringFormatter(
-	` %{level:.1s}%{time:0102 15:04:05.999999} %{pid} %{shortfile}] %{message}`,
-)
-
-type DeploymentState int
-
-// Possible deployment states
-const (
-	AVAILABLE = 0
-	CREATING  = 1
-	UPDATING  = 2
-	DELETING  = 3
-	DELETED   = 4
-	FAILED    = 5
-)
-
-func getStateString(state DeploymentState) string {
-	switch state {
-	case AVAILABLE:
-		return "Available"
-	case CREATING:
-		return "Creating"
-	case UPDATING:
-		return "Updating"
-	case DELETING:
-		return "Deleting"
-	case DELETED:
-		return "Deleted"
-	case FAILED:
-		return "Failed"
-	}
-
-	return ""
-}
-
-type DeploymentInfo struct {
-	awsInfo   *awsecs.DeployedCluster
-	scheduler *job.Scheduler
-	created   time.Time
-	state     DeploymentState
-}
-
-func (deploymentInfo *DeploymentInfo) getDeploymentType() string {
-	if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
-		return "K8S"
-	} else {
-		return "ECS"
-	}
-}
 
 // Server store the stats / data of every deployment
 type Server struct {
 	Config      *viper.Viper
 	Store       store.Store
 	AWSProfiles map[string]*awsecs.AWSProfile
+	Deployer    map[string]deploy.Deployer
 	// Maps deployment name to deployed cluster struct
-	DeployedClusters   map[string]*DeploymentInfo
-	KubernetesClusters *kubernetes.KubernetesClusters
+	DeployedClusters map[string]*awsecs.DeploymentInfo
 
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
@@ -97,43 +42,11 @@ type Server struct {
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:             config,
-		DeployedClusters:   make(map[string]*DeploymentInfo),
-		KubernetesClusters: kubernetes.NewKubernetesClusters(),
-		UploadedFiles:      make(map[string]string),
+		Config:           config,
+		Deployer:         make(map[string]deploy.Deployer),
+		DeployedClusters: make(map[string]*awsecs.DeploymentInfo),
+		UploadedFiles:    make(map[string]string),
 	}
-}
-
-// NewLogger create per deployment logger
-func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.File, error) {
-	deploymentName := deployedCluster.Deployment.Name
-	log := logging.MustGetLogger(deploymentName)
-
-	logDirPath := path.Join(server.Config.GetString("filesPath"), "log")
-	if _, err := os.Stat(logDirPath); os.IsNotExist(err) {
-		os.Mkdir(logDirPath, 0777)
-	}
-
-	logFilePath := path.Join(logDirPath, deploymentName+".log")
-	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
-	if err != nil {
-		return logFile, errors.New("Unable to create deployment log file:" + err.Error())
-	}
-
-	fileLog := logging.NewLogBackend(logFile, "["+deploymentName+"]", 0)
-	consoleLog := logging.NewLogBackend(os.Stdout, "["+deploymentName+"]", 0)
-
-	fileLogLevel := logging.AddModuleLevel(fileLog)
-	fileLogLevel.SetLevel(logging.INFO, "")
-
-	consoleLogBackend := logging.NewBackendFormatter(consoleLog, logFormatter)
-	fileLogBackend := logging.NewBackendFormatter(fileLog, logFormatter)
-
-	log.SetBackend(logging.SetBackend(fileLogBackend, consoleLogBackend))
-
-	deployedCluster.Logger = log
-
-	return logFile, nil
 }
 
 // NewStoreDeployment create deployment that needs to be stored
@@ -141,23 +54,24 @@ func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDepl
 	deploymentInfo := server.DeployedClusters[deploymentName]
 	storeDeployment := &store.StoreDeployment{
 		Name:    deploymentName,
-		Region:  deploymentInfo.awsInfo.Deployment.Region,
-		UserId:  deploymentInfo.awsInfo.Deployment.UserId,
-		Status:  getStateString(deploymentInfo.state),
-		Created: deploymentInfo.created.Format(time.RFC822),
+		Region:  deploymentInfo.AwsInfo.Deployment.Region,
+		UserId:  deploymentInfo.AwsInfo.Deployment.UserId,
+		Status:  awsecs.GetStateString(deploymentInfo.State),
+		Created: deploymentInfo.Created.Format(time.RFC822),
 	}
 
-	if deploymentInfo.awsInfo.KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.awsInfo.KeyPair.KeyMaterial)
+	if deploymentInfo.AwsInfo.KeyPair != nil {
+		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.AwsInfo.KeyPair.KeyMaterial)
 	}
 
-	k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]
-	if ok {
-		storeDeployment.K8SDeployment = k8sDeployment.NewK8SStoreDeployment()
-		storeDeployment.Type = "K8S"
-	} else {
-		storeDeployment.Type = "ECS"
-		storeDeployment.ECSDeployment = deploymentInfo.awsInfo.NewECSStoreDeployment()
+	deploymentType := deploymentInfo.GetDeploymentType()
+	storeDeployment.Type = deploymentType
+
+	switch deploymentType {
+	case "ECS":
+		storeDeployment.ECSDeployment = deploymentInfo.AwsInfo.NewECSStoreDeployment()
+	case "K8S":
+		storeDeployment.K8SDeployment = deploymentInfo.K8sInfo.NewK8SStoreDeployment()
 	}
 
 	return storeDeployment
@@ -176,100 +90,102 @@ func (server *Server) reloadClusterState() error {
 	}
 	server.AWSProfiles = awsProfileInfos
 
-	deployments, err := server.Store.LoadDeployments()
-	if err != nil {
-		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
-	}
+	// TODO refactor
 
-	scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
-	if err != nil {
-		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
-	}
+	// deployments, err := server.Store.LoadDeployments()
+	// if err != nil {
+	// 	return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	// }
 
-	for _, storeDeployment := range deployments {
-		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			continue
-		}
+	// scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
+	// if err != nil {
+	// 	return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
+	// }
 
-		userId := storeDeployment.UserId
-		if userId == "" {
-			glog.Warning("Skip loading deployment with unspecified user id")
-			continue
-		}
+	// for _, storeDeployment := range deployments {
+	// 	if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+	// 		continue
+	// 	}
 
-		awsProfile, ok := awsProfileInfos[userId]
-		if !ok {
-			return fmt.Errorf("Unable to find %s aws profile", userId)
-		}
+	// 	userId := storeDeployment.UserId
+	// 	if userId == "" {
+	// 		glog.Warning("Skip loading deployment with unspecified user id")
+	// 		continue
+	// 	}
 
-		deploymentName := storeDeployment.Name
-		deployment := &apis.Deployment{
-			UserId: userId,
-			Name:   deploymentName,
-			Region: storeDeployment.Region,
-		}
-		deployedCluster := awsecs.NewDeployedCluster(deployment)
+	// 	awsProfile, ok := awsProfileInfos[userId]
+	// 	if !ok {
+	// 		return fmt.Errorf("Unable to find %s aws profile", userId)
+	// 	}
 
-		// Reload keypair
-		if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
-			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-			continue
-		}
+	// 	deploymentName := storeDeployment.Name
+	// 	deployment := &apis.Deployment{
+	// 		UserId: userId,
+	// 		Name:   deploymentName,
+	// 		Region: storeDeployment.Region,
+	// 	}
+	// 	deployedCluster := awsecs.NewDeployedCluster(deployment)
 
-		reloaded := true
-		switch storeDeployment.Type {
-		case "ECS":
-			deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
-			if err := awsecs.ReloadClusterState(awsProfile, deployedCluster); err != nil {
-				glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
-				reloaded = false
-			}
-		case "K8S":
-			if err := kubernetes.CheckClusterState(awsProfile, deployedCluster); err != nil {
-				if err := server.Store.DeleteDeployment(deploymentName); err != nil {
-					glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-				}
-				glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
-				continue
-			}
+	// 	// Reload keypair
+	// 	if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
+	// 		glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+	// 		continue
+	// 	}
 
-			deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
-			k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
-			if err != nil {
-				glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
-				reloaded = false
-			}
-			server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
-		default:
-			reloaded = false
-			glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
-		}
+	// 	reloaded := true
+	// 	switch storeDeployment.Type {
+	// 	case "ECS":
+	// 		deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
+	// 		if err := awsecs.ReloadClusterState(awsProfile, deployedCluster); err != nil {
+	// 			glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
+	// 			reloaded = false
+	// 		}
+	// 	case "K8S":
+	// 		if err := kubernetes.CheckClusterState(awsProfile, deployedCluster); err != nil {
+	// 			if err := server.Store.DeleteDeployment(deploymentName); err != nil {
+	// 				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+	// 			}
+	// 			glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
+	// 			continue
+	// 		}
 
-		if reloaded {
-			server.DeployedClusters[deploymentName] = &DeploymentInfo{
-				awsInfo: deployedCluster,
-				state:   AVAILABLE,
-				created: time.Now(),
-			}
+	// 		deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
+	// 		k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
+	// 		if err != nil {
+	// 			glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
+	// 			reloaded = false
+	// 		}
+	// 		server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
+	// 	default:
+	// 		reloaded = false
+	// 		glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
+	// 	}
 
-			// Add auto shutDown cluster schedule
-			newScheduleRunTime := ""
-			if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
-				realScheduleRunTime := createdTime.Add(scheduleRunTime)
-				if realScheduleRunTime.After(time.Now()) {
-					newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
-				}
-			}
+	// 	if reloaded {
+	// 		server.DeployedClusters[deploymentName] = &DeploymentInfo{
+	// 			awsInfo: deployedCluster,
+	// 			state:   AVAILABLE,
+	// 			created: time.Now(),
+	// 		}
 
-			scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime,
-				server.getShutDownClusterFunc(deploymentName))
-			if scheduleErr != nil {
-				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
-			} else {
-				server.DeployedClusters[deploymentName].scheduler = scheduler
-			}
-		}
-	}
+	// 		// Add auto shutDown cluster schedule
+	// 		newScheduleRunTime := ""
+	// 		if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
+	// 			realScheduleRunTime := createdTime.Add(scheduleRunTime)
+	// 			if realScheduleRunTime.After(time.Now()) {
+	// 				newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
+	// 			}
+	// 		}
+
+	// 		scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime,
+	// 			server.getShutDownClusterFunc(deploymentName))
+	// 		if scheduleErr != nil {
+	// 			glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
+	// 		} else {
+	// 			server.DeployedClusters[deploymentName].scheduler = scheduler
+	// 		}
+	// 	}
+	// }
 
 	return nil
 }
@@ -366,7 +282,7 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 	}
 
 	nodeId := -1
-	for _, nodeMapping := range deploymentInfo.awsInfo.Deployment.NodeMapping {
+	for _, nodeMapping := range deploymentInfo.AwsInfo.Deployment.NodeMapping {
 		if nodeMapping.Task == taskName {
 			nodeId = nodeMapping.Id
 			break
@@ -381,7 +297,7 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 		return
 	}
 
-	nodeInfo, nodeOk := deploymentInfo.awsInfo.NodeInfos[nodeId]
+	nodeInfo, nodeOk := deploymentInfo.AwsInfo.NodeInfos[nodeId]
 	if !nodeOk {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -473,74 +389,74 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
 	// TODO Implement function to update deployment
-	var deployment apis.Deployment
-	if err := c.BindJSON(&deployment); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error deserializing deployment: " + err.Error(),
-		})
-		return
-	}
+	// var deployment apis.Deployment
+	// if err := c.BindJSON(&deployment); err != nil {
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": true,
+	// 		"data":  "Error deserializing deployment: " + err.Error(),
+	// 	})
+	// 	return
+	// }
 
-	server.mutex.Lock()
-	deploymentInfo, ok := server.DeployedClusters[deploymentName]
-	if !ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Deployment not found",
-		})
-		return
-	}
+	// server.mutex.Lock()
+	// deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	// if !ok {
+	// 	server.mutex.Unlock()
+	// 	c.JSON(http.StatusNotFound, gin.H{
+	// 		"error": true,
+	// 		"data":  "Deployment not found",
+	// 	})
+	// 	return
+	// }
 
-	if deploymentInfo.state != AVAILABLE {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Deployment is not available",
-		})
-		return
-	}
+	// if deploymentInfo.state != AVAILABLE {
+	// 	server.mutex.Unlock()
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": true,
+	// 		"data":  "Deployment is not available",
+	// 	})
+	// 	return
+	// }
 
-	awsProfile, ok := server.AWSProfiles[deployment.UserId]
-	if !ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find aws profile for user: " + deployment.UserId,
-		})
-		return
-	}
+	// awsProfile, ok := server.AWSProfiles[deployment.UserId]
+	// if !ok {
+	// 	server.mutex.Unlock()
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": true,
+	// 		"data":  "Unable to find aws profile for user: " + deployment.UserId,
+	// 	})
+	// 	return
+	// }
 
-	deployment.Name = deploymentName
-	deploymentInfo.awsInfo.Deployment = &deployment
-	deploymentInfo.state = UPDATING
-	server.mutex.Unlock()
+	// deployment.Name = deploymentName
+	// deploymentInfo.AwsInfo.Deployment = &deployment
+	// deploymentInfo.state = UPDATING
+	// server.mutex.Unlock()
 
-	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
-	if logErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
-		})
-		return
-	}
+	// f, logErr := server.NewLogger(deploymentInfo.awsInfo)
+	// if logErr != nil {
+	// 	c.JSON(http.StatusBadRequest, gin.H{
+	// 		"error": true,
+	// 		"data":  "Error creating deployment logger:" + logErr.Error(),
+	// 	})
+	// 	return
+	// }
 
-	go func() {
-		defer func() {
-			deploymentInfo.state = AVAILABLE
-		}()
-		defer f.Close()
-		// TODO: Check if it's ECS or kubernetes
-		err := server.KubernetesClusters.UpdateDeployment(awsProfile, &deployment, deploymentInfo.awsInfo)
-		if err != nil {
-			deploymentInfo.awsInfo.Logger.Infof("Error update deployment: " + err.Error())
-			return
-		}
+	// go func() {
+	// 	defer func() {
+	// 		deploymentInfo.state = AVAILABLE
+	// 	}()
+	// 	defer f.Close()
+	// 	// TODO: Check if it's ECS or kubernetes
+	// 	err := server.KubernetesClusters.UpdateDeployment(awsProfile, &deployment, deploymentInfo.awsInfo)
+	// 	if err != nil {
+	// 		deploymentInfo.AwsInfo.Logger.Infof("Error update deployment: " + err.Error())
+	// 		return
+	// 	}
 
-		server.storeDeploymentStatus(deploymentName)
-		deploymentInfo.awsInfo.Logger.Infof("Update deployment successfully!")
-	}()
+	// 	server.storeDeploymentStatus(deploymentName)
+	// 	deploymentInfo.AwsInfo.Logger.Infof("Update deployment successfully!")
+	// }()
 
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
@@ -569,11 +485,6 @@ func (server *Server) getDeployment(c *gin.Context) {
 	}
 }
 
-func createUniqueDeploymentName(familyName string) string {
-	randomId := strings.ToUpper(strings.Split(uuid.NewUUID().String(), "-")[0])
-	return fmt.Sprintf("%s-%s", familyName, randomId)
-}
-
 func (server *Server) createDeployment(c *gin.Context) {
 	// FIXME document the structure of deployment in the doc file
 	var deployment apis.Deployment
@@ -585,14 +496,11 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	deployment.Name = createUniqueDeploymentName(deployment.Name)
-	deployedCluster := awsecs.NewDeployedCluster(&deployment)
-
-	f, logErr := server.NewLogger(deployedCluster)
-	if logErr != nil {
+	deployer, err := deploy.NewDeployer(server.Config, server.AWSProfiles, &deployment)
+	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
+			"data":  "Error initialize deployer: " + err.Error(),
 		})
 		return
 	}
@@ -606,75 +514,39 @@ func (server *Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
-
-	awsProfile, ok := server.AWSProfiles[deployment.UserId]
-	if !ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find aws profile for user: " + deployment.UserId,
-		})
-		return
-	}
-
-	deploymentInfo := &DeploymentInfo{
-		awsInfo: deployedCluster,
-		created: time.Now(),
-		state:   CREATING,
-	}
-	server.DeployedClusters[deployment.Name] = deploymentInfo
 	server.mutex.Unlock()
 
 	go func() {
-		defer f.Close()
+		log := deployer.GetLog()
+		defer log.LogFile.Close()
 
-		var err error
-		switch deploymentInfo.getDeploymentType() {
-		case "ECS":
-			if err = awsecs.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster); err != nil {
-				deployedCluster.Logger.Infof("Unable to create ECS deployment: " + err.Error())
-			} else {
-				deployedCluster.Logger.Infof("Create ECS deployment successfully!")
-			}
-		case "K8S":
-			var response *kubernetes.CreateDeploymentResponse
-			response, err = server.KubernetesClusters.CreateDeployment(awsProfile, server.UploadedFiles, deployedCluster)
-			if err != nil {
-				deployedCluster.Logger.Infof("Unable to create Kubernetes deployment: " + err.Error())
-			} else {
-				resJson, _ := json.Marshal(*response)
-				deployedCluster.Logger.Infof(string(resJson))
-				deployedCluster.Logger.Infof("Create Kubernetes deployment successfully!")
-			}
-		default:
-			err = errors.New("")
-			deployedCluster.Logger.Infof("Unsupported container deployment")
+		deploymentInfo := deployer.GetDeploymentInfo()
+		if err := deployer.CreateDeployment(server.UploadedFiles); err != nil {
+			log.Logger.Infof("Unable to create deployment: " + err.Error())
+			deploymentInfo.State = awsecs.FAILED
+		} else {
+			log.Logger.Infof("Create deployment successfully!")
+			deploymentInfo.Created = time.Now()
+			deploymentInfo.State = awsecs.AVAILABLE
+
+			server.mutex.Lock()
+			server.DeployedClusters[deployment.Name] = deploymentInfo
+			server.Deployer[deployment.Name] = deployer
+			server.mutex.Unlock()
 		}
 
 		server.mutex.Lock()
-		if err != nil {
-			deploymentInfo.state = FAILED
-			server.storeDeploymentStatus(deployment.Name)
-			delete(server.DeployedClusters, deployment.Name)
-		} else {
-			deploymentInfo.state = AVAILABLE
-			server.storeDeploymentStatus(deployment.Name)
-
-			// Add auto shutDown cluster schedule
-			scheduler, scheduleErr := job.NewScheduler(server.Config, deployment.Name, deployment.ShutDownTime,
-				server.getShutDownClusterFunc(deployment.Name))
-			if scheduleErr != nil {
-				glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
-			} else {
-				deploymentInfo.scheduler = scheduler
-			}
-		}
+		server.storeDeploymentStatus(deployment.Name)
 		server.mutex.Unlock()
+
+		if err := deployer.NewShutDownScheduler(); err != nil {
+			glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+		}
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
-		"data":  "Creating deployment " + deployedCluster.Deployment.Name + "......",
+		"data":  "Creating deployment " + deployment.Name + "......",
 	})
 }
 
@@ -682,17 +554,18 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
 	server.mutex.Lock()
-	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	deployer, ok := server.Deployer[deploymentName]
 	if !ok {
 		server.mutex.Unlock()
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  deploymentName + " not found.",
+			"data":  fmt.Sprintf("Error initialize %s deployer", deploymentName),
 		})
 		return
 	}
 
-	if deploymentInfo.state != AVAILABLE {
+	deploymentInfo := deployer.GetDeploymentInfo()
+	if deploymentInfo.State != awsecs.AVAILABLE {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -700,50 +573,30 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		})
 		return
 	}
-
-	awsProfile, ok := server.AWSProfiles[deploymentInfo.awsInfo.Deployment.UserId]
-	if !ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find aws profile for user: " + deploymentInfo.awsInfo.Deployment.UserId,
-		})
-		return
-	}
-
-	deploymentInfo.state = DELETING
 	server.mutex.Unlock()
 
-	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
-	if logErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
-		})
-		return
+	scheduler := deployer.GetScheduler()
+	if scheduler != nil {
+		scheduler.Stop()
 	}
+	deploymentInfo.State = awsecs.DELETING
 
 	go func() {
-		defer f.Close()
+		log := deployer.GetLog()
+		defer log.LogFile.Close()
 
-		var err error
-		if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
-			server.KubernetesClusters.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
+		if err := deployer.DeleteDeployment(); err != nil {
+			log.Logger.Error("Unable to delete deployment")
+			deploymentInfo.State = awsecs.FAILED
 		} else {
-			err = awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
+			log.Logger.Infof("Delete deployment successfully!")
+			deploymentInfo.State = awsecs.DELETED
 		}
 
 		server.mutex.Lock()
-		if err != nil {
-			deploymentInfo.state = FAILED
-			deploymentInfo.awsInfo.Logger.Error("Unable to delete deployment")
-		} else {
-			defer deploymentInfo.scheduler.Stop()
-			deploymentInfo.state = DELETED
-			deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
-		}
-		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+		server.storeDeploymentStatus(deploymentInfo.AwsInfo.Deployment.Name)
 		delete(server.DeployedClusters, deploymentName)
+		delete(server.Deployer, deploymentName)
 		server.mutex.Unlock()
 	}()
 
@@ -758,8 +611,8 @@ func (server *Server) getPemFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		if deploymentInfo.awsInfo != nil && deploymentInfo.awsInfo.KeyPair != nil {
-			privateKey := strings.Replace(*deploymentInfo.awsInfo.KeyPair.KeyMaterial, "\\n", "\n", -1)
+		if deploymentInfo.AwsInfo != nil && deploymentInfo.AwsInfo.KeyPair != nil {
+			privateKey := strings.Replace(*deploymentInfo.AwsInfo.KeyPair.KeyMaterial, "\\n", "\n", -1)
 			c.String(http.StatusOK, privateKey)
 			return
 		}
@@ -775,9 +628,10 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if k8sDeployment, ok := server.KubernetesClusters.Clusters[c.Param("deployment")]; ok {
-		if k8sDeployment.KubeConfigPath != "" {
-			if b, err := ioutil.ReadFile(k8sDeployment.KubeConfigPath); err != nil {
+	if deployer, ok := server.Deployer[c.Param("deployment")]; ok {
+		kubeConfigPath := deployer.GetKubeConfigPath()
+		if kubeConfigPath != "" {
+			if b, err := ioutil.ReadFile(kubeConfigPath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"error": true,
 					"data":  "Unable to read kubeConfig file: " + err.Error(),
@@ -811,7 +665,7 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 		return
 	}
 
-	deployedCluster := deploymentInfo.awsInfo
+	deployedCluster := deploymentInfo.AwsInfo
 
 	nodePort := ""
 	taskFamilyName := ""
@@ -868,31 +722,4 @@ func (server *Server) storeDeploymentStatus(deploymentName string) error {
 	}
 
 	return nil
-}
-
-func (server *Server) getShutDownClusterFunc(deploymentName string) func() {
-	return func() {
-		httpClient := &http.Client{
-			Timeout: time.Second * 10,
-		}
-
-		deleteUrl := fmt.Sprintf("http://127.0.0.1:7777/v1/deployments/%s", deploymentName)
-		req, err := http.NewRequest("DELETE", deleteUrl, nil)
-		if err != nil {
-			glog.Warningf("Unable to new delete request: %s", err.Error())
-			return
-		}
-
-		resp, deleteErr := httpClient.Do(req)
-		if deleteErr != nil {
-			glog.Warningf("Unable to auto shutdown cluster: %s", deleteErr.Error())
-			return
-		}
-
-		if resp.StatusCode != 202 {
-			responseData, _ := ioutil.ReadAll(resp.Body)
-			glog.Warningf("Unable to auto shutdown cluster: %s", string(responseData))
-			return
-		}
-	}
 }

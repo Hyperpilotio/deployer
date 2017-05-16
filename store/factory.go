@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/kubernetes"
 	"github.com/spf13/viper"
 )
 
@@ -18,8 +17,8 @@ type StoreDeployment struct {
 	KeyMaterial string
 	UserId      string
 
-	ECSDeployment *awsecs.StoreDeployment
-	K8SDeployment *kubernetes.StoreDeployment
+	ECSDeployment *awsecs.ECSStoreDeployment
+	K8SDeployment *awsecs.K8SStoreDeployment
 }
 
 type Store interface {
