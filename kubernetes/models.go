@@ -14,7 +14,6 @@ import (
 
 type K8SDeployer struct {
 	Config *viper.Viper
-	Type   string
 
 	DeploymentInfo *awsecs.DeploymentInfo
 	DeploymentLog  *log.DeploymentLog

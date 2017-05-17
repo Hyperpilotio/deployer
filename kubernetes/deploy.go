@@ -40,7 +40,6 @@ func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
 	deployedCluster := awsecs.NewDeployedCluster(deployment)
 	deployer := &K8SDeployer{
 		Config: config,
-		Type:   "K8S",
 		DeploymentInfo: &awsecs.DeploymentInfo{
 			AwsInfo: deployedCluster,
 			Created: time.Now(),
@@ -84,7 +83,7 @@ func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {
 	return k8sDeployer.DeploymentInfo.K8sInfo.KubeConfigPath
 }
 
-func (k8sDeployer *K8SDeployer) NewShutDownScheduler() error {
+func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string) error {
 	if k8sDeployer.Scheduler != nil {
 		k8sDeployer.Scheduler.Stop()
 	}
@@ -96,6 +95,10 @@ func (k8sDeployer *K8SDeployer) NewShutDownScheduler() error {
 		scheduleRunTime = deployment.ShutDownTime
 	} else {
 		scheduleRunTime = k8sDeployer.Config.GetString("shutDownTime")
+	}
+
+	if custScheduleRunTime != "" {
+		scheduleRunTime = custScheduleRunTime
 	}
 
 	startTime, err := time.ParseDuration(scheduleRunTime)
@@ -428,7 +431,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 	k8sDeployment.BastionIp = addresses[0]
 	k8sDeployment.MasterIp = addresses[1]
 
-	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
+	if err := DownloadKubeConfig(k8sDeployer.DeploymentInfo); err != nil {
 		return errors.New("Unable to download kubeconfig: " + err.Error())
 	}
 
@@ -1471,9 +1474,9 @@ func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) 
 }
 
 // DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
-func (k8sDeployer *K8SDeployer) DownloadKubeConfig() error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
+func DownloadKubeConfig(deploymentInfo *awsecs.DeploymentInfo) error {
+	deployedCluster := deploymentInfo.AwsInfo
+	k8sDeployment := deploymentInfo.K8sInfo
 
 	baseDir := deployedCluster.Deployment.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
@@ -1539,7 +1542,10 @@ func (k8sDeployer *K8SDeployer) UploadSshKeyToBastion() error {
 }
 
 // CheckClusterState check kubernetes cluster state is exist
-func CheckClusterState(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.DeployedCluster) error {
+func CheckClusterState(deploymentInfo *awsecs.DeploymentInfo) error {
+	awsProfile := deploymentInfo.AwsProfile
+	deployedCluster := deploymentInfo.AwsInfo
+
 	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
@@ -1566,25 +1572,29 @@ func CheckClusterState(awsProfile *awsecs.AWSProfile, deployedCluster *awsecs.De
 }
 
 // ReloadClusterState reload kubernetes cluster state
-func ReloadClusterState(k8sDeployer *K8SDeployer, deployment *awsecs.K8SStoreDeployment, deployedCluster *awsecs.DeployedCluster) (*awsecs.KubernetesDeployment, error) {
+func ReloadClusterState(deploymentInfo *awsecs.DeploymentInfo, deployment *awsecs.K8SStoreDeployment) error {
+	deployedCluster := deploymentInfo.AwsInfo
+	deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
+
 	deploymentName := deployedCluster.Deployment.Name
 	k8sDeployment := &awsecs.KubernetesDeployment{
 		BastionIp: deployment.BastionIp,
 		MasterIp:  deployment.MasterIp,
 	}
 
-	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
-		return nil, fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
+	if err := DownloadKubeConfig(deploymentInfo); err != nil {
+		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
 
 	glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
 	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
+		return fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
 	}
 	k8sDeployment.KubeConfig = kubeConfig
+	deploymentInfo.K8sInfo = k8sDeployment
 
-	return k8sDeployment, nil
+	return nil
 }
 
 func (k8sDeployer *K8SDeployer) GetClusterInfo() (*ClusterInfo, error) {

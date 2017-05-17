@@ -72,7 +72,6 @@ type DeployedCluster struct {
 
 type ECSDeployer struct {
 	Config *viper.Viper
-	Type   string
 
 	DeploymentInfo *DeploymentInfo
 	DeploymentLog  *log.DeploymentLog

@@ -18,6 +18,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/hyperpilotio/deployer/deploy"
+	"github.com/hyperpilotio/deployer/kubernetes"
 	"github.com/hyperpilotio/deployer/store"
 	"github.com/spf13/viper"
 
@@ -46,119 +47,6 @@ func NewServer(config *viper.Viper) *Server {
 		DeployedClusters: make(map[string]*awsecs.DeploymentInfo),
 		UploadedFiles:    make(map[string]string),
 	}
-}
-
-// reloadClusterState reload cluster state when deployer restart
-func (server *Server) reloadClusterState() error {
-	awsProfiles, profileErr := server.Store.LoadAWSProfiles()
-	if profileErr != nil {
-		return fmt.Errorf("Unable to load aws profile: %s", profileErr.Error())
-	}
-
-	awsProfileInfos := map[string]*awsecs.AWSProfile{}
-	for _, awsProfile := range awsProfiles {
-		awsProfileInfos[awsProfile.UserId] = awsProfile
-	}
-	server.AWSProfiles = awsProfileInfos
-
-	// TODO refactor
-
-	// deployments, err := server.Store.LoadDeployments()
-	// if err != nil {
-	// 	return fmt.Errorf("Unable to load deployment status: %s", err.Error())
-	// }
-
-	// scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
-	// if err != nil {
-	// 	return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
-	// }
-
-	// for _, storeDeployment := range deployments {
-	// 	if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-	// 		continue
-	// 	}
-
-	// 	userId := storeDeployment.UserId
-	// 	if userId == "" {
-	// 		glog.Warning("Skip loading deployment with unspecified user id")
-	// 		continue
-	// 	}
-
-	// 	awsProfile, ok := awsProfileInfos[userId]
-	// 	if !ok {
-	// 		return fmt.Errorf("Unable to find %s aws profile", userId)
-	// 	}
-
-	// 	deploymentName := storeDeployment.Name
-	// 	deployment := &apis.Deployment{
-	// 		UserId: userId,
-	// 		Name:   deploymentName,
-	// 		Region: storeDeployment.Region,
-	// 	}
-	// 	deployedCluster := awsecs.NewDeployedCluster(deployment)
-
-	// 	// Reload keypair
-	// 	if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
-	// 		glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-	// 		continue
-	// 	}
-
-	// 	reloaded := true
-	// 	switch storeDeployment.Type {
-	// 	case "ECS":
-	// 		deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
-	// 		if err := awsecs.ReloadClusterState(awsProfile, deployedCluster); err != nil {
-	// 			glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
-	// 			reloaded = false
-	// 		}
-	// 	case "K8S":
-	// 		if err := kubernetes.CheckClusterState(awsProfile, deployedCluster); err != nil {
-	// 			if err := server.Store.DeleteDeployment(deploymentName); err != nil {
-	// 				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-	// 			}
-	// 			glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
-	// 			continue
-	// 		}
-
-	// 		deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
-	// 		k8sDeployment, err := kubernetes.ReloadClusterState(storeDeployment.K8SDeployment, deployedCluster)
-	// 		if err != nil {
-	// 			glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
-	// 			reloaded = false
-	// 		}
-	// 		server.KubernetesClusters.Clusters[deploymentName] = k8sDeployment
-	// 	default:
-	// 		reloaded = false
-	// 		glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
-	// 	}
-
-	// 	if reloaded {
-	// 		server.DeployedClusters[deploymentName] = &DeploymentInfo{
-	// 			awsInfo: deployedCluster,
-	// 			state:   AVAILABLE,
-	// 			created: time.Now(),
-	// 		}
-
-	// 		// Add auto shutDown cluster schedule
-	// 		newScheduleRunTime := ""
-	// 		if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
-	// 			realScheduleRunTime := createdTime.Add(scheduleRunTime)
-	// 			if realScheduleRunTime.After(time.Now()) {
-	// 				newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
-	// 			}
-	// 		}
-
-	// 		scheduler, scheduleErr := job.NewScheduler(server.Config, deploymentName, newScheduleRunTime,
-	// 			server.getShutDownClusterFunc(deploymentName))
-	// 		if scheduleErr != nil {
-	// 			glog.Warningf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
-	// 		} else {
-	// 			server.DeployedClusters[deploymentName].scheduler = scheduler
-	// 		}
-	// 	}
-	// }
-
-	return nil
 }
 
 // StartServer start a web servers
@@ -507,7 +395,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		}
 		server.storeDeploymentStatus(deploymentInfo)
 
-		if err := deployer.NewShutDownScheduler(); err != nil {
+		if err := deployer.NewShutDownScheduler(""); err != nil {
 			glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
 		}
 	}()
@@ -688,6 +576,107 @@ func (server *Server) storeDeploymentStatus(deploymentInfo *awsecs.DeploymentInf
 	if err := server.Store.StoreNewDeployment(deployment); err != nil {
 		return fmt.Errorf("Unable to store %s deployment status: %s",
 			deploymentInfo.AwsInfo.Deployment.Name, err.Error())
+	}
+
+	return nil
+}
+
+// reloadClusterState reload cluster state when deployer restart
+func (server *Server) reloadClusterState() error {
+	awsProfiles, profileErr := server.Store.LoadAWSProfiles()
+	if profileErr != nil {
+		return fmt.Errorf("Unable to load aws profile: %s", profileErr.Error())
+	}
+
+	awsProfileInfos := map[string]*awsecs.AWSProfile{}
+	for _, awsProfile := range awsProfiles {
+		awsProfileInfos[awsProfile.UserId] = awsProfile
+	}
+	server.AWSProfiles = awsProfileInfos
+
+	deployments, err := server.Store.LoadDeployments()
+	if err != nil {
+		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	}
+
+	scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
+	if err != nil {
+		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
+	}
+
+	for _, storeDeployment := range deployments {
+		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+			continue
+		}
+
+		userId := storeDeployment.UserId
+		if userId == "" {
+			glog.Warning("Skip loading deployment with unspecified user id")
+			continue
+		}
+
+		deploymentName := storeDeployment.Name
+		deployment := &apis.Deployment{
+			UserId: userId,
+			Name:   deploymentName,
+			Region: storeDeployment.Region,
+		}
+
+		deployer, err := deploy.NewDeployer(server.Config, awsProfileInfos, deployment)
+		if err != nil {
+			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
+		}
+
+		deploymentInfo := deployer.GetDeploymentInfo()
+
+		// Reload keypair
+		if err := deploymentInfo.ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+			continue
+		}
+
+		reloaded := true
+		switch storeDeployment.Type {
+		case "ECS":
+			if err := deploymentInfo.ReloadClusterState(); err != nil {
+				glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
+				reloaded = false
+			}
+		case "K8S":
+			if err := kubernetes.CheckClusterState(deploymentInfo); err != nil {
+				if err := server.Store.DeleteDeployment(deploymentName); err != nil {
+					glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+				}
+				glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
+				continue
+			}
+
+			if err := kubernetes.ReloadClusterState(deploymentInfo, storeDeployment.K8SDeployment); err != nil {
+				glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
+				reloaded = false
+			}
+		default:
+			reloaded = false
+			glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
+		}
+
+		if reloaded {
+			server.DeployedClusters[deploymentName] = deploymentInfo
+			server.Deployer[deploymentName] = deployer
+
+			// Add auto shutDown cluster schedule
+			newScheduleRunTime := ""
+			if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
+				realScheduleRunTime := createdTime.Add(scheduleRunTime)
+				if realScheduleRunTime.After(time.Now()) {
+					newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
+				}
+			}
+
+			if err := deployer.NewShutDownScheduler(newScheduleRunTime); err != nil {
+				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+			}
+		}
 	}
 
 	return nil
