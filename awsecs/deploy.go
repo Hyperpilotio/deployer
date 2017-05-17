@@ -31,7 +31,6 @@ func NewDeployer(config *viper.Viper, awsProfiles map[string]*AWSProfile,
 	deployedCluster := NewDeployedCluster(deployment)
 	deployer := &ECSDeployer{
 		Config: config,
-		Type:   "ECS",
 		DeploymentInfo: &DeploymentInfo{
 			AwsInfo: deployedCluster,
 			Created: time.Now(),
@@ -93,6 +92,89 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() *StoreDeployment {
 	return storeDeployment
 }
 
+// ReloadKeyPair reload KeyPair by keyName
+func (deploymentInfo *DeploymentInfo) ReloadKeyPair(keyMaterial string) error {
+	awsProfile := deploymentInfo.AwsProfile
+	deployedCluster := deploymentInfo.AwsInfo
+
+	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{
+		KeyNames: []*string{
+			aws.String(deployedCluster.KeyName()),
+		},
+	}
+
+	describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe keyPairs: %s", err.Error())
+	}
+
+	if len(describeKeyPairsOutput.KeyPairs) == 0 {
+		return fmt.Errorf("Unable to find %s keyPairs", deployedCluster.Deployment.Name)
+	}
+
+	keyPair := &ec2.CreateKeyPairOutput{
+		KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
+		KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
+		KeyMaterial:    aws.String(keyMaterial),
+	}
+	deployedCluster.KeyPair = keyPair
+
+	return nil
+}
+
+// ReloadClusterState reload EC2 cluster state
+func (deploymentInfo *DeploymentInfo) ReloadClusterState() error {
+	awsProfile := deploymentInfo.AwsProfile
+	deployedCluster := deploymentInfo.AwsInfo
+	deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
+
+	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	ecsSvc := ecs.New(sess)
+
+	deploymentName := deployedCluster.Deployment.Name
+	listInstancesInput := &ecs.ListContainerInstancesInput{
+		Cluster: aws.String(deploymentName),
+	}
+
+	listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to list container instances: %s", err.Error())
+	}
+
+	ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
+		Cluster:            aws.String(deploymentName),
+		ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
+	}
+
+	ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput)
+	if err != nil {
+		return fmt.Errorf("Unable to describe container instances: %s", err.Error())
+	}
+
+	var instanceIds []*string
+	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
+		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
+	}
+	deployedCluster.InstanceIds = instanceIds
+
+	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
+		return fmt.Errorf("Unable to find VPC: %s", err.Error())
+	}
+
+	return nil
+}
+
 func (k8sDeployment *KubernetesDeployment) NewK8SStoreDeployment() *K8SStoreDeployment {
 	return &K8SStoreDeployment{
 		BastionIp: k8sDeployment.BastionIp,
@@ -116,7 +198,7 @@ func (ecsDeployer *ECSDeployer) GetKubeConfigPath() string {
 	return ""
 }
 
-func (ecsDeployer *ECSDeployer) NewShutDownScheduler() error {
+func (ecsDeployer *ECSDeployer) NewShutDownScheduler(custScheduleRunTime string) error {
 	if ecsDeployer.Scheduler != nil {
 		ecsDeployer.Scheduler.Stop()
 	}
@@ -128,6 +210,10 @@ func (ecsDeployer *ECSDeployer) NewShutDownScheduler() error {
 		scheduleRunTime = deployment.ShutDownTime
 	} else {
 		scheduleRunTime = ecsDeployer.Config.GetString("shutDownTime")
+	}
+
+	if custScheduleRunTime != "" {
+		scheduleRunTime = custScheduleRunTime
 	}
 
 	startTime, err := time.ParseDuration(scheduleRunTime)
@@ -1449,82 +1535,6 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	if _, err := ecsSvc.DeleteCluster(params); err != nil {
 		return fmt.Errorf("Unable to delete cluster: %s", err.Error())
 	}
-
-	return nil
-}
-
-// ReloadClusterState reload EC2 cluster state
-func ReloadClusterState(awsProfile *AWSProfile, deployedCluster *DeployedCluster) error {
-	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-	ecsSvc := ecs.New(sess)
-
-	deploymentName := deployedCluster.Deployment.Name
-	listInstancesInput := &ecs.ListContainerInstancesInput{
-		Cluster: aws.String(deploymentName),
-	}
-
-	listContainerInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
-	if err != nil {
-		return fmt.Errorf("Unable to list container instances: %s", err.Error())
-	}
-
-	ecsDescribeInstancesInput := &ecs.DescribeContainerInstancesInput{
-		Cluster:            aws.String(deploymentName),
-		ContainerInstances: listContainerInstancesOutput.ContainerInstanceArns,
-	}
-
-	ecsDescribeInstancesOutput, err := ecsSvc.DescribeContainerInstances(ecsDescribeInstancesInput)
-	if err != nil {
-		return fmt.Errorf("Unable to describe container instances: %s", err.Error())
-	}
-
-	var instanceIds []*string
-	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
-		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
-	}
-	deployedCluster.InstanceIds = instanceIds
-
-	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
-		return fmt.Errorf("Unable to find VPC: %s", err.Error())
-	}
-
-	return nil
-}
-
-// ReloadKeyPair reload KeyPair by keyName
-func ReloadKeyPair(awsProfile *AWSProfile, deployedCluster *DeployedCluster, keyMaterial string) error {
-	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{
-		KeyNames: []*string{
-			aws.String(deployedCluster.KeyName()),
-		},
-	}
-
-	describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput)
-	if err != nil {
-		return fmt.Errorf("Unable to describe keyPairs: %s", err.Error())
-	}
-
-	if len(describeKeyPairsOutput.KeyPairs) == 0 {
-		return fmt.Errorf("Unable to find %s keyPairs", deployedCluster.Deployment.Name)
-	}
-
-	keyPair := &ec2.CreateKeyPairOutput{
-		KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
-		KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
-		KeyMaterial:    aws.String(keyMaterial),
-	}
-	deployedCluster.KeyPair = keyPair
 
 	return nil
 }

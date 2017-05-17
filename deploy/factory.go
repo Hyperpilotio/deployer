@@ -19,7 +19,7 @@ type Deployer interface {
 	// UpdateDeployment() error
 	DeleteDeployment() error
 
-	NewShutDownScheduler() error
+	NewShutDownScheduler(scheduleRunTime string) error
 
 	GetDeploymentInfo() *awsecs.DeploymentInfo
 	GetKubeConfigPath() string
