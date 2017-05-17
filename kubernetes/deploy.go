@@ -139,6 +139,46 @@ func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string
 	return nil
 }
 
+// UpdateDeployment start a deployment on EC2 is ready
+func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
+	awsProfile := k8sDeployer.DeploymentInfo.AwsProfile
+	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
+	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
+	log := deployedCluster.Logger
+
+	log.Info("Updating kubernetes deployment")
+	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	if err := k8sDeployer.deleteK8S(k8sDeployer.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
+		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
+	}
+
+	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
+	if sessionErr != nil {
+		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
+	}
+
+	elbSvc := elb.New(sess)
+	ec2Svc := ec2.New(sess)
+
+	if err := k8sDeployer.deleteLoadBalancers(elbSvc, true); err != nil {
+		log.Warningf("Unable to delete load balancers: " + err.Error())
+	}
+
+	if err := k8sDeployer.deleteElbSecurityGroup(ec2Svc); err != nil {
+		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
+	}
+
+	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
+		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
+	}
+
+	return nil
+}
+
 // DeleteDeployment clean up the cluster from kubenetes.
 func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	k8sDeployer.deleteDeployment()
@@ -263,7 +303,7 @@ func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) e
 	}
 
 	if err := k8sDeployer.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+		k8sDeployer.deleteDeploymentOnFailure()
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
@@ -273,37 +313,37 @@ func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) e
 	}
 
 	if err := k8sDeployer.tagKubeNodes(k8sClient); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+		k8sDeployer.deleteDeploymentOnFailure()
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sDeployer.deployKubernetesObjects(awsProfile, k8sClient, false); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+	if err := k8sDeployer.deployKubernetesObjects(k8sClient, false); err != nil {
+		k8sDeployer.deleteDeploymentOnFailure()
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deployKubernetesObjects(awsProfile *awsecs.AWSProfile, k8sClient *k8s.Clientset, skipDelete bool) error {
+func (k8sDeployer *K8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
 	namespaces, namespacesErr := k8sDeployer.getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+			k8sDeployer.deleteDeploymentOnFailure()
 		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := k8sDeployer.createSecrets(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+			k8sDeployer.deleteDeploymentOnFailure()
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := k8sDeployer.deployServices(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure(awsProfile)
+			k8sDeployer.deleteDeploymentOnFailure()
 		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -449,48 +489,6 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 
 	return nil
 }
-
-// UpdateDeployment start a deployment on EC2 is ready
-// func (k8sClusters *KubernetesClusters) UpdateDeployment(awsProfile *awsecs.AWSProfile, deployment *apis.Deployment, deployedCluster *awsecs.DeployedCluster) error {
-// 	log := deployedCluster.Logger
-// 	k8sDeployment, ok := k8sClusters.Clusters[deployedCluster.Deployment.Name]
-// 	if !ok {
-// 		return fmt.Errorf("Unable to find cluster '%s' to update", deployedCluster.Deployment.Name)
-// 	}
-
-// 	log.Info("Updating kubernetes deployment")
-
-// 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
-// 	if err != nil {
-// 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
-// 	}
-
-// 	if err := k8sDeployer.deleteK8S(k8sDeployer.getAllDeployedNamespaces(), k8sDeployer.KubeConfig); err != nil {
-// 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
-// 	}
-
-// 	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
-// 	if sessionErr != nil {
-// 		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
-// 	}
-
-// 	elbSvc := elb.New(sess)
-// 	ec2Svc := ec2.New(sess)
-
-// 	if err := k8sDeployer.deleteLoadBalancers(elbSvc, true); err != nil {
-// 		log.Warningf("Unable to delete load balancers: " + err.Error())
-// 	}
-
-// 	if err := k8sDeployer.deleteElbSecurityGroup(ec2Svc); err != nil {
-// 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
-// 	}
-
-// 	if err := k8sDeployer.deployKubernetesObjects(awsProfile, k8sClient, true); err != nil {
-// 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
-// 	}
-
-// 	return nil
-// }
 
 func (k8sDeployer *K8SDeployer) deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
 	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
@@ -1062,7 +1060,7 @@ func (k8sDeployer *K8SDeployer) deleteK8S(namespaces []string, kubeConfig *rest.
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteDeploymentOnFailure(awsProfile *awsecs.AWSProfile) {
+func (k8sDeployer *K8SDeployer) deleteDeploymentOnFailure() {
 	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
 	log := deployedCluster.Logger
 	if deployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
