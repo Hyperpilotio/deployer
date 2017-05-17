@@ -328,7 +328,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	deployer, err := deploy.NewDeployer(server.Config, server.AWSProfiles, &deployment)
+	deployer, err := deploy.NewDeployer(server.Config, server.AWSProfiles, &deployment, false)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -566,7 +566,7 @@ func (server *Server) reloadClusterState() error {
 			Region: storeDeployment.Region,
 		}
 
-		deployer, err := deploy.NewDeployer(server.Config, awsProfileInfos, deployment)
+		deployer, err := deploy.NewDeployer(server.Config, awsProfileInfos, deployment, true)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
