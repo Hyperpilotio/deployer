@@ -27,7 +27,9 @@ type Deployer interface {
 	GetScheduler() *job.Scheduler
 }
 
-func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile, deployment *apis.Deployment) (Deployer, error) {
+func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
+	deployment *apis.Deployment,
+	skipUniqueDeploymentName bool) (Deployer, error) {
 	deployType := ""
 	if deployment.KubernetesDeployment != nil {
 		deployType = "K8S"
@@ -35,7 +37,9 @@ func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
 		deployType = "ECS"
 	}
 
-	deployment.Name = createUniqueDeploymentName(deployment.Name)
+	if !skipUniqueDeploymentName {
+		deployment.Name = createUniqueDeploymentName(deployment.Name)
+	}
 
 	switch deployType {
 	case "ECS":
