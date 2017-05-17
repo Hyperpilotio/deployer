@@ -8,22 +8,9 @@ import (
 	"github.com/spf13/viper"
 )
 
-type StoreDeployment struct {
-	Name        string
-	Region      string
-	Type        string
-	Status      string
-	Created     string
-	KeyMaterial string
-	UserId      string
-
-	ECSDeployment *awsecs.ECSStoreDeployment
-	K8SDeployment *awsecs.K8SStoreDeployment
-}
-
 type Store interface {
-	StoreNewDeployment(storeDeployment *StoreDeployment) error
-	LoadDeployments() ([]*StoreDeployment, error)
+	StoreNewDeployment(storeDeployment *awsecs.StoreDeployment) error
+	LoadDeployments() ([]*awsecs.StoreDeployment, error)
 	DeleteDeployment(deploymentName string) error
 	StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error
 	LoadAWSProfiles() ([]*awsecs.AWSProfile, error)

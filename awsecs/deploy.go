@@ -69,8 +69,28 @@ func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
 	}
 }
 
-func (deployedCluster *DeployedCluster) NewECSStoreDeployment() *ECSStoreDeployment {
-	return &ECSStoreDeployment{}
+// NewStoreDeployment create deployment that needs to be stored
+func (deploymentInfo *DeploymentInfo) NewStoreDeployment() *StoreDeployment {
+	storeDeployment := &StoreDeployment{
+		Name:    deploymentInfo.AwsInfo.Deployment.Name,
+		Region:  deploymentInfo.AwsInfo.Deployment.Region,
+		UserId:  deploymentInfo.AwsInfo.Deployment.UserId,
+		Status:  GetStateString(deploymentInfo.State),
+		Created: deploymentInfo.Created.Format(time.RFC822),
+	}
+
+	if deploymentInfo.AwsInfo.KeyPair != nil {
+		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.AwsInfo.KeyPair.KeyMaterial)
+	}
+
+	deploymentType := deploymentInfo.GetDeploymentType()
+	storeDeployment.Type = deploymentType
+	switch deploymentType {
+	case "K8S":
+		storeDeployment.K8SDeployment = deploymentInfo.K8sInfo.NewK8SStoreDeployment()
+	}
+
+	return storeDeployment
 }
 
 func (k8sDeployment *KubernetesDeployment) NewK8SStoreDeployment() *K8SStoreDeployment {
