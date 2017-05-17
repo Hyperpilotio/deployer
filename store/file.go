@@ -12,7 +12,7 @@ import (
 )
 
 type FileDeployment struct {
-	Deployments []*StoreDeployment
+	Deployments []*awsecs.StoreDeployment
 }
 
 type FileAWSProfile struct {
@@ -35,7 +35,7 @@ func NewFile(config *viper.Viper) (*FileStore, error) {
 	}, nil
 }
 
-func (file *FileStore) StoreNewDeployment(deployment *StoreDeployment) error {
+func (file *FileStore) StoreNewDeployment(deployment *awsecs.StoreDeployment) error {
 	file.deploymentMutex.Lock()
 	defer file.deploymentMutex.Unlock()
 
@@ -45,7 +45,7 @@ func (file *FileStore) StoreNewDeployment(deployment *StoreDeployment) error {
 	}
 	deployInfos[deployment.Name] = deployment
 
-	deployments := []*StoreDeployment{}
+	deployments := []*awsecs.StoreDeployment{}
 	for _, deployInfo := range deployInfos {
 		deployments = append(deployments, deployInfo)
 	}
@@ -61,7 +61,7 @@ func (file *FileStore) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (file *FileStore) LoadDeployments() ([]*StoreDeployment, error) {
+func (file *FileStore) LoadDeployments() ([]*awsecs.StoreDeployment, error) {
 	file.deploymentMutex.Lock()
 	defer file.deploymentMutex.Unlock()
 
@@ -85,7 +85,7 @@ func (file *FileStore) DeleteDeployment(deploymentName string) error {
 	}
 	delete(deployInfos, deploymentName)
 
-	deployments := []*StoreDeployment{}
+	deployments := []*awsecs.StoreDeployment{}
 	for _, deployInfo := range deployInfos {
 		deployments = append(deployments, deployInfo)
 	}
@@ -194,8 +194,8 @@ func (file *FileStore) DeleteAWSProfile(userId string) error {
 	return nil
 }
 
-func (file *FileStore) getDeployInfos() (map[string]*StoreDeployment, error) {
-	deployInfos := map[string]*StoreDeployment{}
+func (file *FileStore) getDeployInfos() (map[string]*awsecs.StoreDeployment, error) {
+	deployInfos := map[string]*awsecs.StoreDeployment{}
 	if _, err := os.Stat(file.DeploymentPath); err == nil {
 		deployments, err := file.LoadDeployments()
 		if err != nil {

@@ -75,7 +75,7 @@ func createDomains(sess *session.Session, config *viper.Viper, domainTypes []Dom
 	return nil
 }
 
-func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
+func (db *SimpleDB) StoreNewDeployment(deployment *awsecs.StoreDeployment) error {
 	domainName := getTypeString(db.Config, DEPLOYMENT)
 	simpledbSvc := simpledb.New(db.Sess)
 
@@ -95,7 +95,7 @@ func (db *SimpleDB) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
+func (db *SimpleDB) LoadDeployments() ([]*awsecs.StoreDeployment, error) {
 	domainName := getTypeString(db.Config, DEPLOYMENT)
 	simpledbSvc := simpledb.New(db.Sess)
 
@@ -104,7 +104,7 @@ func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
 		SelectExpression: aws.String(selectExpression),
 	}
 
-	deployments := []*StoreDeployment{}
+	deployments := []*awsecs.StoreDeployment{}
 	selectOutput, err := simpledbSvc.Select(selectInput)
 	if err != nil {
 		return nil, errors.New("Unable to select data from simpleDB: " + err.Error())
@@ -121,8 +121,7 @@ func (db *SimpleDB) LoadDeployments() ([]*StoreDeployment, error) {
 			return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
 		}
 
-		deployment := &StoreDeployment{
-			ECSDeployment: &awsecs.ECSStoreDeployment{},
+		deployment := &awsecs.StoreDeployment{
 			K8SDeployment: &awsecs.K8SStoreDeployment{},
 		}
 		recursiveSetValue(deployment, resp.Attributes)
@@ -298,9 +297,6 @@ func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
 
 		switch field.Kind() {
 		case reflect.Ptr:
-			if fieldName == "ECSDeployment" {
-				recursiveSetValue(field.Interface().(*awsecs.ECSStoreDeployment), attributes)
-			}
 			if fieldName == "K8SDeployment" {
 				recursiveSetValue(field.Interface().(*awsecs.K8SStoreDeployment), attributes)
 			}
@@ -327,9 +323,6 @@ func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}
 
 		switch field.Kind() {
 		case reflect.Ptr:
-			if fieldName == "ECSDeployment" {
-				recursiveStructField(attrs, field.Interface().(*awsecs.ECSStoreDeployment))
-			}
 			if fieldName == "K8SDeployment" {
 				recursiveStructField(attrs, field.Interface().(*awsecs.K8SStoreDeployment))
 			}

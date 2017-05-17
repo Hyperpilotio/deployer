@@ -81,7 +81,16 @@ type ECSDeployer struct {
 	mutex sync.Mutex
 }
 
-type ECSStoreDeployment struct {
+type StoreDeployment struct {
+	Name        string
+	Region      string
+	Type        string
+	Status      string
+	Created     string
+	KeyMaterial string
+	UserId      string
+
+	K8SDeployment *K8SStoreDeployment
 }
 
 type K8SStoreDeployment struct {

@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
@@ -47,34 +46,6 @@ func NewServer(config *viper.Viper) *Server {
 		DeployedClusters: make(map[string]*awsecs.DeploymentInfo),
 		UploadedFiles:    make(map[string]string),
 	}
-}
-
-// NewStoreDeployment create deployment that needs to be stored
-func (server *Server) NewStoreDeployment(deploymentName string) *store.StoreDeployment {
-	deploymentInfo := server.DeployedClusters[deploymentName]
-	storeDeployment := &store.StoreDeployment{
-		Name:    deploymentName,
-		Region:  deploymentInfo.AwsInfo.Deployment.Region,
-		UserId:  deploymentInfo.AwsInfo.Deployment.UserId,
-		Status:  awsecs.GetStateString(deploymentInfo.State),
-		Created: deploymentInfo.Created.Format(time.RFC822),
-	}
-
-	if deploymentInfo.AwsInfo.KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.AwsInfo.KeyPair.KeyMaterial)
-	}
-
-	deploymentType := deploymentInfo.GetDeploymentType()
-	storeDeployment.Type = deploymentType
-
-	switch deploymentType {
-	case "ECS":
-		storeDeployment.ECSDeployment = deploymentInfo.AwsInfo.NewECSStoreDeployment()
-	case "K8S":
-		storeDeployment.K8SDeployment = deploymentInfo.K8sInfo.NewK8SStoreDeployment()
-	}
-
-	return storeDeployment
 }
 
 // reloadClusterState reload cluster state when deployer restart
@@ -534,10 +505,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			server.Deployer[deployment.Name] = deployer
 			server.mutex.Unlock()
 		}
-
-		server.mutex.Lock()
-		server.storeDeploymentStatus(deployment.Name)
-		server.mutex.Unlock()
+		server.storeDeploymentStatus(deploymentInfo)
 
 		if err := deployer.NewShutDownScheduler(); err != nil {
 			glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
@@ -592,9 +560,9 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			log.Logger.Infof("Delete deployment successfully!")
 			deploymentInfo.State = awsecs.DELETED
 		}
+		server.storeDeploymentStatus(deploymentInfo)
 
 		server.mutex.Lock()
-		server.storeDeploymentStatus(deploymentInfo.AwsInfo.Deployment.Name)
 		delete(server.DeployedClusters, deploymentName)
 		delete(server.Deployer, deploymentName)
 		server.mutex.Unlock()
@@ -715,10 +683,11 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
 }
 
-func (server *Server) storeDeploymentStatus(deploymentName string) error {
-	deployment := server.NewStoreDeployment(deploymentName)
+func (server *Server) storeDeploymentStatus(deploymentInfo *awsecs.DeploymentInfo) error {
+	deployment := deploymentInfo.NewStoreDeployment()
 	if err := server.Store.StoreNewDeployment(deployment); err != nil {
-		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
+		return fmt.Errorf("Unable to store %s deployment status: %s",
+			deploymentInfo.AwsInfo.Deployment.Name, err.Error())
 	}
 
 	return nil
