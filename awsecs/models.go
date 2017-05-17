@@ -129,3 +129,22 @@ func GetStateString(state DeploymentState) string {
 
 	return ""
 }
+
+func ParseStateString(state string) DeploymentState {
+	switch state {
+	case "Available":
+		return AVAILABLE
+	case "Creating":
+		return CREATING
+	case "Updating":
+		return UPDATING
+	case "Deleting":
+		return DELETING
+	case "Deleted":
+		return DELETED
+	case "Failed":
+		return FAILED
+	}
+
+	return -1
+}

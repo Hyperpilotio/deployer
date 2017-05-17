@@ -1056,7 +1056,6 @@ func (k8sDeployer *K8SDeployer) deleteK8S(namespaces []string, kubeConfig *rest.
 		} else {
 			return fmt.Errorf("Unable to list secrets in namespace '%s' for deletion: %s", namespace, listError.Error())
 		}
-
 	}
 
 	return nil
@@ -1574,13 +1573,13 @@ func CheckClusterState(deploymentInfo *awsecs.DeploymentInfo) error {
 // ReloadClusterState reload kubernetes cluster state
 func ReloadClusterState(deploymentInfo *awsecs.DeploymentInfo, deployment *awsecs.K8SStoreDeployment) error {
 	deployedCluster := deploymentInfo.AwsInfo
-	deployedCluster.Deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
-
 	deploymentName := deployedCluster.Deployment.Name
+
 	k8sDeployment := &awsecs.KubernetesDeployment{
 		BastionIp: deployment.BastionIp,
 		MasterIp:  deployment.MasterIp,
 	}
+	deploymentInfo.K8sInfo = k8sDeployment
 
 	if err := DownloadKubeConfig(deploymentInfo); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
@@ -1592,7 +1591,6 @@ func ReloadClusterState(deploymentInfo *awsecs.DeploymentInfo, deployment *awsec
 		return fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
 	}
 	k8sDeployment.KubeConfig = kubeConfig
-	deploymentInfo.K8sInfo = k8sDeployment
 
 	return nil
 }
