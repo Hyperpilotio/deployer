@@ -368,8 +368,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 		}
 		server.storeDeploymentStatus(deploymentInfo)
 
-		if err := deployer.NewShutDownScheduler(""); err != nil {
-			glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+		if deploymentInfo.State == awsecs.AVAILABLE {
+			if err := deployer.NewShutDownScheduler(""); err != nil {
+				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+			}
 		}
 	}()
 
