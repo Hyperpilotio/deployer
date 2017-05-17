@@ -225,6 +225,7 @@ func (ecsDeployer *ECSDeployer) NewShutDownScheduler(custScheduleRunTime string)
 	scheduler, scheduleErr := job.NewScheduler(deployment.Name, startTime, func() {
 		go func() {
 			ecsDeployer.DeleteDeployment()
+			defer ecsDeployer.GetLog().LogFile.Close()
 		}()
 	})
 

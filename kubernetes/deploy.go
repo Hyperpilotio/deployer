@@ -111,6 +111,7 @@ func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string)
 	scheduler, scheduleErr := job.NewScheduler(deployment.Name, startTime, func() {
 		go func() {
 			k8sDeployer.DeleteDeployment()
+			defer k8sDeployer.GetLog().LogFile.Close()
 		}()
 	})
 
