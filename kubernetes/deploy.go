@@ -1595,8 +1595,8 @@ func ReloadClusterState(deploymentInfo *awsecs.DeploymentInfo, deployment *awsec
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) GetClusterInfo() (*ClusterInfo, error) {
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
+func GetClusterInfo(deploymentInfo *awsecs.DeploymentInfo) (*ClusterInfo, error) {
+	k8sDeployment := deploymentInfo.K8sInfo
 	kubeConfig := k8sDeployment.KubeConfig
 	if kubeConfig == nil {
 		return nil, errors.New("Empty kubeconfig passed, skipping to get k8s objects")
