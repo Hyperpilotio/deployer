@@ -132,7 +132,6 @@ func (deploymentInfo *DeploymentInfo) ReloadKeyPair(keyMaterial string) error {
 func (deploymentInfo *DeploymentInfo) ReloadClusterState() error {
 	awsProfile := deploymentInfo.AwsProfile
 	deployedCluster := deploymentInfo.AwsInfo
-	deployedCluster.Deployment.ECSDeployment = &apis.ECSDeployment{}
 
 	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
 	if sessionErr != nil {

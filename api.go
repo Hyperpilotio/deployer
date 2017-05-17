@@ -255,6 +255,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		return
 	}
 
+	server.mutex.Lock()
 	deployer, ok := server.Deployer[deploymentName]
 	if !ok {
 		server.mutex.Unlock()
@@ -564,6 +565,13 @@ func (server *Server) reloadClusterState() error {
 			Region: storeDeployment.Region,
 		}
 
+		switch storeDeployment.Type {
+		case "ECS":
+			deployment.ECSDeployment = &apis.ECSDeployment{}
+		case "K8S":
+			deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
+		}
+
 		deployer, err := deploy.NewDeployer(server.Config, awsProfileInfos, deployment, true)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
@@ -603,6 +611,8 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		if reloaded {
+			deploymentInfo.State = awsecs.ParseStateString(storeDeployment.Status)
+
 			newScheduleRunTime := ""
 			createdTime, err := time.Parse(time.RFC822, storeDeployment.Created)
 			if err == nil {
