@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/awsecs"
+	"github.com/hyperpilotio/deployer/kubernetes"
 
 	"net/http"
 )
@@ -354,30 +355,30 @@ func (server *Server) getCluster(c *gin.Context) {
 			"data":  clusterInfo,
 		})
 	case "K8S":
-		// server.mutex.Lock()
-		// k8sDeployment, ok := server.KubernetesClusters.Clusters[clusterName]
-		// server.mutex.Unlock()
-		// if !ok {
-		// 	c.JSON(http.StatusNotFound, gin.H{
-		// 		"error": true,
-		// 		"data":  "Deployment not found",
-		// 	})
-		// 	return
-		// }
+		server.mutex.Lock()
+		deploymentInfo, ok := server.DeployedClusters[clusterName]
+		server.mutex.Unlock()
+		if !ok {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Deployment not found",
+			})
+			return
+		}
 
-		// clusterInfo, err := k8sDeployment.GetClusterInfo()
-		// if err != nil {
-		// 	c.JSON(http.StatusBadRequest, gin.H{
-		// 		"error": true,
-		// 		"data":  "Unable to get kubernetes cluster:" + err.Error(),
-		// 	})
-		// 	return
-		// }
+		clusterInfo, err := kubernetes.GetClusterInfo(deploymentInfo)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to get kubernetes cluster:" + err.Error(),
+			})
+			return
+		}
 
-		// c.JSON(http.StatusOK, gin.H{
-		// 	"error": false,
-		// 	"data":  clusterInfo,
-		// })
+		c.JSON(http.StatusOK, gin.H{
+			"error": false,
+			"data":  clusterInfo,
+		})
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
