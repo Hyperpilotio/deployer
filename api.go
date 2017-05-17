@@ -280,7 +280,6 @@ func (server *Server) updateDeployment(c *gin.Context) {
 
 	go func() {
 		log := deployer.GetLog()
-		defer log.LogFile.Close()
 
 		if err := deployer.UpdateDeployment(); err != nil {
 			log.Logger.Error("Unable to update deployment")
@@ -352,7 +351,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	go func() {
 		log := deployer.GetLog()
-		defer log.LogFile.Close()
 
 		deploymentInfo := deployer.GetDeploymentInfo()
 		if err := deployer.CreateDeployment(server.UploadedFiles); err != nil {
