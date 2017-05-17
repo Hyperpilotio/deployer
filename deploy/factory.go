@@ -16,7 +16,7 @@ import (
 
 type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) error
-	// UpdateDeployment() error
+	UpdateDeployment() error
 	DeleteDeployment() error
 
 	NewShutDownScheduler(scheduleRunTime string) error

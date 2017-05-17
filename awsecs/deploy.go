@@ -291,6 +291,11 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	return nil
 }
 
+func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
+	// TODO Implement EC2 UpdateDeployment
+	return nil
+}
+
 // DeleteDeployment clean up the cluster from AWS ECS.
 func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 	deploymentInfo := ecsDeployer.DeploymentInfo
