@@ -42,6 +42,7 @@ func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
 		Config: config,
 		DeploymentInfo: &awsecs.DeploymentInfo{
 			AwsInfo: deployedCluster,
+			K8sInfo: &awsecs.KubernetesDeployment{},
 			Created: time.Now(),
 			State:   awsecs.CREATING,
 		},
