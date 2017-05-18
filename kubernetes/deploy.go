@@ -1010,6 +1010,17 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 
 	}
 
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	if roleBindings, err := clusterRoleBindings.List(v1.ListOptions{}); err != nil {
+		return fmt.Errorf("Unable to list role bindings: " + err.Error())
+	} else {
+		for _, roleBinding := range roleBindings {
+			if err := clusterRoleBindings.Delete(roleBinding.Name, v1.DeleteOptions{}); err != nil {
+				log.Warningf("Unable to delete role binding %s: %s", roleBinding.Name, err.Error())
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -1324,26 +1335,6 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		log.Infof("%s deployment created", family)
 	}
 
-	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
-	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
-		RoleRef: rbac.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbac.Subject{
-			rbac.Subject{
-				Kind:      rbac.ServiceAccountKind,
-				Name:      "default",
-				Namespace: "hyperpilot",
-			},
-		},
-	}
-	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
-		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
-	}
-
 	for _, task := range k8sDeployment.DeployedCluster.Deployment.KubernetesDeployment.Kubernetes {
 		if task.DaemonSet == nil {
 			continue
@@ -1364,6 +1355,26 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		if _, err := daemonSets.Create(daemonSet); err != nil {
 			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
 		}
+	}
+
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "cluster-admin",
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: "hyperpilot",
+			},
+		},
+	}
+	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
+		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
 	return nil
