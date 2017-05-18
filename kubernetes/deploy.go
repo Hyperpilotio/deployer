@@ -116,6 +116,7 @@ func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string)
 	})
 
 	if scheduleErr != nil {
+		scheduler.Stop()
 		return fmt.Errorf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
 	}
 	k8sDeployer.Scheduler = scheduler

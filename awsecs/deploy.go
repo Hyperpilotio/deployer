@@ -229,6 +229,7 @@ func (ecsDeployer *ECSDeployer) NewShutDownScheduler(custScheduleRunTime string)
 	})
 
 	if scheduleErr != nil {
+		scheduler.Stop()
 		return fmt.Errorf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
 	}
 	ecsDeployer.Scheduler = scheduler
