@@ -15,23 +15,107 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/deploy"
-	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clustermanagers"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/store"
 	"github.com/spf13/viper"
 
 	"net/http"
 )
 
+type DeploymentState int
+
+// Possible deployment states
+const (
+	AVAILABLE = 0
+	CREATING  = 1
+	UPDATING  = 2
+	DELETING  = 3
+	DELETED   = 4
+	FAILED    = 5
+)
+
+// Per deployment tracking struct for the server
+type DeploymentInfo struct {
+	Deployer   *clustermanagers.Deployer
+	Deployment *apis.Deployment
+
+	Created time.Time
+	State   DeploymentState
+}
+
+// This defines what's being persisted in store
+type StoreDeployment struct {
+	Name        string
+	Region      string
+	Type        string
+	Status      string
+	Created     string
+	KeyMaterial string
+	UserId      string
+	// Stores cluster manager specific stored information
+	ClusterManager interface{}
+}
+
+func (deploymentInfo *DeploymentInfo) GetDeploymentType() string {
+	if Deployment.KubernetesDeployment != nil {
+		return "K8S"
+	} else {
+		return "ECS"
+	}
+}
+
+func GetStateString(state DeploymentState) string {
+	switch state {
+	case AVAILABLE:
+		return "Available"
+	case CREATING:
+		return "Creating"
+	case UPDATING:
+		return "Updating"
+	case DELETING:
+		return "Deleting"
+	case DELETED:
+		return "Deleted"
+	case FAILED:
+		return "Failed"
+	}
+
+	return ""
+}
+
+func ParseStateString(state string) DeploymentState {
+	switch state {
+	case "Available":
+		return AVAILABLE
+	case "Creating":
+		return CREATING
+	case "Updating":
+		return UPDATING
+	case "Deleting":
+		return DELETING
+	case "Deleted":
+		return DELETED
+	case "Failed":
+		return FAILED
+	}
+
+	return -1
+}
+
 // Server store the stats / data of every deployment
 type Server struct {
-	Config      *viper.Viper
-	Store       store.Store
+	Config          *viper.Viper
+	DeploymentStore store.Store
+	ProfileStore    store.Store
+
+	// Maps all available users
 	AWSProfiles map[string]*awsecs.AWSProfile
-	Deployer    map[string]deploy.Deployer
+
 	// Maps deployment name to deployed cluster struct
-	DeployedClusters map[string]*awsecs.DeploymentInfo
+	DeployedClusters map[string]*DeploymentInfo
 
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
@@ -42,10 +126,27 @@ type Server struct {
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
 		Config:           config,
-		Deployer:         make(map[string]deploy.Deployer),
-		DeployedClusters: make(map[string]*awsecs.DeploymentInfo),
+		DeployedClusters: make(map[string]*DeploymentInfo),
 		UploadedFiles:    make(map[string]string),
 	}
+}
+
+// NewStoreDeployment create deployment that needs to be stored
+func (deploymentInfo *DeploymentInfo) NewStoreDeployment() *StoreDeployment {
+	storeDeployment := &StoreDeployment{
+		Deployment:     *apis.Deployment,
+		Status:         GetStateString(deploymentInfo.State),
+		Created:        deploymentInfo.Created.Format(time.RFC822),
+		Type:           deploymentInfo.GetDeploymentType(),
+		ClusterManager: deploymentInfo.Deployer.GetStoreInfo(),
+	}
+
+	awsCluster := deploymentInfo.GetAWSCluster()
+	if awsCluster.KeyPair != nil {
+		storeDeployment.KeyMaterial = aws.StringValue(awsCluster.KeyPair.KeyMaterial)
+	}
+
+	return storeDeployment
 }
 
 // StartServer start a web servers
@@ -60,11 +161,17 @@ func (server *Server) StartServer() error {
 		}
 	}
 
-	storeSvc, err := store.NewStore(server.Config)
-	if err != nil {
-		return errors.New("Unable to new store: " + err.Error())
+	if deploymentStore, err := store.NewStore("Deployments", server.Config); err != nil {
+		return errors.New("Unable to create deployment store: " + err.Error())
+	} else {
+		server.DeploymentStore = deploymentStore
 	}
-	server.Store = storeSvc
+
+	if profileStore, err := store.NewStore("AWSProfiles", server.Config); err != nil {
+		return errors.New("Unable to create deployment store: " + err.Error())
+	} else {
+		server.ProfileStore = profileStore
+	}
 
 	if err := server.reloadClusterState(); err != nil {
 		return errors.New("Unable to reload cluster state: " + err.Error())
@@ -328,25 +435,34 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	deployer, err := deploy.NewDeployer(server.Config, server.AWSProfiles, &deployment, false)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error initialize deployer: " + err.Error(),
-		})
-		return
-	}
-
 	server.mutex.Lock()
-	if _, ok := server.DeployedClusters[deployment.Name]; ok {
-		server.mutex.Unlock()
+	_, clusterOk := server.DeployedClusters[deployment.Name]
+	awsProfile, profileOk := server.AWSProfiles[deployment.UserId]
+	server.mutex.Unlock()
+	if !clusterOk {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Already deployed",
 		})
 		return
 	}
-	server.mutex.Unlock()
+
+	if !profileOk {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "User not found: " + deployment.UserId,
+		})
+		return
+	}
+
+	deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile, &deployment, false)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error initialize cluster deployer: " + err.Error(),
+		})
+		return
+	}
 
 	go func() {
 		log := deployer.GetLog()
@@ -458,8 +574,12 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if deployer, ok := server.Deployer[c.Param("deployment")]; ok {
-		kubeConfigPath := deployer.GetKubeConfigPath()
+	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
+		if deploymentInfo.GetDeploymentType() != "K8S" {
+			// TOOD: Return Bad Request
+			return
+		}
+		kubeConfigPath := deployer.(K8SDeployer).GetKubeConfigPath()
 		if kubeConfigPath != "" {
 			if b, err := ioutil.ReadFile(kubeConfigPath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -515,10 +635,10 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 }
 
 func (server *Server) storeDeploymentStatus(deploymentInfo *awsecs.DeploymentInfo) error {
+	name := deploymentInfo.AwsInfo.Deployment.Name
 	deployment := deploymentInfo.NewStoreDeployment()
-	if err := server.Store.StoreNewDeployment(deployment); err != nil {
-		return fmt.Errorf("Unable to store %s deployment status: %s",
-			deploymentInfo.AwsInfo.Deployment.Name, err.Error())
+	if err := server.DeploymentStore.Store(name, deployment); err != nil {
+		return fmt.Errorf("Unable to store %s deployment status: %s", name, err.Error())
 	}
 
 	return nil
@@ -526,18 +646,20 @@ func (server *Server) storeDeploymentStatus(deploymentInfo *awsecs.DeploymentInf
 
 // reloadClusterState reload cluster state when deployer restart
 func (server *Server) reloadClusterState() error {
-	awsProfiles, profileErr := server.Store.LoadAWSProfiles()
+	profiles, profileErr := server.ProfileStore.LoadAll(func() *aws.AWSProfile {
+		return &aws.AWSProfile{}
+	})
 	if profileErr != nil {
-		return fmt.Errorf("Unable to load aws profile: %s", profileErr.Error())
+		return fmt.Errorf("Unable to load aws profiles: %s", profileErr.Error())
 	}
 
-	awsProfileInfos := map[string]*awsecs.AWSProfile{}
-	for _, awsProfile := range awsProfiles {
+	awsProfileInfos := map[string]*aws.AWSProfile{}
+	for _, awsProfile := range profiles.([]*aws.AWSProfile) {
 		awsProfileInfos[awsProfile.UserId] = awsProfile
 	}
 	server.AWSProfiles = awsProfileInfos
 
-	deployments, err := server.Store.LoadDeployments()
+	deployments, err := server.DeploymentStore.LoadAll()
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
@@ -554,8 +676,13 @@ func (server *Server) reloadClusterState() error {
 
 		userId := storeDeployment.UserId
 		if userId == "" {
-			glog.Warning("Skip loading deployment with unspecified user id")
+			glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
 			continue
+		}
+
+		awsProfile, profileOk := server.AWSProfiles[storeDeployment.UserId]
+		if !profileOk {
+			glog.Warning("Skip loading deployment: Unable to find aws profile for user " + storeDeployment.UserId)
 		}
 
 		deploymentName := storeDeployment.Name
@@ -572,12 +699,11 @@ func (server *Server) reloadClusterState() error {
 			deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
 		}
 
-		deployer, err := deploy.NewDeployer(server.Config, awsProfileInfos, deployment, true)
+		deployer, err := deploy.NewDeployer(server.Config, awsProfile, deployment)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
-
-		deploymentInfo := deployer.GetDeploymentInfo()
+		deploymentInfo.Deployer = deployer
 
 		// Reload keypair
 		if err := deploymentInfo.ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
@@ -585,34 +711,19 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		reloaded := true
-		switch storeDeployment.Type {
-		case "ECS":
-			if err := deploymentInfo.ReloadClusterState(); err != nil {
-				glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
-				reloaded = false
-			}
-		case "K8S":
-			if err := kubernetes.CheckClusterState(deploymentInfo); err != nil {
-				if err := server.Store.DeleteDeployment(deploymentName); err != nil {
-					glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-				}
-				glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
-				continue
-			}
+		// TODO: This should go into reload cluster state
+		//if err := kubernetes.CheckClusterState(deploymentInfo); err != nil {
+		//	if err := server.Store.DeleteDeployment(deploymentName); err != nil {
+		//		glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+		//	}
+		//	glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
+		// continue
+		//}
 
-			if err := kubernetes.ReloadClusterState(deploymentInfo, storeDeployment.K8SDeployment); err != nil {
-				glog.Warningf("Unable to load %s K8S deployedCluster status: %s", deploymentName, err.Error())
-				reloaded = false
-			}
-		default:
-			reloaded = false
-			glog.Warningf("Unsupported deployment store type: " + storeDeployment.Type)
-		}
-
-		if reloaded {
+		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
+			glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
+		} else {
 			deploymentInfo.State = awsecs.ParseStateString(storeDeployment.Status)
-
 			newScheduleRunTime := ""
 			createdTime, err := time.Parse(time.RFC822, storeDeployment.Created)
 			if err == nil {
@@ -624,7 +735,6 @@ func (server *Server) reloadClusterState() error {
 			}
 
 			server.DeployedClusters[deploymentName] = deploymentInfo
-			server.Deployer[deploymentName] = deployer
 
 			if err := deployer.NewShutDownScheduler(newScheduleRunTime); err != nil {
 				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)

@@ -1,4 +1,4 @@
-package deploy
+package clustermanagers
 
 import (
 	"errors"
@@ -6,30 +6,27 @@ import (
 	"strings"
 
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/log"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 )
 
+// Cluster manager specific Deployer, able to deployer containers and services
 type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) error
 	UpdateDeployment() error
 	DeleteDeployment() error
-
-	NewShutDownScheduler(scheduleRunTime string) error
-
-	GetDeploymentInfo() *awsecs.DeploymentInfo
-	GetKubeConfigPath() string
+	ReloadClusterState(storeInfo interface{}) error
+	GetStoreInfo() interface{}
+	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
+	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.DeploymentLog
-	GetScheduler() *job.Scheduler
 }
 
-func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
-	deployment *apis.Deployment,
-	skipUniqueDeploymentName bool) (Deployer, error) {
+func NewDeployer(config *viper.Viper, awsProfile *aws.AWSProfile, deployment *apis.Deployment) (Deployer, error) {
 	deployType := ""
 	if deployment.KubernetesDeployment != nil {
 		deployType = "K8S"
@@ -37,15 +34,13 @@ func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
 		deployType = "ECS"
 	}
 
-	if !skipUniqueDeploymentName {
-		deployment.Name = createUniqueDeploymentName(deployment.Name)
-	}
+	deployment.Name = createUniqueDeploymentName(deployment.Name)
 
 	switch deployType {
 	case "ECS":
-		return awsecs.NewDeployer(config, awsProfiles, deployment)
+		return awsecs.NewDeployer(config, awsProfile, deployment)
 	case "K8S":
-		return kubernetes.NewDeployer(config, awsProfiles, deployment)
+		return kubernetes.NewDeployer(config, awsProfile, deployment)
 	default:
 		return nil, errors.New("Unsupported deploy type: " + deployType)
 	}

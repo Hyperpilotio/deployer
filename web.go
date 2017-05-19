@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/kubernetes"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 
 	"net/http"
 )
@@ -58,18 +58,12 @@ func (server *Server) refreshUI(c *gin.Context) {
 }
 
 func (server *Server) userUI(c *gin.Context) {
-	awsProfiles, err := server.Store.LoadAWSProfiles()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": true,
-			"data":  "Unable to load aws profile: " + err.Error(),
-		})
-		return
-	}
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 
 	c.HTML(http.StatusOK, "user.html", gin.H{
 		"error":       false,
-		"awsProfiles": awsProfiles,
+		"awsProfiles": server.AWSProfiles,
 	})
 }
 
@@ -117,6 +111,7 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 
 	switch status := c.Param("status"); status {
 	case "Deleted", "Failed":
+		// We don't need to ask for store every time on the UI, just use server state
 		deployments, err := server.Store.LoadDeployments()
 		if err != nil {
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
@@ -299,36 +294,20 @@ func (server *Server) getCluster(c *gin.Context) {
 		return
 	}
 
+	server.mutex.Lock()
+	deploymentInfo, ok := server.DeployedClusters[clusterName]
+	server.mutex.Unlock()
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
+
 	switch deploymentType {
 	case "ECS":
-		server.mutex.Lock()
-		deploymentInfo, ok := server.DeployedClusters[clusterName]
-		server.mutex.Unlock()
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Deployment not found",
-			})
-			return
-		}
-
-		deployments, err := server.Store.LoadDeployments()
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Unable to load deployment status:" + err.Error(),
-			})
-			return
-		}
-
-		userId := ""
-		for _, deployment := range deployments {
-			if deployment.Name == clusterName {
-				userId = deployment.UserId
-				break
-			}
-		}
-
+		userId := deploymentInfo.Deployment.UserId
 		server.mutex.Lock()
 		awsProfile, ok := server.AWSProfiles[userId]
 		server.mutex.Unlock()
@@ -339,9 +318,8 @@ func (server *Server) getCluster(c *gin.Context) {
 			})
 			return
 		}
-		server.mutex.Unlock()
 
-		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.AwsInfo)
+		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -355,17 +333,6 @@ func (server *Server) getCluster(c *gin.Context) {
 			"data":  clusterInfo,
 		})
 	case "K8S":
-		server.mutex.Lock()
-		deploymentInfo, ok := server.DeployedClusters[clusterName]
-		server.mutex.Unlock()
-		if !ok {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Deployment not found",
-			})
-			return
-		}
-
 		clusterInfo, err := kubernetes.GetClusterInfo(deploymentInfo)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{

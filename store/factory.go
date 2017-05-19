@@ -4,27 +4,26 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/spf13/viper"
 )
 
 type Store interface {
-	StoreNewDeployment(storeDeployment *awsecs.StoreDeployment) error
-	LoadDeployments() ([]*awsecs.StoreDeployment, error)
-	DeleteDeployment(deploymentName string) error
-	StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error
-	LoadAWSProfiles() ([]*awsecs.AWSProfile, error)
-	LoadAWSProfile(userId string) (*awsecs.AWSProfile, error)
-	DeleteAWSProfile(userId string) error
+	Store(key string, object interface{}) error
+	// Ugly way to abstract the return type, as in Go you can't cast []interface{} to a
+	// specific type. Users will have to assume the interface{} is a array type of
+	// objects created by the factory func.
+	// Factory is the function to create a per typed interface object
+	LoadAll(factory func() interface{}) (interface{}, error)
+	Delete(key string) error
 }
 
-func NewStore(config *viper.Viper) (Store, error) {
+func NewStore(name string, config *viper.Viper) (Store, error) {
 	storeType := strings.ToLower(config.GetString("store.type"))
 	switch storeType {
 	case "simpledb":
-		return NewSimpleDB(config)
+		return NewSimpleDB(name, config)
 	case "file":
-		return NewFile(config)
+		return NewFile(name, config)
 	default:
 		return nil, errors.New("Unsupported store type: " + storeType)
 	}
