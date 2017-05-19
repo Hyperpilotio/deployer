@@ -466,7 +466,14 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile, &deployment)
+	deploymentInfo := &DeploymentInfo{
+		Deployment: &deployment,
+		Created:    time.Now(),
+		State:      CREATING,
+	}
+
+	deployer, err := clustermanagers.NewDeployer(
+		server.Config, awsProfile, deploymentInfo.GetDeploymentType(), &deployment, true)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -474,13 +481,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 		})
 		return
 	}
+	deploymentInfo.Deployer = deployer
 
-	deploymentInfo := &DeploymentInfo{
-		Deployer:   deployer,
-		Deployment: &deployment,
-		Created:    time.Now(),
-		State:      CREATING,
-	}
 	server.mutex.Lock()
 	server.DeployedClusters[deployment.Name] = deploymentInfo
 	server.mutex.Unlock()
@@ -496,19 +498,17 @@ func (server *Server) createDeployment(c *gin.Context) {
 			log.Logger.Infof(string(resJson))
 			log.Logger.Infof("Create deployment successfully!")
 			deploymentInfo.Created = time.Now()
+			if err := server.NewShutDownScheduler(deployer, deploymentInfo, ""); err != nil {
+				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+			}
 			deploymentInfo.State = AVAILABLE
 
 			server.mutex.Lock()
 			server.DeployedClusters[deployment.Name] = deploymentInfo
 			server.mutex.Unlock()
 		}
-		server.storeDeploymentStatus(deploymentInfo)
 
-		if deploymentInfo.State == AVAILABLE {
-			if err := server.NewShutDownScheduler(deployer, deploymentInfo, ""); err != nil {
-				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
-			}
-		}
+		server.storeDeploymentStatus(deploymentInfo)
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -713,8 +713,8 @@ func (server *Server) reloadClusterState() error {
 	}
 
 	awsProfileInfos := map[string]*hpaws.AWSProfile{}
-	for _, awsProfile := range profiles.([]interface{}) {
-		awsProfileInfos[awsProfile.(*hpaws.AWSProfile).UserId] = awsProfile.(*hpaws.AWSProfile)
+	for _, awsProfile := range profiles.([]*hpaws.AWSProfile) {
+		awsProfileInfos[awsProfile.UserId] = awsProfile
 	}
 	server.AWSProfiles = awsProfileInfos
 
@@ -730,8 +730,7 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
 
-	for _, deployment := range deployments.([]interface{}) {
-		storeDeployment := deployment.(*StoreDeployment)
+	for _, storeDeployment := range deployments.([]*StoreDeployment) {
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			continue
 		}
@@ -745,23 +744,19 @@ func (server *Server) reloadClusterState() error {
 		awsProfile, profileOk := server.AWSProfiles[storeDeployment.UserId]
 		if !profileOk {
 			glog.Warning("Skip loading deployment: Unable to find aws profile for user " + storeDeployment.UserId)
+			continue
 		}
 
 		deploymentName := storeDeployment.Name
-		deployment := &apis.Deployment{
-			UserId: userId,
-			Name:   deploymentName,
-			Region: storeDeployment.Region,
+
+		deployment := &apis.Deployment{}
+		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
+		if unmarshalErr != nil {
+			glog.Warning("Skip loading deployment: Unable to load deployment manifest for deployment " + deploymentName)
+			continue
 		}
 
-		switch storeDeployment.Type {
-		case "ECS":
-			deployment.ECSDeployment = &apis.ECSDeployment{}
-		case "K8S":
-			deployment.KubernetesDeployment = &apis.KubernetesDeployment{}
-		}
-
-		deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile, deployment)
+		deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile, storeDeployment.Type, deployment, false)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
