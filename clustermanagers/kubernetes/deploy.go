@@ -12,9 +12,11 @@ import (
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
+	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -41,7 +43,7 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	awsCluster := hpaws.NewAWSCluster(deployment)
+	awsCluster := hpaws.NewAWSCluster(deployment, awsProfile)
 	deployer := &K8SDeployer{
 		Config:        config,
 		AWSCluster:    awsCluster,
@@ -64,80 +66,41 @@ func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {
 	return k8sDeployer.KubeConfigPath
 }
 
-func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string) error {
-	if k8sDeployer.Scheduler != nil {
-		k8sDeployer.Scheduler.Stop()
-	}
-
-	deployment := k8sDeployer.Deployment
-
-	scheduleRunTime := ""
-	if deployment.ShutDownTime != "" {
-		scheduleRunTime = deployment.ShutDownTime
-	} else {
-		scheduleRunTime = k8sDeployer.Config.GetString("shutDownTime")
-	}
-
-	if custScheduleRunTime != "" {
-		scheduleRunTime = custScheduleRunTime
-	}
-
-	startTime, err := time.ParseDuration(scheduleRunTime)
-	if err != nil {
-		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
-	}
-	glog.Infof("New %s schedule at %s", deployment.Name, time.Now().Add(startTime))
-
-	scheduler, scheduleErr := job.NewScheduler(deployment.Name, startTime, func() {
-		go func() {
-			k8sDeployer.DeleteDeployment()
-			defer k8sDeployer.GetLog().LogFile.Close()
-		}()
-	})
-
-	if scheduleErr != nil {
-		scheduler.Stop()
-		return fmt.Errorf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
-	}
-	k8sDeployer.Scheduler = scheduler
-
-	return nil
-}
-
 // CreateDeployment start a deployment
 func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
-	if err := k8sDeployer.deployCluster(uploadedFiles); err != nil {
-		return errors.New("Unable to deploy kubernetes: " + err.Error())
+	if err := deployCluster(k8sDeployer, uploadedFiles); err != nil {
+		return nil, errors.New("Unable to deploy kubernetes: " + err.Error())
 	}
 
 	response := &CreateDeploymentResponse{
-		Name:      deployedCluster.Deployment.Name,
+		Name:      k8sDeployer.Deployment.Name,
 		Endpoints: k8sDeployer.Endpoints,
 		BastionIp: k8sDeployer.BastionIp,
 		MasterIp:  k8sDeployer.MasterIp,
 	}
 
-	return nil
+	return response, nil
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
 func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
-	awsProfile := k8sDeployer.DeploymentInfo.AwsProfile
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
+	deployment := k8sDeployer.Deployment
+	stackName := awsCluster.StackName()
+	log := k8sDeployer.DeploymentLog.Logger
 
 	log.Info("Updating kubernetes deployment")
-	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := k8sDeployer.deleteK8S(k8sDeployer.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
+	if err := deleteK8S(getAllDeployedNamespaces(deployment), k8sDeployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
-	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
 	}
@@ -145,15 +108,15 @@ func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
 	elbSvc := elb.New(sess)
 	ec2Svc := ec2.New(sess)
 
-	if err := k8sDeployer.deleteLoadBalancers(elbSvc, true); err != nil {
+	if err := deleteLoadBalancers(elbSvc, true, stackName, log); err != nil {
 		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
-	if err := k8sDeployer.deleteElbSecurityGroup(ec2Svc); err != nil {
+	if err := deleteElbSecurityGroup(ec2Svc, stackName, log); err != nil {
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
+	if err := deployKubernetesObjects(k8sDeployer, k8sClient, true); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
 
@@ -162,11 +125,11 @@ func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
-	k8sDeployer.deleteDeployment()
+	deleteDeployment(k8sDeployer)
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) populateNodeInfos(ec2Svc *ec2.EC2) error {
+func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -178,7 +141,7 @@ func (k8sDeployer *K8SDeployer) populateNodeInfos(ec2Svc *ec2.EC2) error {
 			{
 				Name: aws.String("tag:KubernetesCluster"),
 				Values: []*string{
-					aws.String(k8sDeployer.DeploymentInfo.AwsInfo.StackName()),
+					aws.String(awsCluster.StackName()),
 				},
 			},
 			{
@@ -197,11 +160,11 @@ func (k8sDeployer *K8SDeployer) populateNodeInfos(ec2Svc *ec2.EC2) error {
 	i := 1
 	for _, reservation := range describeInstancesOutput.Reservations {
 		for _, instance := range reservation.Instances {
-			nodeInfo := &awsecs.NodeInfo{
+			nodeInfo := &hpaws.NodeInfo{
 				Instance:  instance,
 				PrivateIp: *instance.PrivateIpAddress,
 			}
-			k8sDeployer.DeploymentInfo.AwsInfo.NodeInfos[i] = nodeInfo
+			awsCluster.NodeInfos[i] = nodeInfo
 			i += 1
 		}
 	}
@@ -209,23 +172,25 @@ func (k8sDeployer *K8SDeployer) populateNodeInfos(ec2Svc *ec2.EC2) error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) uploadFiles(ec2Svc *ec2.EC2, uploadedFiles map[string]string) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
-	if len(deployedCluster.Deployment.Files) == 0 {
+func uploadFiles(ec2Svc *ec2.EC2, k8sDeployer *K8SDeployer, uploadedFiles map[string]string) error {
+	awsCluster := k8sDeployer.AWSCluster
+	deployment := k8sDeployer.Deployment
+	bastionIp := k8sDeployer.BastionIp
+	log := k8sDeployer.DeploymentLog.Logger
+
+	if len(deployment.Files) == 0 {
 		return nil
 	}
 
-	clientConfig, clientConfigErr := deployedCluster.SshConfig("ubuntu")
+	clientConfig, clientConfigErr := awsCluster.SshConfig("ubuntu")
 	if clientConfigErr != nil {
 		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
-	for _, nodeInfo := range deployedCluster.NodeInfos {
-		sshClient := common.NewSshClient(nodeInfo.PrivateIp+":22", clientConfig, k8sDeployment.BastionIp+":22")
+	for _, nodeInfo := range awsCluster.NodeInfos {
+		sshClient := common.NewSshClient(nodeInfo.PrivateIp+":22", clientConfig, bastionIp+":22")
 		// TODO: Refactor this so can be reused with AWS
-		for _, deployFile := range deployedCluster.Deployment.Files {
+		for _, deployFile := range deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
 			// in the same connection
 			location, ok := uploadedFiles[deployFile.FileId]
@@ -244,7 +209,7 @@ func (k8sDeployer *K8SDeployer) uploadFiles(ec2Svc *ec2.EC2, uploadedFiles map[s
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) getExistingNamespaces(k8sClient *k8s.Clientset) (map[string]bool, error) {
+func getExistingNamespaces(k8sClient *k8s.Clientset) (map[string]bool, error) {
 	namespaces := map[string]bool{}
 	k8sNamespaces := k8sClient.CoreV1().Namespaces()
 	existingNamespaces, err := k8sNamespaces.List(metav1.ListOptions{})
@@ -259,11 +224,13 @@ func (k8sDeployer *K8SDeployer) getExistingNamespaces(k8sClient *k8s.Clientset) 
 	return namespaces, nil
 }
 
-func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) error {
+func deployCluster(k8sDeployer *K8SDeployer, uploadedFiles map[string]string) error {
+	deployment := k8sDeployer.Deployment
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
+	log := k8sDeployer.DeploymentLog.Logger
 
-	sess, sessionErr := awsecs.CreateSession(awsProfile, awsCluster.Region)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
@@ -276,16 +243,16 @@ func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) e
 		awsCluster.KeyPair = keyOutput
 	}
 
-	if err := k8sDeployer.deployKubernetes(sess); err != nil {
+	if err := deployKubernetes(sess, k8sDeployer); err != nil {
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
 
-	if err := k8sDeployer.populateNodeInfos(ec2Svc); err != nil {
+	if err := populateNodeInfos(ec2Svc, awsCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
-	if err := k8sDeployer.uploadFiles(ec2Svc, uploadedFiles); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure()
+	if err := uploadFiles(ec2Svc, k8sDeployer, uploadedFiles); err != nil {
+		deleteDeploymentOnFailure(k8sDeployer)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
@@ -294,50 +261,51 @@ func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) e
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := k8sDeployer.tagKubeNodes(k8sClient); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure()
+	if err := tagKubeNodes(k8sClient, awsCluster, deployment, log); err != nil {
+		deleteDeploymentOnFailure(k8sDeployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sDeployer.deployKubernetesObjects(k8sClient, false); err != nil {
-		k8sDeployer.deleteDeploymentOnFailure()
+	if err := deployKubernetesObjects(k8sDeployer, k8sClient, false); err != nil {
+		deleteDeploymentOnFailure(k8sDeployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
-	namespaces, namespacesErr := k8sDeployer.getExistingNamespaces(k8sClient)
+func deployKubernetesObjects(k8sDeployer *K8SDeployer, k8sClient *k8s.Clientset, skipDelete bool) error {
+	namespaces, namespacesErr := getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
-	if err := k8sDeployer.createSecrets(k8sClient, namespaces); err != nil {
+	if err := createSecrets(k8sClient, namespaces, k8sDeployer.Deployment); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := k8sDeployer.deployServices(k8sClient, namespaces); err != nil {
+	if err := deployServices(k8sDeployer, k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
-	k8sDeployer.recordPublicEndpoints(k8sClient)
+	recordPublicEndpoints(k8sDeployer, k8sClient)
 
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
-	log := k8sDeployer.DeploymentLog.Logger
+func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 	awsCluster := k8sDeployer.AWSCluster
+	deployment := k8sDeployer.Deployment
+	log := k8sDeployer.DeploymentLog.Logger
 
 	cfSvc := cloudformation.New(sess)
 	params := &cloudformation.CreateStackInput{
@@ -361,13 +329,12 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 			{
 				ParameterKey: aws.String("K8sNodeCapacity"),
 				ParameterValue: aws.String(
-					strconv.Itoa(
-						len(k8sDeployer.Deployment.ClusterDefinition.Nodes))),
+					strconv.Itoa(len(deployment.ClusterDefinition.Nodes))),
 			},
 			{
 				ParameterKey: aws.String("InstanceType"),
 				ParameterValue: aws.String(
-					k8sDeployer.Deployment.ClusterDefinition.Nodes[0].InstanceType),
+					deployment.ClusterDefinition.Nodes[0].InstanceType),
 			},
 			{
 				ParameterKey:   aws.String("DiskSizeGb"),
@@ -387,7 +354,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 			},
 			{
 				ParameterKey:   aws.String("AvailabilityZone"),
-				ParameterValue: aws.String(deployedCluster.Deployment.Region + "b"),
+				ParameterValue: aws.String(awsCluster.Region + "b"),
 			},
 		},
 		Tags: []*cloudformation.Tag{
@@ -471,10 +438,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
-	awsCluster := k8sDeployer.awsCluster
-	log := k8sDeployer.DeploymentLog.Logger
-
+func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string, log *logging.Logger) error {
 	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
 		Filters: []*ec2.Filter{
@@ -510,9 +474,8 @@ func (k8sDeployer *K8SDeployer) deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *stri
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string, timeout time.Duration) error {
-	awsCluster := k8sDeployer.awsCluster
-	log := k8sDeployer.DeploymentLog.Logger
+func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string,
+	timeout time.Duration, log *logging.Logger) error {
 	c := make(chan bool, 1)
 	quit := make(chan bool)
 	go func() {
@@ -557,9 +520,8 @@ func (k8sDeployer *K8SDeployer) waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2,
 	}
 }
 
-func (k8sDeployer *K8SDeployer) waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, securityGroupNames []*string, timeout time.Duration) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, securityGroupNames []*string,
+	timeout time.Duration, log *logging.Logger) error {
 	c := make(chan bool, 1)
 	quit := make(chan bool)
 	go func() {
@@ -602,11 +564,8 @@ func (k8sDeployer *K8SDeployer) waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2
 	}
 }
 
-func (k8sDeployer *K8SDeployer) deleteNetworkInterfaces(ec2Svc *ec2.EC2, securityGroupNames []*string) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func deleteNetworkInterfaces(ec2Svc *ec2.EC2, securityGroupNames []*string, log *logging.Logger) error {
 	errBool := false
-
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
 		Filters: []*ec2.Filter{
 			{
@@ -633,7 +592,7 @@ func (k8sDeployer *K8SDeployer) deleteNetworkInterfaces(ec2Svc *ec2.EC2, securit
 		}
 	}
 
-	if err := k8sDeployer.waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(30)*time.Second); err != nil {
+	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(30)*time.Second, log); err != nil {
 		return fmt.Errorf("Unable to wait until network interface is available: %s\n", err.Error())
 	}
 
@@ -654,12 +613,8 @@ func (k8sDeployer *K8SDeployer) deleteNetworkInterfaces(ec2Svc *ec2.EC2, securit
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteElbSecurityGroup(ec2Svc *ec2.EC2) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func deleteElbSecurityGroup(ec2Svc *ec2.EC2, stackName string, log *logging.Logger) error {
 	errBool := false
-
-	stackName := deployedCluster.StackName()
 	describeParams := &ec2.DescribeSecurityGroupsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -693,7 +648,7 @@ func (k8sDeployer *K8SDeployer) deleteElbSecurityGroup(ec2Svc *ec2.EC2) error {
 		}
 	}
 
-	if err := k8sDeployer.deleteNetworkInterfaces(ec2Svc, k8sElbSgNames); err != nil {
+	if err := deleteNetworkInterfaces(ec2Svc, k8sElbSgNames, log); err != nil {
 		log.Warningf("Unable to delete network interfaces: %s", err.Error())
 	}
 
@@ -732,13 +687,10 @@ func (k8sDeployer *K8SDeployer) deleteElbSecurityGroup(ec2Svc *ec2.EC2) error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteLoadBalancers(elbSvc *elb.ELB, skipApiServer bool) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func deleteLoadBalancers(elbSvc *elb.ELB, skipApiServer bool, stackName string, log *logging.Logger) error {
 	log.Infof("Deleting loadBalancer...")
-
 	deploymentLoadBalancers := &DeploymentLoadBalancers{
-		StackName:         deployedCluster.StackName(),
+		StackName:         stackName,
 		LoadBalancerNames: []string{},
 	}
 
@@ -763,7 +715,7 @@ func (k8sDeployer *K8SDeployer) deleteLoadBalancers(elbSvc *elb.ELB, skipApiServ
 			}
 		}
 
-		if tagInfos["KubernetesCluster"] == deployedCluster.StackName() {
+		if tagInfos["KubernetesCluster"] == stackName {
 			if tagInfos["kubernetes.io/service-name"] == "kube-system/apiserver-public" {
 				deploymentLoadBalancers.ApiServerBalancerName = loadBalancerName
 			}
@@ -790,11 +742,13 @@ func (k8sDeployer *K8SDeployer) deleteLoadBalancers(elbSvc *elb.ELB, skipApiServ
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteCloudFormationStack(elbSvc *elb.ELB, ec2Svc *ec2.EC2, cfSvc *cloudformation.CloudFormation, stackName string) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func deleteCloudFormationStack(sess *session.Session, deploymentName string,
+	stackName string, log *logging.Logger) error {
+	elbSvc := elb.New(sess)
+	ec2Svc := ec2.New(sess)
+	cfSvc := cloudformation.New(sess)
+
 	// find k8s-node stack name
-	deploymentName := deployedCluster.Deployment.Name
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
 	k8sNodeStackName := ""
 	vpcID := ""
@@ -845,7 +799,7 @@ func (k8sDeployer *K8SDeployer) deleteCloudFormationStack(elbSvc *elb.ELB, ec2Sv
 		log.Warningf("Unable to find k8s-master/k8s-node stack...")
 	}
 
-	if err := k8sDeployer.deleteLoadBalancers(elbSvc, false); err != nil {
+	if err := deleteLoadBalancers(elbSvc, false, stackName, log); err != nil {
 		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
@@ -865,7 +819,7 @@ func (k8sDeployer *K8SDeployer) deleteCloudFormationStack(elbSvc *elb.ELB, ec2Sv
 		log.Warningf("Unable to delete stack: %s", err.Error())
 	}
 
-	if err := k8sDeployer.waitUntilInternetGatewayDeleted(ec2Svc, deploymentName, time.Duration(3)*time.Minute); err != nil {
+	if err := waitUntilInternetGatewayDeleted(ec2Svc, deploymentName, time.Duration(3)*time.Minute, log); err != nil {
 		log.Warningf("Unable to wait for internetGateway to be deleted: %s", err.Error())
 	}
 
@@ -873,7 +827,7 @@ func (k8sDeployer *K8SDeployer) deleteCloudFormationStack(elbSvc *elb.ELB, ec2Sv
 	retryTimes := 5
 	log.Infof("Deleteing securityGroup...")
 	for i := 1; i <= retryTimes; i++ {
-		if err := k8sDeployer.deleteSecurityGroup(ec2Svc, aws.String(vpcID)); err != nil {
+		if err := deleteSecurityGroup(ec2Svc, aws.String(vpcID), log); err != nil {
 			log.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
 		} else if err == nil {
 			log.Infof("Delete securityGroup ok...")
@@ -949,9 +903,7 @@ func deleteBastionHost(ec2Svc *ec2.EC2, deploymentName string) error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteK8S(namespaces []string, kubeConfig *rest.Config) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+func deleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger) error {
 	if kubeConfig == nil {
 		return errors.New("Empty kubeconfig passed, skipping to delete k8s objects")
 	}
@@ -1040,54 +992,55 @@ func (k8sDeployer *K8SDeployer) deleteK8S(namespaces []string, kubeConfig *rest.
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteDeploymentOnFailure() {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
-	if deployedCluster.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
+func deleteDeploymentOnFailure(k8sDeployer *K8SDeployer) {
+	log := k8sDeployer.DeploymentLog.Logger
+	if k8sDeployer.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
 		log.Warning("Skipping delete deployment on failure")
 		return
 	}
 
-	k8sDeployer.deleteDeployment()
+	deleteDeployment(k8sDeployer)
 }
 
-func (k8sDeployer *K8SDeployer) deleteDeployment() {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
+func deleteDeployment(k8sDeployer *K8SDeployer) {
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
+	deployment := k8sDeployer.Deployment
+	kubeConfig := k8sDeployer.KubeConfig
+	stackName := awsCluster.StackName()
+	deploymentName := awsCluster.Name
+	log := k8sDeployer.DeploymentLog.Logger
+
 	// Deleting kubernetes deployment
 	log.Infof("Deleting kubernetes deployment...")
-	if err := k8sDeployer.deleteK8S(k8sDeployer.getAllDeployedNamespaces(), k8sDeployment.KubeConfig); err != nil {
+	if err := deleteK8S(getAllDeployedNamespaces(deployment), kubeConfig, log); err != nil {
 		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
-	sess, sessionErr := awsecs.CreateSession(k8sDeployer.DeploymentInfo.AwsProfile, deployedCluster.Deployment)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		log.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
 		return
 	}
 
-	elbSvc := elb.New(sess)
-	cfSvc := cloudformation.New(sess)
-	ec2Svc := ec2.New(sess)
-
 	// delete cloudformation Stack
-	cfStackName := deployedCluster.StackName()
-	log.Infof("Deleting cloudformation Stack: %s", cfStackName)
-	if err := k8sDeployer.deleteCloudFormationStack(elbSvc, ec2Svc, cfSvc, cfStackName); err != nil {
+	log.Infof("Deleting cloudformation Stack: %s", stackName)
+	if err := deleteCloudFormationStack(sess, deploymentName, stackName, log); err != nil {
 		log.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
 	}
 
+	ec2Svc := ec2.New(sess)
+
 	log.Infof("Deleting KeyPair...")
-	if err := awsecs.DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
+	if err := awsecs.DeleteKeyPair(ec2Svc, awsCluster); err != nil {
 		log.Warning("Unable to delete key pair: " + err.Error())
 	}
 }
 
-func (k8sDeployer *K8SDeployer) getAllDeployedNamespaces() []string {
+func getAllDeployedNamespaces(deployment *apis.Deployment) []string {
 	// Find all namespaces we deployed to
 	allNamespaces := []string{}
-	for _, task := range k8sDeployer.DeploymentInfo.AwsInfo.Deployment.KubernetesDeployment.Kubernetes {
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		newNamespace := ""
 		if task.Deployment != nil {
 			newNamespace = getNamespace(task.Deployment.ObjectMeta)
@@ -1110,20 +1063,18 @@ func (k8sDeployer *K8SDeployer) getAllDeployedNamespaces() []string {
 	return allNamespaces
 }
 
-func (k8sDeployer *K8SDeployer) tagKubeNodes(k8sClient *k8s.Clientset) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
-
+func tagKubeNodes(k8sClient *k8s.Clientset, awsCluster *hpaws.AWSCluster,
+	deployment *apis.Deployment, log *logging.Logger) error {
 	nodeInfos := map[string]int{}
-	for _, mapping := range deployedCluster.Deployment.NodeMapping {
-		privateDnsName := deployedCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
+	for _, mapping := range deployment.NodeMapping {
+		privateDnsName := awsCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
 		nodeInfos[aws.StringValue(privateDnsName)] = mapping.Id
 	}
 
 	for nodeName, id := range nodeInfos {
 		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
 			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
-			node.Labels["hyperpilot/deployment"] = deployedCluster.Name
+			node.Labels["hyperpilot/deployment"] = awsCluster.Name
 			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
 				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
 			}
@@ -1162,8 +1113,8 @@ func createNamespaceIfNotExist(namespace string, existingNamespaces map[string]b
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) createSecrets(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
-	secrets := k8sDeployer.DeploymentInfo.AwsInfo.Deployment.KubernetesDeployment.Secrets
+func createSecrets(k8sClient *k8s.Clientset, existingNamespaces map[string]bool, deployment *apis.Deployment) error {
+	secrets := deployment.KubernetesDeployment.Secrets
 	if len(secrets) == 0 {
 		return nil
 	}
@@ -1183,10 +1134,8 @@ func (k8sDeployer *K8SDeployer) createSecrets(k8sClient *k8s.Clientset, existing
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) createServiceForDeployment(namespace string, family string, k8sClient *k8s.Clientset, task apis.KubernetesTask, container v1.Container) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
-
+func createServiceForDeployment(namespace string, family string, k8sClient *k8s.Clientset,
+	task apis.KubernetesTask, container v1.Container, log *logging.Logger) error {
 	if len(container.Ports) == 0 {
 		return nil
 	}
@@ -1266,22 +1215,22 @@ func (k8sDeployer *K8SDeployer) createServiceForDeployment(namespace string, fam
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
+func deployServices(k8sDeployer *K8SDeployer, k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
+	deployment := k8sDeployer.Deployment
+	kubeConfig := k8sDeployer.KubeConfig
+	log := k8sDeployer.DeploymentLog.Logger
 
-	if k8sDeployment.KubeConfig == nil {
+	if kubeConfig == nil {
 		return errors.New("Unable to find kube config in deployment")
 	}
 
 	tasks := map[string]apis.KubernetesTask{}
-	for _, task := range deployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
 	}
 
 	taskCount := map[string]int{}
-	for _, mapping := range deployedCluster.Deployment.NodeMapping {
+	for _, mapping := range deployment.NodeMapping {
 		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
 
 		task, ok := tasks[mapping.Task]
@@ -1331,7 +1280,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			err := k8sDeployer.createServiceForDeployment(namespace, family, k8sClient, task, container)
+			err := createServiceForDeployment(namespace, family, k8sClient, task, container, log)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -1365,7 +1314,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
-	for _, task := range deployedCluster.Deployment.KubernetesDeployment.Kubernetes {
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.DaemonSet == nil {
 			continue
 		}
@@ -1390,12 +1339,11 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
+func recordPublicEndpoints(k8sDeployer *K8SDeployer, k8sClient *k8s.Clientset) {
+	deployment := k8sDeployer.Deployment
+	log := k8sDeployer.DeploymentLog.Logger
 
-	allNamespaces := k8sDeployer.getAllDeployedNamespaces()
+	allNamespaces := getAllDeployedNamespaces(deployment)
 	endpoints := map[string]string{}
 	c := make(chan bool, 1)
 	quit := make(chan bool)
@@ -1444,7 +1392,7 @@ func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) 
 	select {
 	case <-c:
 		log.Info("All public endpoints recorded.")
-		k8sDeployment.Endpoints = endpoints
+		k8sDeployer.Endpoints = endpoints
 	case <-time.After(time.Duration(2) * time.Minute):
 		quit <- true
 		log.Warning("Timed out waiting for AWS ELB to be ready.")
@@ -1485,7 +1433,7 @@ func (k8sDeployer *K8SDeployer) UploadSshKeyToBastion() error {
 
 	baseDir := awsCluster.Name + "_sshkey"
 	basePath := "/tmp/" + baseDir
-	sshKeyFilePath := basePath + "/" + deployedCluster.KeyName() + ".pem"
+	sshKeyFilePath := basePath + "/" + awsCluster.KeyName() + ".pem"
 
 	if _, err := os.Stat(basePath); os.IsNotExist(err) {
 		os.Mkdir(basePath, os.ModePerm)
@@ -1522,20 +1470,19 @@ func (k8sDeployer *K8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
 }
 
 // CheckClusterState check kubernetes cluster state is exist
-func CheckClusterState(deploymentInfo *awsecs.DeploymentInfo) error {
-	awsProfile := deploymentInfo.AwsProfile
-	deployedCluster := deploymentInfo.AwsInfo
+func (k8sDeployer *K8SDeployer) CheckClusterState() error {
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
 
-	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
 	}
 
 	cfSvc := cloudformation.New(sess)
 
-	stackName := deployedCluster.StackName()
 	describeStacksInput := &cloudformation.DescribeStacksInput{
-		StackName: aws.String(stackName),
+		StackName: aws.String(awsCluster.StackName()),
 	}
 
 	describeStacksOutput, err := cfSvc.DescribeStacks(describeStacksInput)
@@ -1556,13 +1503,15 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	k8sStoreInfo := storeInfo.(StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
+	kubeConfigPath := k8sDeployer.KubeConfigPath
+	deploymentName := k8sDeployer.AWSCluster.Name
 
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
 
 	glog.Infof("Downloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
-	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeplokyer.KubeConfigPath)
+	kubeConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 	if err != nil {
 		return fmt.Errorf("Unable to parse %s kube config: %s", k8sDeployer.AWSCluster.Name, err.Error())
 	}
@@ -1571,9 +1520,8 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	return nil
 }
 
-func GetClusterInfo(deploymentInfo *awsecs.DeploymentInfo) (*ClusterInfo, error) {
-	k8sDeployment := deploymentInfo.K8sInfo
-	kubeConfig := k8sDeployment.KubeConfig
+func (k8sDeployer *K8SDeployer) GetClusterInfo() (*ClusterInfo, error) {
+	kubeConfig := k8sDeployer.KubeConfig
 	if kubeConfig == nil {
 		return nil, errors.New("Empty kubeconfig passed, skipping to get k8s objects")
 	}
@@ -1605,14 +1553,14 @@ func GetClusterInfo(deploymentInfo *awsecs.DeploymentInfo) (*ClusterInfo, error)
 		Nodes:      nodeLists.Items,
 		Pods:       podLists.Items,
 		Containers: deployLists.Items,
-		BastionIp:  k8sDeployment.BastionIp,
-		MasterIp:   k8sDeployment.MasterIp,
+		BastionIp:  k8sDeployer.BastionIp,
+		MasterIp:   k8sDeployer.MasterIp,
 	}
 
 	return clusterInfo, nil
 }
 
-func (k8sDeployer *k8sDeployer) GetStoreInfo() interface{} {
+func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 	return &StoreInfo{
 		BastionIp: k8sDeployer.BastionIp,
 		MasterIp:  k8sDeployer.MasterIp,
