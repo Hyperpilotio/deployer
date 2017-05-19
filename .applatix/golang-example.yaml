@@ -1,0 +1,47 @@
+---
+type: container
+name: deployer
+description: Hyperpilot deployer
+container:
+  resources:
+    mem_mib: 256
+    cpu_cores: 0.5
+    disk_gb: 0
+  image: "golang:1.7"
+  docker_options: ""
+  command: "%%CMD%%"
+inputs:
+  artifacts:
+  - from: "%%code%%"
+    path: "/src"
+  parameters:
+    CMD:
+    code:
+outputs:
+  artifacts:
+    code:
+      path: "/src"
+
+---
+type: workflow
+name: deployer
+description: Hyperpilot deployer
+inputs:
+  parameters:
+    commit:
+      default: "%%session.commit%%"
+    repo:
+      default: "%%session.repo%%"
+steps:
+- checkout:
+    template: axscm-checkout
+- build:
+    template: golang-example-base
+    parameters:
+      CMD: "sh -c 'cd /src && go build'"
+      code: "%%steps.checkout.code%%"
+  test:
+    template: golang-example-base
+    parameters:
+      CMD: "sh -c 'cd /src && go test -v'"
+      code: "%%step.checkout.code%%"
