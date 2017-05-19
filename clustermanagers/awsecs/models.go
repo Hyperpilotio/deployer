@@ -1,8 +1,6 @@
 package awsecs
 
 import (
-	"sync"
-
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"github.com/hyperpilotio/deployer/apis"
@@ -19,8 +17,6 @@ type ECSDeployer struct {
 	Deployment    *apis.Deployment
 	DeploymentLog *log.DeploymentLog
 	Scheduler     *job.Scheduler
-
-	mutex sync.Mutex
 }
 
 type ClusterInfo struct {

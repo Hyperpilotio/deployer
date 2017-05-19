@@ -3,18 +3,23 @@ package kubernetes
 import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
 	"github.com/spf13/viper"
 
 	"k8s.io/client-go/pkg/api/v1"
 	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
+	"k8s.io/client-go/rest"
 )
 
 type K8SDeployer struct {
-	Config         *viper.Viper
-	AWSCluster     *aws.AWSCluster
-	DeploymentLog  *log.DeploymentLog
-	Deployment     *apis.Deployment
+	Config     *viper.Viper
+	AWSCluster *aws.AWSCluster
+
+	DeploymentLog *log.DeploymentLog
+	Deployment    *apis.Deployment
+	Scheduler     *job.Scheduler
+
 	BastionIp      string
 	MasterIp       string
 	KubeConfigPath string

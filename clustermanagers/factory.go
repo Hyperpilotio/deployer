@@ -9,6 +9,7 @@ import (
 	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
@@ -16,7 +17,7 @@ import (
 
 // Cluster manager specific Deployer, able to deployer containers and services
 type Deployer interface {
-	CreateDeployment(uploadedFiles map[string]string) error
+	CreateDeployment(uploadedFiles map[string]string) (interface{}, error)
 	UpdateDeployment() error
 	DeleteDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
@@ -24,6 +25,7 @@ type Deployer interface {
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.DeploymentLog
+	GetScheduler() *job.Scheduler
 }
 
 func NewDeployer(config *viper.Viper, awsProfile *aws.AWSProfile, deployment *apis.Deployment) (Deployer, error) {

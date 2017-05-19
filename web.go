@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 
@@ -112,11 +113,13 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 	switch status := c.Param("status"); status {
 	case "Deleted", "Failed":
 		// We don't need to ask for store every time on the UI, just use server state
-		deployments, err := server.Store.LoadDeployments()
+		deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
+			return &StoreDeployment{}
+		})
 		if err != nil {
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}
-		for _, deployment := range deployments {
+		for _, deployment := range deployments.([]StoreDeployment) {
 			if deployment.Status == status {
 				deploymentLog := &DeploymentLog{
 					Name:   deployment.Name,
@@ -136,8 +139,8 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 				Name:   name,
 				Time:   deploymentInfo.Created,
 				Type:   deploymentInfo.GetDeploymentType(),
-				Status: awsecs.GetStateString(deploymentInfo.State),
-				UserId: deploymentInfo.AwsInfo.Deployment.UserId,
+				Status: GetStateString(deploymentInfo.State),
+				UserId: deploymentInfo.Deployment.UserId,
 			}
 			allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
 		}
@@ -180,7 +183,7 @@ func (server *Server) storeUser(c *gin.Context) {
 		return
 	}
 
-	if err := server.Store.StoreNewAWSProfile(awsProfile); err != nil {
+	if err := server.ProfileStore.Store(awsProfile.UserId, awsProfile); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
 			"data":  "Unable to store user data: " + err.Error(),
@@ -232,7 +235,7 @@ func (server *Server) deleteUser(c *gin.Context) {
 		return
 	}
 
-	if err := server.Store.DeleteAWSProfile(userId); err != nil {
+	if err := server.ProfileStore.Delete(userId); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
 			"data":  "Unable to delete user data: " + err.Error(),
@@ -250,7 +253,7 @@ func (server *Server) deleteUser(c *gin.Context) {
 	})
 }
 
-func getAWSProfileParam(c *gin.Context) (*awsecs.AWSProfile, error) {
+func getAWSProfileParam(c *gin.Context) (*hpaws.AWSProfile, error) {
 	userId, ok := c.GetPostForm("userId")
 	if !ok {
 		return nil, errors.New("Unable to read userId value")
@@ -266,7 +269,7 @@ func getAWSProfileParam(c *gin.Context) (*awsecs.AWSProfile, error) {
 		return nil, errors.New("Unable to read awsSecret value")
 	}
 
-	awsProfile := &awsecs.AWSProfile{
+	awsProfile := &hpaws.AWSProfile{
 		UserId:    userId,
 		AwsId:     awsId,
 		AwsSecret: awsSecret,
@@ -319,7 +322,7 @@ func (server *Server) getCluster(c *gin.Context) {
 			return
 		}
 
-		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo)
+		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.Deployer.GetAWSCluster())
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -333,7 +336,7 @@ func (server *Server) getCluster(c *gin.Context) {
 			"data":  clusterInfo,
 		})
 	case "K8S":
-		clusterInfo, err := kubernetes.GetClusterInfo(deploymentInfo)
+		clusterInfo, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetClusterInfo()
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
