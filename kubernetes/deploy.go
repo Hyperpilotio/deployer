@@ -1011,11 +1011,11 @@ func (k8sDeployment *KubernetesDeployment) deleteK8S(namespaces []string, kubeCo
 	}
 
 	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
-	if roleBindings, err := clusterRoleBindings.List(v1.ListOptions{}); err != nil {
+	if roleBindings, err := clusterRoleBindings.List(metav1.ListOptions{}); err != nil {
 		return fmt.Errorf("Unable to list role bindings: " + err.Error())
 	} else {
-		for _, roleBinding := range roleBindings {
-			if err := clusterRoleBindings.Delete(roleBinding.Name, v1.DeleteOptions{}); err != nil {
+		for _, roleBinding := range roleBindings.Items {
+			if err := clusterRoleBindings.Delete(roleBinding.Name, &metav1.DeleteOptions{}); err != nil {
 				log.Warningf("Unable to delete role binding %s: %s", roleBinding.Name, err.Error())
 			}
 		}
