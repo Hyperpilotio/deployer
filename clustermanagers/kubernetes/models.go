@@ -1,10 +1,8 @@
 package kubernetes
 
 import (
-	"sync"
-
-	"github.com/hyperpilotio/deployer/awsecs"
-	"github.com/hyperpilotio/deployer/job"
+	"github.com/hyperpilotio/deployer/apis"
+	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/log"
 	"github.com/spf13/viper"
 
@@ -13,13 +11,15 @@ import (
 )
 
 type K8SDeployer struct {
-	Config *viper.Viper
-
-	DeploymentInfo *awsecs.DeploymentInfo
+	Config         *viper.Viper
+	AWSCluster     *aws.AWSCluster
 	DeploymentLog  *log.DeploymentLog
-	Scheduler      *job.Scheduler
-
-	mutex sync.Mutex
+	Deployment     *apis.Deployment
+	BastionIp      string
+	MasterIp       string
+	KubeConfigPath string
+	Endpoints      map[string]string
+	KubeConfig     *rest.Config
 }
 
 type CreateDeploymentResponse struct {
@@ -33,6 +33,11 @@ type DeploymentLoadBalancers struct {
 	StackName             string
 	ApiServerBalancerName string
 	LoadBalancerNames     []string
+}
+
+type StoreInfo struct {
+	BastionIp string
+	MasterIp  string
 }
 
 type ClusterInfo struct {

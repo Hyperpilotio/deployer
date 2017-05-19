@@ -8,10 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -19,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
+	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
@@ -26,114 +24,28 @@ import (
 )
 
 // NewDeployer return the EC2 of Deployer
-func NewDeployer(config *viper.Viper, awsProfiles map[string]*AWSProfile,
-	deployment *apis.Deployment) (*ECSDeployer, error) {
-	deployedCluster := NewDeployedCluster(deployment)
-	deployer := &ECSDeployer{
-		Config: config,
-		DeploymentInfo: &DeploymentInfo{
-			AwsInfo: deployedCluster,
-			Created: time.Now(),
-			State:   CREATING,
-		},
-	}
-
-	deployer.mutex.Lock()
-	defer deployer.mutex.Unlock()
-
-	awsProfile, ok := awsProfiles[deployment.UserId]
-	if !ok {
-		return nil, errors.New("Unable to find aws profile for user: " + deployment.UserId)
-	}
-	deployer.DeploymentInfo.AwsProfile = awsProfile
-
+func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*ECSDeployer, error) {
 	log, err := log.NewLogger(config, deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	deployer.DeploymentLog = log
-	deployer.DeploymentInfo.AwsInfo.Logger = log.Logger
+	awsCluster := hpaws.NewAWSCluster(deployment, awsProfile)
+	deployer := &ECSDeployer{
+		Deployment:    deployment,
+		Config:        config,
+		AWSCluster:    awsCluster,
+		DeploymentLog: log,
+	}
 
 	return deployer, nil
 }
 
-// NewDeployedCluster return the instance of DeployedCluster
-func NewDeployedCluster(deployment *apis.Deployment) *DeployedCluster {
-	return &DeployedCluster{
-		Name:        deployment.Name,
-		Deployment:  deployment,
-		NodeInfos:   make(map[int]*NodeInfo),
-		InstanceIds: make([]*string, 0),
-	}
-}
-
-// NewStoreDeployment create deployment that needs to be stored
-func (deploymentInfo *DeploymentInfo) NewStoreDeployment() *StoreDeployment {
-	storeDeployment := &StoreDeployment{
-		Name:    deploymentInfo.AwsInfo.Deployment.Name,
-		Region:  deploymentInfo.AwsInfo.Deployment.Region,
-		UserId:  deploymentInfo.AwsInfo.Deployment.UserId,
-		Status:  GetStateString(deploymentInfo.State),
-		Created: deploymentInfo.Created.Format(time.RFC822),
-	}
-
-	if deploymentInfo.AwsInfo.KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(deploymentInfo.AwsInfo.KeyPair.KeyMaterial)
-	}
-
-	deploymentType := deploymentInfo.GetDeploymentType()
-	storeDeployment.Type = deploymentType
-	switch deploymentType {
-	case "K8S":
-		storeDeployment.K8SDeployment = deploymentInfo.K8sInfo.NewK8SStoreDeployment()
-	}
-
-	return storeDeployment
-}
-
-// ReloadKeyPair reload KeyPair by keyName
-func (deploymentInfo *DeploymentInfo) ReloadKeyPair(keyMaterial string) error {
-	awsProfile := deploymentInfo.AwsProfile
-	deployedCluster := deploymentInfo.AwsInfo
-
-	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
-	if sessionErr != nil {
-		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-	describeKeyPairsInput := &ec2.DescribeKeyPairsInput{
-		KeyNames: []*string{
-			aws.String(deployedCluster.KeyName()),
-		},
-	}
-
-	describeKeyPairsOutput, err := ec2Svc.DescribeKeyPairs(describeKeyPairsInput)
-	if err != nil {
-		return fmt.Errorf("Unable to describe keyPairs: %s", err.Error())
-	}
-
-	if len(describeKeyPairsOutput.KeyPairs) == 0 {
-		return fmt.Errorf("Unable to find %s keyPairs", deployedCluster.Deployment.Name)
-	}
-
-	keyPair := &ec2.CreateKeyPairOutput{
-		KeyName:        describeKeyPairsOutput.KeyPairs[0].KeyName,
-		KeyFingerprint: describeKeyPairsOutput.KeyPairs[0].KeyFingerprint,
-		KeyMaterial:    aws.String(keyMaterial),
-	}
-	deployedCluster.KeyPair = keyPair
-
-	return nil
-}
-
 // ReloadClusterState reload EC2 cluster state
-func (deploymentInfo *DeploymentInfo) ReloadClusterState() error {
-	awsProfile := deploymentInfo.AwsProfile
-	deployedCluster := deploymentInfo.AwsInfo
+func (ecsDeployer *ECSDeployer) ReloadClusterState(storeInfo interface{}) error {
+	awsCluster := ecsDeployer.AWSCluster
 
-	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
+	sess, sessionErr := hpaws.CreateSession(awsCluster.AWSProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s", sessionErr.Error())
 	}
@@ -141,7 +53,7 @@ func (deploymentInfo *DeploymentInfo) ReloadClusterState() error {
 	ec2Svc := ec2.New(sess)
 	ecsSvc := ecs.New(sess)
 
-	deploymentName := deployedCluster.Deployment.Name
+	deploymentName := awsCluster.Name
 	listInstancesInput := &ecs.ListContainerInstancesInput{
 		Cluster: aws.String(deploymentName),
 	}
@@ -165,24 +77,17 @@ func (deploymentInfo *DeploymentInfo) ReloadClusterState() error {
 	for _, containerInstance := range ecsDescribeInstancesOutput.ContainerInstances {
 		instanceIds = append(instanceIds, containerInstance.Ec2InstanceId)
 	}
-	deployedCluster.InstanceIds = instanceIds
+	awsCluster.InstanceIds = instanceIds
 
-	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
+	if err := checkVPC(ec2Svc, awsCluster); err != nil {
 		return fmt.Errorf("Unable to find VPC: %s", err.Error())
 	}
 
 	return nil
 }
 
-func (k8sDeployment *KubernetesDeployment) NewK8SStoreDeployment() *K8SStoreDeployment {
-	return &K8SStoreDeployment{
-		BastionIp: k8sDeployment.BastionIp,
-		MasterIp:  k8sDeployment.MasterIp,
-	}
-}
-
-func (ecsDeployer *ECSDeployer) GetDeploymentInfo() *DeploymentInfo {
-	return ecsDeployer.DeploymentInfo
+func (ecsDeployer *ECSDeployer) GetAWSCluster() *hpaws.AWSCluster {
+	return ecsDeployer.AWSCluster
 }
 
 func (ecsDeployer *ECSDeployer) GetLog() *log.DeploymentLog {
@@ -193,16 +98,12 @@ func (ecsDeployer *ECSDeployer) GetScheduler() *job.Scheduler {
 	return ecsDeployer.Scheduler
 }
 
-func (ecsDeployer *ECSDeployer) GetKubeConfigPath() string {
-	return ""
-}
-
 func (ecsDeployer *ECSDeployer) NewShutDownScheduler(custScheduleRunTime string) error {
 	if ecsDeployer.Scheduler != nil {
 		ecsDeployer.Scheduler.Stop()
 	}
 
-	deployment := ecsDeployer.DeploymentInfo.AwsInfo.Deployment
+	deployment := ecsDeployer.Deployment
 
 	scheduleRunTime := ""
 	if deployment.ShutDownTime != "" {
@@ -221,31 +122,23 @@ func (ecsDeployer *ECSDeployer) NewShutDownScheduler(custScheduleRunTime string)
 	}
 	glog.Infof("New %s schedule at %s", deployment.Name, time.Now().Add(startTime))
 
-	scheduler, scheduleErr := job.NewScheduler(deployment.Name, startTime, func() {
+	scheduler := job.NewScheduler(startTime, func() {
 		go func() {
 			ecsDeployer.DeleteDeployment()
-			defer ecsDeployer.GetLog().LogFile.Close()
 		}()
 	})
-
-	if scheduleErr != nil {
-		scheduler.Stop()
-		return fmt.Errorf("Unable to schedule %s to auto shutdown cluster: %s", deployment.Name, scheduleErr.Error())
-	}
 	ecsDeployer.Scheduler = scheduler
 
 	return nil
 }
 
 // CreateDeployment start a deployment
-func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string) error {
-	deploymentInfo := ecsDeployer.DeploymentInfo
-	deployedCluster := deploymentInfo.AwsInfo
-	deployment := deployedCluster.Deployment
-	awsProfile := deploymentInfo.AwsProfile
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) CreateDeployment(deployment *apis.Deployment, uploadedFiles map[string]string) error {
+	awsCluster := ecsDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
+	log := ecsDeployer.DeploymentLog.Logger
 
-	sess, sessionErr := CreateSession(awsProfile, deployment)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
@@ -261,7 +154,7 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	}
 
 	log.Infof("Setting up ECS cluster")
-	if err := setupECS(ecsSvc, deployedCluster); err != nil {
+	if err := ecsDeployer.setupECS(ecsSvc); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to setup ECS: " + err.Error())
 	}
@@ -272,19 +165,19 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	}
 
 	log.Infof("Waiting for ECS cluster to be ready")
-	if err := waitUntilECSClusterReady(ecsSvc, deployedCluster); err != nil {
+	if err := ecsDeployer.waitUntilECSClusterReady(ecsSvc); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to wait until ECS cluster ready: " + err.Error())
 	}
 
 	log.Infof("Add attribute on ECS instances")
-	if err := setupInstanceAttribute(ecsSvc, deployedCluster); err != nil {
+	if err := ecsDeployer.setupInstanceAttribute(ecsSvc); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to setup instance attribute: " + err.Error())
 	}
 
 	log.Infof("Launching ECS services")
-	if err := createServices(ecsSvc, deployedCluster); err != nil {
+	if err := ecsDeployer.createServices(ecsSvc); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to launch ECS tasks: " + err.Error())
 	}
@@ -299,13 +192,12 @@ func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
 
 // DeleteDeployment clean up the cluster from AWS ECS.
 func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
-	deploymentInfo := ecsDeployer.DeploymentInfo
-	deployedCluster := deploymentInfo.AwsInfo
-	deployment := deployedCluster.Deployment
-	awsProfile := deploymentInfo.AwsProfile
-	log := deployedCluster.Logger
+	awsCluster := ecsDeployer.AWSCluster
+	deployment := ecsDeployer.Deployment
+	awsProfile := awsCluster.AwsProfile
+	log := awsCluster.Logger
 
-	sess, sessionErr := CreateSession(awsProfile, deployment)
+	sess, sessionErr := hpaws.CreateSession(awsProfile, deployment.Region)
 	if sessionErr != nil {
 		log.Errorf("Unable to create session: %s" + sessionErr.Error())
 		return sessionErr
@@ -315,22 +207,22 @@ func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 	ecsSvc := ecs.New(sess)
 
 	log.Infof("Checking VPC for deletion")
-	if err := checkVPC(ec2Svc, deployedCluster); err != nil {
+	if err := checkVPC(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to find VPC: %s", err.Error())
 		return err
 	}
 
-	if deployedCluster.Deployment.ECSDeployment != nil {
+	if ecsDeployer.Deployment.ECSDeployment != nil {
 		// Stop all running tasks
 		log.Infof("Stopping all ECS services")
-		if err := stopECSServices(ecsSvc, deployedCluster); err != nil {
+		if err := stopECSServices(ecsSvc, awsCluster); err != nil {
 			log.Errorf("Unable to stop ECS services: ", err.Error())
 			return err
 		}
 
 		// delete all the task definitions
 		log.Infof("Deleting task definitions")
-		if err := deleteTaskDefinitions(ecsSvc, deployedCluster); err != nil {
+		if err := deleteTaskDefinitions(ecsSvc, awsCluster); err != nil {
 			log.Errorf("Unable to delete task definitions: %s", err.Error())
 			return err
 		}
@@ -338,7 +230,7 @@ func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 
 	// Terminate EC2 instance
 	log.Infof("Deleting EC2 instances")
-	if err := deleteEC2(ec2Svc, deployedCluster); err != nil {
+	if err := deleteEC2(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete task definitions: %s", err.Error())
 		return err
 	}
@@ -350,120 +242,56 @@ func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 	iamSvc := iam.New(sess)
 
 	log.Infof("Deleting IAM role")
-	if err := deleteIAM(iamSvc, deployedCluster); err != nil {
+	if err := deleteIAM(iamSvc, awsCluster); err != nil {
 		log.Errorf("Unable to delete IAM: %s", err.Error())
 		return err
 	}
 
 	// delete key pair
 	log.Infof("Deleting key pair")
-	if err := DeleteKeyPair(ec2Svc, deployedCluster); err != nil {
+	if err := DeleteKeyPair(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete key pair: %s", err.Error())
 		return err
 	}
 
 	// delete security group
 	log.Infof("Deleting security group")
-	if err := deleteSecurityGroup(ec2Svc, deployedCluster); err != nil {
+	if err := deleteSecurityGroup(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete security group: %s", err.Error())
 		return err
 	}
 
 	// delete internet gateway.
 	log.Infof("Deleting internet gateway")
-	if err := deleteInternetGateway(ec2Svc, deployedCluster); err != nil {
+	if err := deleteInternetGateway(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete internet gateway: %s", err.Error())
 		return err
 	}
 
 	// delete subnet.
 	log.Infof("Deleting subnet")
-	if err := deleteSubnet(ec2Svc, deployedCluster); err != nil {
+	if err := deleteSubnet(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete subnet: %s", err.Error())
 		return err
 	}
 
 	// Delete VPC
 	log.Infof("Deleting VPC")
-	if err := deleteVPC(ec2Svc, deployedCluster); err != nil {
+	if err := deleteVPC(ec2Svc, awsCluster); err != nil {
 		log.Errorf("Unable to delete VPC: %s", err)
 		return err
 	}
 
-	if deployedCluster.Deployment.ECSDeployment != nil {
+	if ecsDeployer.Deployment.ECSDeployment != nil {
 		// Delete ecs cluster
 		log.Infof("Deleting ECS cluster")
-		if err := deleteCluster(ecsSvc, deployedCluster); err != nil {
+		if err := deleteCluster(ecsSvc, awsCluster); err != nil {
 			log.Errorf("Unable to delete ECS cluster: %s", err)
 			return err
 		}
 	}
 
 	return nil
-}
-
-// KeyName return a key name according to the Deployment.Name with suffix "-key"
-func (deployedCluster *DeployedCluster) KeyName() string {
-	return deployedCluster.Deployment.Name + "-key"
-}
-
-func (deployedCluster *DeployedCluster) StackName() string {
-	return deployedCluster.Deployment.Name + "-stack"
-}
-
-// PolicyName return a key name according to the Deployment.Name with suffix "-policy"
-func (deployedCluster *DeployedCluster) PolicyName() string {
-	return deployedCluster.Deployment.Name + "-policy"
-}
-
-// RoleName return a key name according to the Deployment.Name with suffix "-role"
-func (deployedCluster *DeployedCluster) RoleName() string {
-	return deployedCluster.Deployment.Name + "-role"
-}
-
-// VPCName return a key name according to the Deployment.Name with suffix "-vpc"
-func (deployedCluster DeployedCluster) VPCName() string {
-	return deployedCluster.Name + "-vpc"
-}
-
-// SubnetName return a key name according to the Deployment.Name with suffix "-vpc"
-func (deployedCluster DeployedCluster) SubnetName() string {
-	return deployedCluster.Name + "-subnet"
-}
-
-func (deployedCluster DeployedCluster) SshConfig(user string) (*ssh.ClientConfig, error) {
-	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
-
-	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
-	if err != nil {
-		return nil, errors.New("Unable to parse private key: " + err.Error())
-	}
-
-	clientConfig := &ssh.ClientConfig{
-		User: user,
-		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(signer),
-		},
-	}
-
-	return clientConfig, nil
-}
-
-func CreateSession(awsProfile *AWSProfile, deployment *apis.Deployment) (*session.Session, error) {
-	awsId := awsProfile.AwsId
-	awsSecret := awsProfile.AwsSecret
-	creds := credentials.NewStaticCredentials(awsId, awsSecret, "")
-	config := &aws.Config{
-		Region: aws.String(deployment.Region),
-	}
-	config = config.WithCredentials(creds)
-	sess, err := session.NewSession(config)
-	if err != nil {
-		glog.Errorf("Unable to create session: %s", err)
-		return nil, err
-	}
-
-	return sess, nil
 }
 
 func createTags(ec2Svc *ec2.EC2, resources []*string, tags []*ec2.Tag) error {
@@ -489,17 +317,17 @@ func createTag(ec2Svc *ec2.EC2, resources []*string, key string, value string) e
 	return createTags(ec2Svc, resources, tags)
 }
 
-func setupECS(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func (ecsDeployer *ECSDeployer) setupECS(ecsSvc *ecs.ECS) error {
 	// FIXME check if the cluster exists or not
 	clusterParams := &ecs.CreateClusterInput{
-		ClusterName: aws.String(deployedCluster.Deployment.Name),
+		ClusterName: aws.String(ecsDeployer.AWSCluster.Name),
 	}
 
 	if _, err := ecsSvc.CreateCluster(clusterParams); err != nil {
 		return errors.New("Unable to create cluster: " + err.Error())
 	}
 
-	for _, taskDefinition := range deployedCluster.Deployment.ECSDeployment.TaskDefinitions {
+	for _, taskDefinition := range ecsDeployer.Deployment.ECSDeployment.TaskDefinitions {
 		if _, err := ecsSvc.RegisterTaskDefinition(&taskDefinition); err != nil {
 			return errors.New("Unable to register task definition: " + err.Error())
 		}
@@ -508,8 +336,9 @@ func setupECS(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) setupNetwork(ec2Svc *ec2.EC2) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := ecsDeployer.DeploymentLog.Logger
 	log.Infof("Creating VPC")
 	createVpcInput := &ec2.CreateVpcInput{
 		CidrBlock: aws.String("172.31.0.0/28"),
@@ -518,11 +347,12 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	if createVpcResponse, err := ec2Svc.CreateVpc(createVpcInput); err != nil {
 		return errors.New("Unable to create VPC: " + err.Error())
 	} else {
-		deployedCluster.VpcId = *createVpcResponse.Vpc.VpcId
+		awsCluster.VpcId = *createVpcResponse.Vpc.VpcId
 	}
 
+	vpcId := awsCluster.VpcId
 	vpcAttributeParams := &ec2.ModifyVpcAttributeInput{
-		VpcId: aws.String(deployedCluster.VpcId),
+		VpcId: aws.String(vpcId),
 		EnableDnsHostnames: &ec2.AttributeBooleanValue{
 			Value: aws.Bool(true),
 		},
@@ -533,7 +363,7 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	vpcAttributeParams = &ec2.ModifyVpcAttributeInput{
-		VpcId: aws.String(deployedCluster.VpcId),
+		VpcId: aws.String(vpcId),
 		EnableDnsHostnames: &ec2.AttributeBooleanValue{
 			Value: aws.Bool(true),
 		},
@@ -544,12 +374,12 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	log.Infof("Tagging VPC with deployment name")
-	if err := createTag(ec2Svc, []*string{&deployedCluster.VpcId}, "Name", deployedCluster.VPCName()); err != nil {
+	if err := createTag(ec2Svc, []*string{&vpcId}, "Name", awsCluster.VPCName()); err != nil {
 		return errors.New("Unable to tag VPC: " + err.Error())
 	}
 
 	createSubnetInput := &ec2.CreateSubnetInput{
-		VpcId:     aws.String(deployedCluster.VpcId),
+		VpcId:     aws.String(awsCluster.VpcId),
 		CidrBlock: aws.String("172.31.0.0/28"),
 	}
 
@@ -558,37 +388,37 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	if subnetResponse, err := ec2Svc.CreateSubnet(createSubnetInput); err != nil {
 		return errors.New("Unable to create subnet: " + err.Error())
 	} else {
-		deployedCluster.SubnetId = *subnetResponse.Subnet.SubnetId
+		awsCluster.SubnetId = *subnetResponse.Subnet.SubnetId
 	}
 
 	describeSubnetsInput := &ec2.DescribeSubnetsInput{
-		SubnetIds: []*string{aws.String(deployedCluster.SubnetId)},
+		SubnetIds: []*string{aws.String(awsCluster.SubnetId)},
 	}
 
 	if err := ec2Svc.WaitUntilSubnetAvailable(describeSubnetsInput); err != nil {
 		return errors.New("Unable to wait until subnet available: " + err.Error())
 	}
 
-	if err := createTag(ec2Svc, []*string{&deployedCluster.SubnetId}, "Name", deployedCluster.SubnetName()); err != nil {
+	if err := createTag(ec2Svc, []*string{&awsCluster.SubnetId}, "Name", awsCluster.SubnetName()); err != nil {
 		return errors.New("Unable to tag subnet: " + err.Error())
 	}
 
 	if gatewayResponse, err := ec2Svc.CreateInternetGateway(&ec2.CreateInternetGatewayInput{}); err != nil {
 		return errors.New("Unable to create internet gateway: " + err.Error())
 	} else {
-		deployedCluster.InternetGatewayId = *gatewayResponse.InternetGateway.InternetGatewayId
+		awsCluster.InternetGatewayId = *gatewayResponse.InternetGateway.InternetGatewayId
 	}
 
 	// We have to sleep as sometimes the internet gateway won't be available yet. And sadly aws-sdk-go has no function to wait for it.
 	time.Sleep(time.Second * 5)
 
-	if err := createTag(ec2Svc, []*string{&deployedCluster.InternetGatewayId}, "Name", deployedCluster.Deployment.Name); err != nil {
+	if err := createTag(ec2Svc, []*string{&awsCluster.InternetGatewayId}, "Name", awsCluster.Name); err != nil {
 		return errors.New("Unable to tag internet gateway: " + err.Error())
 	}
 
 	attachInternetInput := &ec2.AttachInternetGatewayInput{
-		InternetGatewayId: aws.String(deployedCluster.InternetGatewayId),
-		VpcId:             aws.String(deployedCluster.VpcId),
+		InternetGatewayId: aws.String(awsCluster.InternetGatewayId),
+		VpcId:             aws.String(awsCluster.VpcId),
 	}
 
 	if _, err := ec2Svc.AttachInternetGateway(attachInternetInput); err != nil {
@@ -600,7 +430,7 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		return errors.New("Unable to describe route tables: " + err.Error())
 	} else {
 		for _, routeTable := range describeRoutesOutput.RouteTables {
-			if *routeTable.VpcId == deployedCluster.VpcId {
+			if *routeTable.VpcId == awsCluster.VpcId {
 				routeTableId = *routeTable.RouteTableId
 				break
 			}
@@ -614,7 +444,7 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	createRouteInput := &ec2.CreateRouteInput{
 		RouteTableId:         aws.String(routeTableId),
 		DestinationCidrBlock: aws.String("0.0.0.0/0"),
-		GatewayId:            aws.String(deployedCluster.InternetGatewayId),
+		GatewayId:            aws.String(awsCluster.InternetGatewayId),
 	}
 
 	if createRouteOutput, err := ec2Svc.CreateRoute(createRouteInput); err != nil {
@@ -624,9 +454,9 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	}
 
 	securityGroupParams := &ec2.CreateSecurityGroupInput{
-		Description: aws.String(deployedCluster.Deployment.Name),
-		GroupName:   aws.String(deployedCluster.Deployment.Name),
-		VpcId:       aws.String(deployedCluster.VpcId),
+		Description: aws.String(awsCluster.Name),
+		GroupName:   aws.String(awsCluster.Name),
+		VpcId:       aws.String(awsCluster.VpcId),
 	}
 	log.Infof("Creating security group")
 	securityGroupResp, err := ec2Svc.CreateSecurityGroup(securityGroupParams)
@@ -634,10 +464,10 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		return errors.New("Unable to create security group: " + err.Error())
 	}
 
-	deployedCluster.SecurityGroupId = *securityGroupResp.GroupId
+	awsCluster.SecurityGroupId = *securityGroupResp.GroupId
 
 	ports := make(map[int]string)
-	for _, port := range deployedCluster.Deployment.AllowedPorts {
+	for _, port := range ecsDeployer.Deployment.AllowedPorts {
 		ports[port] = "tcp"
 	}
 	// Open http and https by default
@@ -669,20 +499,21 @@ func setupNetwork(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string, deployedCluster *DeployedCluster) error {
-	if len(deployedCluster.Deployment.Files) == 0 {
+func (ecsDeployer *ECSDeployer) uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string) error {
+	awsCluster := ecsDeployer.AWSCluster
+	if len(ecsDeployer.Deployment.Files) == 0 {
 		return nil
 	}
 
-	clientConfig, err := deployedCluster.SshConfig(user)
+	clientConfig, err := awsCluster.SshConfig(user)
 	if err != nil {
 		return errors.New("Unable to create ssh config: " + err.Error())
 	}
 
-	for _, nodeInfo := range deployedCluster.NodeInfos {
+	for _, nodeInfo := range awsCluster.NodeInfos {
 		address := nodeInfo.PublicDnsName + ":22"
 		scpClient := common.NewSshClient(address, clientConfig, "")
-		for _, deployFile := range deployedCluster.Deployment.Files {
+		for _, deployFile := range ecsDeployer.Deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
 			// in the same connection
 			location, ok := uploadedFiles[deployFile.FileId]
@@ -701,50 +532,37 @@ func uploadFiles(user string, ec2Svc *ec2.EC2, uploadedFiles map[string]string, 
 	return nil
 }
 
-func CreateKeypair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	keyPairParams := &ec2.CreateKeyPairInput{
-		KeyName: aws.String(deployedCluster.KeyName()),
-	}
-
-	keyOutput, keyErr := ec2Svc.CreateKeyPair(keyPairParams)
-	if keyErr != nil {
-		return errors.New("Unable to create key pair: " + keyErr.Error())
-	}
-
-	deployedCluster.KeyPair = keyOutput
-
-	return nil
-}
-
-func setupEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster, images map[string]string) error {
-	log := deployedCluster.Logger
-	if err := CreateKeypair(ec2Svc, deployedCluster); err != nil {
+func setupEC2(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster, images map[string]string) error {
+	log := awsCluster.Logger
+	if keyOutput, err := aws.CreateKeypair(ec2Svc, awsCluster.KeyName()); err != nil {
 		return err
+	} else {
+		awsCluster.keyOutput = keyOutput
 	}
 
 	userData := base64.StdEncoding.EncodeToString([]byte(
 		fmt.Sprintf(`#!/bin/bash
 echo ECS_CLUSTER=%s >> /etc/ecs/ecs.config
 echo manual > /etc/weave/scope.override
-weave launch`, deployedCluster.Deployment.Name)))
+weave launch`, awsCluster.Name)))
 
 	associatePublic := true
-	for _, node := range deployedCluster.Deployment.ClusterDefinition.Nodes {
+	for _, node := range ecsDeployer.Deployment.ClusterDefinition.Nodes {
 		runResult, runErr := ec2Svc.RunInstances(&ec2.RunInstancesInput{
-			KeyName: aws.String(*deployedCluster.KeyPair.KeyName),
-			ImageId: aws.String(images[deployedCluster.Deployment.Region]),
+			KeyName: aws.String(*awsCluster.KeyPair.KeyName),
+			ImageId: aws.String(images[awsCluster.Region]),
 			NetworkInterfaces: []*ec2.InstanceNetworkInterfaceSpecification{
 				&ec2.InstanceNetworkInterfaceSpecification{
 					AssociatePublicIpAddress: &associatePublic,
 					DeleteOnTermination:      &associatePublic,
 					DeviceIndex:              aws.Int64(0),
-					Groups:                   []*string{&deployedCluster.SecurityGroupId},
-					SubnetId:                 aws.String(deployedCluster.SubnetId),
+					Groups:                   []*string{&awsCluster.SecurityGroupId},
+					SubnetId:                 aws.String(awsCluster.SubnetId),
 				},
 			},
 			InstanceType: aws.String(node.InstanceType),
 			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-				Name: aws.String(deployedCluster.Deployment.Name),
+				Name: aws.String(awsCluster.Name),
 			},
 			MinCount: aws.Int64(1),
 			MaxCount: aws.Int64(1),
@@ -755,28 +573,28 @@ weave launch`, deployedCluster.Deployment.Name)))
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
-		deployedCluster.NodeInfos[node.Id] = &NodeInfo{
+		awsCluster.NodeInfos[node.Id] = &NodeInfo{
 			Instance: runResult.Instances[0],
 		}
-		deployedCluster.InstanceIds = append(deployedCluster.InstanceIds, runResult.Instances[0].InstanceId)
+		awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
 	}
 
 	tags := []*ec2.Tag{
 		{
 			Key:   aws.String("Deployment"),
-			Value: aws.String(deployedCluster.Deployment.Name),
+			Value: aws.String(awsCluster.Name),
 		},
 		{
 			Key:   aws.String("weave:peerGroupName"),
-			Value: aws.String(deployedCluster.Deployment.Name),
+			Value: aws.String(awsCluster.Name),
 		},
 	}
 
-	nodeCount := len(deployedCluster.InstanceIds)
+	nodeCount := len(awsCluster.InstanceIds)
 	log.Infof("Waitng for %d EC2 instances to exist", nodeCount)
 
 	describeInstancesInput := &ec2.DescribeInstancesInput{
-		InstanceIds: deployedCluster.InstanceIds,
+		InstanceIds: awsCluster.InstanceIds,
 	}
 
 	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
@@ -785,12 +603,12 @@ weave launch`, deployedCluster.Deployment.Name)))
 
 	// We are trying to tag before it's running as weave requires the tag to function,
 	// so the earlier we tag the better chance we have to see the cluster ready in ECS
-	if err := createTags(ec2Svc, deployedCluster.InstanceIds, tags); err != nil {
+	if err := createTags(ec2Svc, awsCluster.InstanceIds, tags); err != nil {
 		return errors.New("Unable to create tags for instances: " + err.Error())
 	}
 
 	describeInstanceStatusInput := &ec2.DescribeInstanceStatusInput{
-		InstanceIds: deployedCluster.InstanceIds,
+		InstanceIds: awsCluster.InstanceIds,
 	}
 
 	log.Infof("Waitng for %d EC2 instances to be status ok", nodeCount)
@@ -801,11 +619,12 @@ weave launch`, deployedCluster.Deployment.Name)))
 	return nil
 }
 
-func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) setupIAM(iamSvc *iam.IAM) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := ecsDeployer.DeploymentLog.Logger
 	roleParams := &iam.CreateRoleInput{
 		AssumeRolePolicyDocument: aws.String(trustDocument),
-		RoleName:                 aws.String(deployedCluster.RoleName()),
+		RoleName:                 aws.String(awsCluster.RoleName()),
 	}
 	// create IAM role
 	if _, err := iamSvc.CreateRole(roleParams); err != nil {
@@ -813,16 +632,16 @@ func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	}
 
 	var policyDocument *string
-	if deployedCluster.Deployment.IamRole.PolicyDocument != "" {
-		policyDocument = aws.String(deployedCluster.Deployment.IamRole.PolicyDocument)
+	if ecsDeployer.Deployment.IamRole.PolicyDocument != "" {
+		policyDocument = aws.String(ecsDeployer.Deployment.IamRole.PolicyDocument)
 	} else {
 		policyDocument = aws.String(defaultRolePolicy)
 	}
 
 	// create role policy
 	rolePolicyParams := &iam.PutRolePolicyInput{
-		RoleName:       aws.String(deployedCluster.RoleName()),
-		PolicyName:     aws.String(deployedCluster.PolicyName()),
+		RoleName:       aws.String(awsCluster.RoleName()),
+		PolicyName:     aws.String(awsCluster.PolicyName()),
 		PolicyDocument: policyDocument,
 	}
 
@@ -832,7 +651,7 @@ func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	}
 
 	iamParams := &iam.CreateInstanceProfileInput{
-		InstanceProfileName: aws.String(deployedCluster.Deployment.Name),
+		InstanceProfileName: aws.String(awsCluster.Name),
 	}
 
 	if _, err := iamSvc.CreateInstanceProfile(iamParams); err != nil {
@@ -841,7 +660,7 @@ func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	}
 
 	getProfileInput := &iam.GetInstanceProfileInput{
-		InstanceProfileName: aws.String(deployedCluster.Deployment.Name),
+		InstanceProfileName: aws.String(awsCluster.Name),
 	}
 
 	if err := iamSvc.WaitUntilInstanceProfileExists(getProfileInput); err != nil {
@@ -849,8 +668,8 @@ func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	}
 
 	roleInstanceProfileParams := &iam.AddRoleToInstanceProfileInput{
-		InstanceProfileName: aws.String(deployedCluster.Deployment.Name),
-		RoleName:            aws.String(deployedCluster.RoleName()),
+		InstanceProfileName: aws.String(awsCluster.Name),
+		RoleName:            aws.String(awsCluster.RoleName()),
 	}
 
 	if _, err := iamSvc.AddRoleToInstanceProfile(roleInstanceProfileParams); err != nil {
@@ -862,7 +681,7 @@ func setupIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 }
 
 /*
-func setupAutoScaling(deployment *apis.Deployment, sess *session.Session, deployedCluster *DeployedCluster) error {
+func setupAutoScaling(deployment *apis.Deployment, sess *session.Session, awsCluster *hpaws.AWSCluster) error {
 	svc := autoscaling.New(sess)
 
 	userData := base64.StdEncoding.EncodeToString([]byte(
@@ -881,7 +700,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		InstanceType: aws.String("t2.medium"),
 		KeyName:      aws.String(deployment.Name),
 		SecurityGroups: []*string{
-			&deployedCluster.SecurityGroupId,
+			&awsCluster.SecurityGroupId,
 		},
 		UserData: aws.String(userData),
 	}
@@ -898,7 +717,7 @@ echo ECS_CLUSTER=` + deployment.Name + " >> /etc/ecs/ecs.config"))
 		DefaultCooldown:         aws.Int64(1),
 		DesiredCapacity:         aws.Int64(deployment.Scale),
 		LaunchConfigurationName: aws.String(deployment.Name),
-		VPCZoneIdentifier:       aws.String(deployedCluster.SubnetId),
+		VPCZoneIdentifier:       aws.String(awsCluster.SubnetId),
 	}
 
 	if _, err = svc.CreateAutoScalingGroup(autoScalingGroupParams); err != nil {
@@ -925,13 +744,14 @@ func Max(x, y int) int {
 	return y
 }
 
-func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) startService(mapping *apis.NodeMapping, ecsSvc *ecs.ECS) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := awsCluster.DeploymentLog.Logger
 	serviceInput := &ecs.CreateServiceInput{
 		DesiredCount:   aws.Int64(int64(1)),
 		ServiceName:    aws.String(mapping.Service()),
 		TaskDefinition: aws.String(mapping.Task),
-		Cluster:        aws.String(deployedCluster.Deployment.Name),
+		Cluster:        aws.String(awsCluster.Name),
 		PlacementConstraints: []*ecs.PlacementConstraint{
 			{
 				Expression: aws.String(fmt.Sprintf("attribute:imageId == %s", mapping.ImageIdAttribute())),
@@ -948,21 +768,22 @@ func startService(deployedCluster *DeployedCluster, mapping *apis.NodeMapping, e
 	return nil
 }
 
-func createServices(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	for _, mapping := range deployedCluster.Deployment.NodeMapping {
-		startService(deployedCluster, &mapping, ecsSvc)
+func (ecsDeployer *ECSDeployer) createServices(ecsSvc *ecs.ECS, awsCluster *hpaws.AWSCluster) error {
+	for _, mapping := range ecsDeployer.Deployment.NodeMapping {
+		startService(awsCluster, &mapping, ecsSvc)
 	}
 
 	return nil
 }
 
-func waitUntilECSClusterReady(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) waitUntilECSClusterReady(ecsSvc *ecs.ECS) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := awsCluster.DeploymentLog.Logger
 	// Wait for ECS instances to be ready
 	clusterReady := false
-	totalCount := int64(len(deployedCluster.Deployment.ClusterDefinition.Nodes))
+	totalCount := int64(len(ecsDeployer.Deployment.ClusterDefinition.Nodes))
 	describeClustersInput := &ecs.DescribeClustersInput{
-		Clusters: []*string{&deployedCluster.Deployment.Name},
+		Clusters: []*string{&awsCluster.Name},
 	}
 
 	for !clusterReady {
@@ -986,11 +807,12 @@ func waitUntilECSClusterReady(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster)
 	return nil
 }
 
-func populatePublicDnsNames(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) populatePublicDnsNames(ec2Svc *ec2.EC2) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := awsCluster.DeploymentLog.Logger
 	// We need to describe instances again to obtain the PublicDnsAddresses for ssh.
 	describeInstanceOutput, err := ec2Svc.DescribeInstances(&ec2.DescribeInstancesInput{
-		InstanceIds: deployedCluster.InstanceIds,
+		InstanceIds: awsCluster.InstanceIds,
 	})
 	if err != nil {
 		return errors.New("Unable to describe instances: " + err.Error())
@@ -999,7 +821,7 @@ func populatePublicDnsNames(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) e
 	for _, reservation := range describeInstanceOutput.Reservations {
 		for _, instance := range reservation.Instances {
 			if instance.PublicDnsName != nil && *instance.PublicDnsName != "" {
-				for nodeId, nodeInfo := range deployedCluster.NodeInfos {
+				for nodeId, nodeInfo := range awsCluster.NodeInfos {
 					if *nodeInfo.Instance.InstanceId == *instance.InstanceId {
 						log.Infof("Assigning public dns name %s to node %d",
 							*instance.PublicDnsName, nodeId)
@@ -1014,10 +836,10 @@ func populatePublicDnsNames(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) e
 	return nil
 }
 
-func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func (ecsDeployer *ECSDeployer) setupInstanceAttribute(ecsSvc *ecs.ECS) error {
 	var containerInstances []*string
 	listInstancesInput := &ecs.ListContainerInstancesInput{
-		Cluster: aws.String(deployedCluster.Deployment.Name),
+		Cluster: aws.String(awsCluster.Name),
 	}
 
 	listInstancesOutput, err := ecsSvc.ListContainerInstances(listInstancesInput)
@@ -1029,7 +851,7 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 	containerInstances = listInstancesOutput.ContainerInstanceArns
 
 	describeInstancesInput := &ecs.DescribeContainerInstancesInput{
-		Cluster:            aws.String(deployedCluster.Deployment.Name),
+		Cluster:            aws.String(awsCluster.Name),
 		ContainerInstances: containerInstances,
 	}
 
@@ -1040,7 +862,7 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 	}
 
 	for _, instance := range describeInstancesOutput.ContainerInstances {
-		for _, nodeInfo := range deployedCluster.NodeInfos {
+		for _, nodeInfo := range awsCluster.NodeInfos {
 			if *instance.Ec2InstanceId == *nodeInfo.Instance.InstanceId {
 				nodeInfo.Arn = *instance.ContainerInstanceArn
 				break
@@ -1048,8 +870,8 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 		}
 	}
 
-	for _, mapping := range deployedCluster.Deployment.NodeMapping {
-		nodeInfo, ok := deployedCluster.NodeInfos[mapping.Id]
+	for _, mapping := range ecsDeployer.Deployment.NodeMapping {
+		nodeInfo, ok := awsCluster.NodeInfos[mapping.Id]
 		if !ok {
 			return fmt.Errorf("Unable to find Node id %d in instance map", mapping.Id)
 		}
@@ -1063,7 +885,7 @@ func setupInstanceAttribute(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) e
 					Value:      aws.String(mapping.ImageIdAttribute()),
 				},
 			},
-			Cluster: aws.String(deployedCluster.Deployment.Name),
+			Cluster: aws.String(awsCluster.Name),
 		}
 
 		_, err := ecsSvc.PutAttributes(params)
@@ -1129,35 +951,35 @@ func setupAWSLogsGroup(sess *session.Session, deployment *apis.Deployment) error
 }
 
 func (ecsDeployer *ECSDeployer) SetupEC2Infra(user string, uploadedFiles map[string]string, ec2Svc *ec2.EC2, iamSvc *iam.IAM, images map[string]string) error {
-	deployedCluster := ecsDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+	awsCluster := ecsDeployer.AWSCluster
+	log := awsCluster.DeploymentLog.Logger
 
 	log.Infof("Setting up IAM Role")
-	if err := setupIAM(iamSvc, deployedCluster); err != nil {
+	if err := setupIAM(iamSvc, awsCluster); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to setup IAM: " + err.Error())
 	}
 
 	log.Infof("Setting up Network")
-	if err := setupNetwork(ec2Svc, deployedCluster); err != nil {
+	if err := setupNetwork(ec2Svc, awsCluster); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to setup Network: " + err.Error())
 	}
 
 	log.Infof("Launching EC2 instances")
-	if err := setupEC2(ec2Svc, deployedCluster, images); err != nil {
+	if err := setupEC2(ec2Svc, awsCluster, images); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
 	log.Infof("Populating public dns names")
-	if err := populatePublicDnsNames(ec2Svc, deployedCluster); err != nil {
+	if err := populatePublicDnsNames(ec2Svc, awsCluster); err != nil {
 		ecsDeployer.DeleteDeployment()
 		return errors.New("Unable to populate public dns names: " + err.Error())
 	}
 
 	log.Infof("Uploading files to EC2 Instances")
-	if err := uploadFiles(user, ec2Svc, uploadedFiles, deployedCluster); err != nil {
+	if err := uploadFiles(user, ec2Svc, uploadedFiles, awsCluster); err != nil {
 		return errors.New("Unable to upload files to EC2: " + err.Error())
 	}
 
@@ -1169,11 +991,11 @@ func isRegionValid(region string, images map[string]string) bool {
 	return ok
 }
 
-func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func stopECSTasks(svc *ecs.ECS, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	errMsg := false
 	params := &ecs.ListTasksInput{
-		Cluster: aws.String(deployedCluster.Name),
+		Cluster: aws.String(awsCluster.Name),
 	}
 	resp, err := svc.ListTasks(params)
 	if err != nil {
@@ -1183,7 +1005,7 @@ func stopECSTasks(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 
 	for _, task := range resp.TaskArns {
 		stopTaskParams := &ecs.StopTaskInput{
-			Cluster: aws.String(deployedCluster.Name),
+			Cluster: aws.String(awsCluster.Name),
 			Task:    task,
 			Reason:  aws.String("Gracefully stop by hyperpilot/deployer."),
 		}
@@ -1228,16 +1050,17 @@ func deleteECSService(svc *ecs.ECS, nodemapping *apis.NodeMapping, cluster strin
 	return nil
 }
 
-func stopECSServices(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func (ecsDeployer *ECSDeployer) stopECSServices(svc *ecs.ECS) error {
+	awsCluster := ecsDeployer.AWSCluster
+	log := awsCluster.DeploymentLog.Logger
 	errMsg := false
-	for _, nodemapping := range deployedCluster.Deployment.NodeMapping {
-		if err := updateECSService(svc, &nodemapping, deployedCluster.Name, 0); err != nil {
+	for _, nodemapping := range awsCluster.NodeMapping {
+		if err := updateECSService(svc, &nodemapping, awsCluster.Name, 0); err != nil {
 			errMsg = true
 			log.Warningf("Unable to update ECS service service %s to 0:\nMessage:%v\n", nodemapping.Service(), err.Error())
 		}
 
-		if err := deleteECSService(svc, &nodemapping, deployedCluster.Name); err != nil {
+		if err := deleteECSService(svc, &nodemapping, awsCluster.Name); err != nil {
 			errMsg = true
 			log.Warningf("Unable to delete ECS service (%s):\nMessage:%v\n", nodemapping.Service(), err.Error())
 		}
@@ -1249,12 +1072,12 @@ func stopECSServices(svc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func deleteTaskDefinitions(ecsSvc *ecs.ECS, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	var tasks []*string
 	var errBool bool
 
-	for _, taskDefinition := range deployedCluster.Deployment.TaskDefinitions {
+	for _, taskDefinition := range awsCluster.TaskDefinitions {
 		params := &ecs.DescribeTaskDefinitionInput{
 			TaskDefinition: taskDefinition.Family,
 		}
@@ -1281,8 +1104,8 @@ func deleteTaskDefinitions(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) er
 	return nil
 }
 
-func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func deleteIAM(iamSvc *iam.IAM, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	// NOTE For now (2016/12/28), we don't know how to handle the error of request timeout from AWS SDK.
 	// Ignore all the errors and log them as error messages into log file. deleteIAM has different severity,
 	//in contrast to other functions. Since the error of deleteIAM causes next time deployment's failure .
@@ -1291,18 +1114,18 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 
 	// remove role from instance profile
 	roleInstanceProfileParam := &iam.RemoveRoleFromInstanceProfileInput{
-		InstanceProfileName: aws.String(deployedCluster.Name),
-		RoleName:            aws.String(deployedCluster.RoleName()),
+		InstanceProfileName: aws.String(awsCluster.Name),
+		RoleName:            aws.String(awsCluster.RoleName()),
 	}
 	if _, err := iamSvc.RemoveRoleFromInstanceProfile(roleInstanceProfileParam); err != nil {
 		log.Errorf("Unable to delete role %s from instance profile: %s\n",
-			deployedCluster.RoleName(), err.Error())
+			awsCluster.RoleName(), err.Error())
 		errBool = true
 	}
 
 	// delete instance profile
 	instanceProfile := &iam.DeleteInstanceProfileInput{
-		InstanceProfileName: aws.String(deployedCluster.Name),
+		InstanceProfileName: aws.String(awsCluster.Name),
 	}
 	if _, err := iamSvc.DeleteInstanceProfile(instanceProfile); err != nil {
 		log.Errorf("Unable to delete instance profile: %s\n", err.Error())
@@ -1311,8 +1134,8 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 
 	// delete role policy
 	rolePolicyParams := &iam.DeleteRolePolicyInput{
-		PolicyName: aws.String(deployedCluster.PolicyName()),
-		RoleName:   aws.String(deployedCluster.RoleName()),
+		PolicyName: aws.String(awsCluster.PolicyName()),
+		RoleName:   aws.String(awsCluster.RoleName()),
 	}
 	if _, err := iamSvc.DeleteRolePolicy(rolePolicyParams); err != nil {
 		log.Errorf("Unable to delete role policy IAM role: %s\n", err.Error())
@@ -1321,7 +1144,7 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 
 	// delete role
 	roleParams := &iam.DeleteRoleInput{
-		RoleName: aws.String(deployedCluster.RoleName()),
+		RoleName: aws.String(awsCluster.RoleName()),
 	}
 	if _, err := iamSvc.DeleteRole(roleParams); err != nil {
 		log.Errorf("Unable to delete IAM role: %s", err.Error())
@@ -1335,9 +1158,9 @@ func deleteIAM(iamSvc *iam.IAM, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func DeleteKeyPair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func DeleteKeyPair(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	params := &ec2.DeleteKeyPairInput{
-		KeyName: aws.String(deployedCluster.KeyName()),
+		KeyName: aws.String(awsCluster.KeyName()),
 	}
 	if _, err := ec2Svc.DeleteKeyPair(params); err != nil {
 		return fmt.Errorf("Unable to delete key pair: %s", err.Error())
@@ -1345,15 +1168,15 @@ func DeleteKeyPair(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func deleteSecurityGroup(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
 		Filters: []*ec2.Filter{
 			{
 				Name: aws.String("group-name"),
 				Values: []*string{
-					aws.String(deployedCluster.Name),
+					aws.String(awsCluster.Name),
 				},
 			},
 		},
@@ -1381,8 +1204,8 @@ func deleteSecurityGroup(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) erro
 	return nil
 }
 
-func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func deleteSubnet(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	errBool := false
 	params := &ec2.DescribeTagsInput{
 		Filters: []*ec2.Filter{
@@ -1395,7 +1218,7 @@ func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 			{
 				Name: aws.String("tag:Name"),
 				Values: []*string{
-					aws.String(deployedCluster.SubnetName()),
+					aws.String(awsCluster.SubnetName()),
 				},
 			},
 		},
@@ -1424,8 +1247,8 @@ func deleteSubnet(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	if deployedCluster.VpcId == "" {
+func checkVPC(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
+	if awsCluster.VpcId == "" {
 		params := &ec2.DescribeTagsInput{
 			Filters: []*ec2.Filter{
 				{
@@ -1437,7 +1260,7 @@ func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 				{
 					Name: aws.String("tag:Name"),
 					Values: []*string{
-						aws.String(deployedCluster.VPCName()),
+						aws.String(awsCluster.VPCName()),
 					},
 				},
 			},
@@ -1448,13 +1271,13 @@ func checkVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 		} else if len(resp.Tags) <= 0 {
 			return errors.New("Can not find VPC")
 		}
-		deployedCluster.VpcId = *resp.Tags[0].ResourceId
+		awsCluster.VpcId = *resp.Tags[0].ResourceId
 	}
 	return nil
 }
 
-func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
-	log := deployedCluster.Logger
+func deleteInternetGateway(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
+	log := awsCluster.Logger
 	params := &ec2.DescribeTagsInput{
 		Filters: []*ec2.Filter{
 			{
@@ -1466,7 +1289,7 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 			{
 				Name: aws.String("tag:Name"),
 				Values: []*string{
-					aws.String(deployedCluster.Name),
+					aws.String(awsCluster.Name),
 				},
 			},
 		},
@@ -1476,11 +1299,11 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 	if err != nil {
 		log.Warningf("Unable to describe tags: %s\n", err.Error())
 	} else if len(resp.Tags) == 0 {
-		log.Warningf("Unable to find the internet gateway (%s)\n", deployedCluster.Name)
+		log.Warningf("Unable to find the internet gateway (%s)\n", awsCluster.Name)
 	} else {
 		detachGatewayParams := &ec2.DetachInternetGatewayInput{
 			InternetGatewayId: resp.Tags[0].ResourceId,
-			VpcId:             aws.String(deployedCluster.VpcId),
+			VpcId:             aws.String(awsCluster.VpcId),
 		}
 		if _, err := ec2Svc.DetachInternetGateway(detachGatewayParams); err != nil {
 			log.Warningf("Unable to detach InternetGateway: %s\n", err.Error())
@@ -1497,9 +1320,9 @@ func deleteInternetGateway(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) er
 	return nil
 }
 
-func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func deleteVPC(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	params := &ec2.DeleteVpcInput{
-		VpcId: aws.String(deployedCluster.VpcId),
+		VpcId: aws.String(awsCluster.VpcId),
 	}
 
 	if _, err := ec2Svc.DeleteVpc(params); err != nil {
@@ -1508,10 +1331,10 @@ func deleteVPC(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
+func deleteEC2(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	var instanceIds []*string
 
-	for _, id := range deployedCluster.InstanceIds {
+	for _, id := range awsCluster.InstanceIds {
 		instanceIds = append(instanceIds, id)
 	}
 
@@ -1533,9 +1356,9 @@ func deleteEC2(ec2Svc *ec2.EC2, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
+func deleteCluster(ecsSvc *ecs.ECS, awsCluster *hpaws.AWSCluster) error {
 	params := &ecs.DeleteClusterInput{
-		Cluster: aws.String(deployedCluster.Name),
+		Cluster: aws.String(awsCluster.Name),
 	}
 
 	if _, err := ecsSvc.DeleteCluster(params); err != nil {
@@ -1545,8 +1368,8 @@ func deleteCluster(ecsSvc *ecs.ECS, deployedCluster *DeployedCluster) error {
 	return nil
 }
 
-func GetClusterInfo(awsProfile *AWSProfile, deployedCluster *DeployedCluster) (*ClusterInfo, error) {
-	sess, sessionErr := CreateSession(awsProfile, deployedCluster.Deployment)
+func GetClusterInfo(awsProfile *AWSProfile, awsCluster *hpaws.AWSCluster) (*ClusterInfo, error) {
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Deployment.Region)
 	if sessionErr != nil {
 		return nil, fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
 	}
@@ -1554,7 +1377,7 @@ func GetClusterInfo(awsProfile *AWSProfile, deployedCluster *DeployedCluster) (*
 	ec2Svc := ec2.New(sess)
 	ecsSvc := ecs.New(sess)
 
-	deploymentName := deployedCluster.Deployment.Name
+	deploymentName := awsCluster.Deployment.Name
 	listInstancesInput := &ecs.ListContainerInstancesInput{
 		Cluster: aws.String(deploymentName),
 	}
@@ -1614,4 +1437,8 @@ func GetClusterInfo(awsProfile *AWSProfile, deployedCluster *DeployedCluster) (*
 	}
 
 	return clusterInfo, nil
+}
+
+func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
+	return nil
 }

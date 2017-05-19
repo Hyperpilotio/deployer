@@ -8,68 +8,34 @@ import (
 )
 
 type Scheduler struct {
-	Name      string
-	StartTime time.Duration
-	ExecFunc  func()
-	Quit      chan bool
-	Mutex     sync.Mutex
+	timer *time.Timer
+	mutex sync.Mutex
 }
 
-func NewScheduler(deploymentName string, startTime time.Duration, fn func()) (*Scheduler, error) {
-	scheduler := &Scheduler{
-		Name:      deploymentName,
-		StartTime: startTime,
-		ExecFunc:  fn,
-		Quit:      make(chan bool),
-	}
-
-	go func() {
-		scheduler.start()
-	}()
-
-	return scheduler, nil
-}
-
-func (scheduler *Scheduler) start() {
-	scheduler.Quit = make(chan bool)
-	c := make(chan bool, 1)
-	go func() {
-		for {
-			select {
-			case <-c:
-				scheduler.ExecFunc()
-				return
-			case <-scheduler.Quit:
-				return
-			default:
-				time.Sleep(time.Second * 1)
-			}
-		}
-	}()
-
-	select {
-	case <-time.After(scheduler.StartTime):
-		glog.Infof("Run %s scheduler", scheduler.Name)
-		c <- true
+func NewScheduler(duration time.Duration, f func()) *Scheduler {
+	return &Scheduler{
+		timer: time.AfterFunc(duration, f),
 	}
 }
+func (scheduler *Scheduler) Reset(duration time.Duration) bool {
+	scheduler.mutex.Lock()
+	defer scheduler.mutex.Unlock()
 
-func (scheduler *Scheduler) Reset(newTime time.Duration) {
-	scheduler.Mutex.Lock()
-	defer scheduler.Mutex.Unlock()
+	if scheduler.timer == nil || !scheduler.timer.Stop() {
+		glog.Warningf("Scheduler already fired, skipping reset")
+		return false
+	}
 
-	scheduler.StartTime = newTime
-	scheduler.Quit <- true
-
-	go func() {
-		scheduler.start()
-	}()
+	return scheduler.timer.Reset(duration)
 }
 
 func (scheduler *Scheduler) Stop() {
-	scheduler.Mutex.Lock()
-	defer scheduler.Mutex.Unlock()
+	scheduler.mutex.Lock()
+	defer scheduler.mutex.Unlock()
 
-	glog.Infof("Stoping %s scheduler", scheduler.Name)
-	scheduler.Quit <- true
+	if scheduler.timer == nil || !scheduler.timer.Stop() {
+		glog.Warningf("Scheduler already fired, skipping reset")
+	}
+
+	scheduler.timer = nil
 }

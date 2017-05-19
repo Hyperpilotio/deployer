@@ -19,10 +19,23 @@ make build
 make dev-test
 ```
 
-# Use 
+# Use
 ```{shell}
 cd $GOPATH/src/github.com/hyperpilotio/deployer
-make init 
-go build 
+make init
+go build
 ./deployer -v 1 --config documents/template.config
 ```
+
+API Server
+-----------
+  - Deployment state (Created, Status)
+  - Call Deployer for cluster manager specific actions
+
+AWS
+-----------
+  - Handles launching EC2 servers for running a cluster manager
+
+Clustermanagers
+-----------
+  - Handles all cluster manager specific logic

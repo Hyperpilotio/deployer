@@ -11,7 +11,7 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/awsecs"
+	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
@@ -35,41 +35,21 @@ import (
 var publicPortType = 1
 
 // NewDeployer return the K8S of Deployer
-func NewDeployer(config *viper.Viper, awsProfiles map[string]*awsecs.AWSProfile,
-	deployment *apis.Deployment) (*K8SDeployer, error) {
-	deployedCluster := awsecs.NewDeployedCluster(deployment)
-	deployer := &K8SDeployer{
-		Config: config,
-		DeploymentInfo: &awsecs.DeploymentInfo{
-			AwsInfo: deployedCluster,
-			K8sInfo: &awsecs.KubernetesDeployment{},
-			Created: time.Now(),
-			State:   awsecs.CREATING,
-		},
-	}
-
-	deployer.mutex.Lock()
-	defer deployer.mutex.Unlock()
-
-	awsProfile, ok := awsProfiles[deployment.UserId]
-	if !ok {
-		return nil, errors.New("Unable to find aws profile for user: " + deployment.UserId)
-	}
-	deployer.DeploymentInfo.AwsProfile = awsProfile
-
+func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*K8SDeployer, error) {
 	log, err := log.NewLogger(config, deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	deployer.DeploymentLog = log
-	deployer.DeploymentInfo.AwsInfo.Logger = log.Logger
+	awsCluster := hpaws.NewAWSCluster(deployment)
+	deployer := &K8SDeployer{
+		Config:        config,
+		AWSCluster:    awsCluster,
+		Deployment:    deployment,
+		DeploymentLog: log,
+	}
 
 	return deployer, nil
-}
-
-func (k8sDeployer *K8SDeployer) GetDeploymentInfo() *awsecs.DeploymentInfo {
-	return k8sDeployer.DeploymentInfo
 }
 
 func (k8sDeployer *K8SDeployer) GetLog() *log.DeploymentLog {
@@ -81,7 +61,7 @@ func (k8sDeployer *K8SDeployer) GetScheduler() *job.Scheduler {
 }
 
 func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {
-	return k8sDeployer.DeploymentInfo.K8sInfo.KubeConfigPath
+	return k8sDeployer.KubeConfigPath
 }
 
 func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string) error {
@@ -89,7 +69,7 @@ func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string)
 		k8sDeployer.Scheduler.Stop()
 	}
 
-	deployment := k8sDeployer.DeploymentInfo.AwsInfo.Deployment
+	deployment := k8sDeployer.Deployment
 
 	scheduleRunTime := ""
 	if deployment.ShutDownTime != "" {
@@ -125,19 +105,17 @@ func (k8sDeployer *K8SDeployer) NewShutDownScheduler(custScheduleRunTime string)
 }
 
 // CreateDeployment start a deployment
-func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string) error {
+func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
 	if err := k8sDeployer.deployCluster(uploadedFiles); err != nil {
 		return errors.New("Unable to deploy kubernetes: " + err.Error())
 	}
 
-	/*
-		response := &CreateDeploymentResponse{
-			Name:      deployedCluster.Deployment.Name,
-			Endpoints: k8sDeployer.Endpoints,
-			BastionIp: k8sDeployer.BastionIp,
-			MasterIp:  k8sDeployer.MasterIp,
-		}
-	*/
+	response := &CreateDeploymentResponse{
+		Name:      deployedCluster.Deployment.Name,
+		Endpoints: k8sDeployer.Endpoints,
+		BastionIp: k8sDeployer.BastionIp,
+		MasterIp:  k8sDeployer.MasterIp,
+	}
 
 	return nil
 }
@@ -282,19 +260,20 @@ func (k8sDeployer *K8SDeployer) getExistingNamespaces(k8sClient *k8s.Clientset) 
 }
 
 func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) error {
-	deploymentInfo := k8sDeployer.DeploymentInfo
-	awsProfile := deploymentInfo.AwsProfile
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
 
-	deployedCluster := deploymentInfo.AwsInfo
-	sess, sessionErr := awsecs.CreateSession(awsProfile, deployedCluster.Deployment)
+	sess, sessionErr := awsecs.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
 		return errors.New("Unable to create session: " + sessionErr.Error())
 	}
 
 	ec2Svc := ec2.New(sess)
 
-	if err := awsecs.CreateKeypair(ec2Svc, deployedCluster); err != nil {
+	if keyOutput, err := hpaws.CreateKeypair(ec2Svc, awsCluster.KeyName()); err != nil {
 		return errors.New("Unable to create key pair: " + err.Error())
+	} else {
+		awsCluster.KeyPair = keyOutput
 	}
 
 	if err := k8sDeployer.deployKubernetes(sess); err != nil {
@@ -310,7 +289,7 @@ func (k8sDeployer *K8SDeployer) deployCluster(uploadedFiles map[string]string) e
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
-	k8sClient, err := k8s.NewForConfig(deploymentInfo.K8sInfo.KubeConfig)
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
@@ -357,13 +336,12 @@ func (k8sDeployer *K8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset
 }
 
 func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
-	log := deployedCluster.Logger
+	log := k8sDeployer.DeploymentLog.Logger
+	awsCluster := k8sDeployer.AWSCluster
 
 	cfSvc := cloudformation.New(sess)
 	params := &cloudformation.CreateStackInput{
-		StackName: aws.String(deployedCluster.StackName()),
+		StackName: aws.String(awsCluster.StackName()),
 		Capabilities: []*string{
 			aws.String("CAPABILITY_NAMED_IAM"),
 		},
@@ -374,7 +352,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 			},
 			{
 				ParameterKey:   aws.String("KeyName"),
-				ParameterValue: aws.String(deployedCluster.KeyName()),
+				ParameterValue: aws.String(awsCluster.KeyName()),
 			},
 			{
 				ParameterKey:   aws.String("NetworkingProvider"),
@@ -384,12 +362,12 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 				ParameterKey: aws.String("K8sNodeCapacity"),
 				ParameterValue: aws.String(
 					strconv.Itoa(
-						len(deployedCluster.Deployment.ClusterDefinition.Nodes))),
+						len(k8sDeployer.Deployment.ClusterDefinition.Nodes))),
 			},
 			{
 				ParameterKey: aws.String("InstanceType"),
 				ParameterValue: aws.String(
-					deployedCluster.Deployment.ClusterDefinition.Nodes[0].InstanceType),
+					k8sDeployer.Deployment.ClusterDefinition.Nodes[0].InstanceType),
 			},
 			{
 				ParameterKey:   aws.String("DiskSizeGb"),
@@ -415,7 +393,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 		Tags: []*cloudformation.Tag{
 			{
 				Key:   aws.String("deployment"),
-				Value: aws.String(deployedCluster.Deployment.Name),
+				Value: aws.String(awsCluster.Name),
 			},
 		},
 		TemplateURL:      aws.String("https://hyperpilot-snap-collectors.s3.amazonaws.com/kubernetes-cluster-with-new-vpc-1.6.2.template"),
@@ -427,7 +405,7 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 	}
 
 	describeStacksInput := &cloudformation.DescribeStacksInput{
-		StackName: aws.String(deployedCluster.StackName()),
+		StackName: aws.String(awsCluster.StackName()),
 	}
 
 	log.Info("Waiting until stack is completed...")
@@ -471,19 +449,19 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 		return errors.New("Unexpected ssh proxy command format: " + sshProxyCommand)
 	}
 
-	k8sDeployment.BastionIp = addresses[0]
-	k8sDeployment.MasterIp = addresses[1]
+	k8sDeployer.BastionIp = addresses[0]
+	k8sDeployer.MasterIp = addresses[1]
 
-	if err := DownloadKubeConfig(k8sDeployer.DeploymentInfo); err != nil {
+	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return errors.New("Unable to download kubeconfig: " + err.Error())
 	}
 
-	log.Infof("Downloaded kube config at %s", k8sDeployment.KubeConfigPath)
+	log.Infof("Downloaded kube config at %s", k8sDeployer.KubeConfigPath)
 
-	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath); err != nil {
+	if kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployer.KubeConfigPath); err != nil {
 		return errors.New("Unable to parse kube config: " + err.Error())
 	} else {
-		k8sDeployment.KubeConfig = kubeConfig
+		k8sDeployer.KubeConfig = kubeConfig
 	}
 
 	if err := k8sDeployer.UploadSshKeyToBastion(); err != nil {
@@ -494,8 +472,8 @@ func (k8sDeployer *K8SDeployer) deployKubernetes(sess *session.Session) error {
 }
 
 func (k8sDeployer *K8SDeployer) deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+	awsCluster := k8sDeployer.awsCluster
+	log := k8sDeployer.DeploymentLog.Logger
 
 	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
@@ -533,8 +511,8 @@ func (k8sDeployer *K8SDeployer) deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *stri
 }
 
 func (k8sDeployer *K8SDeployer) waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string, timeout time.Duration) error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	log := deployedCluster.Logger
+	awsCluster := k8sDeployer.awsCluster
+	log := k8sDeployer.DeploymentLog.Logger
 	c := make(chan bool, 1)
 	quit := make(chan bool)
 	go func() {
@@ -1474,11 +1452,10 @@ func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) 
 }
 
 // DownloadKubeConfig is Use SSHProxyCommand download k8s master node's kubeconfig
-func DownloadKubeConfig(deploymentInfo *awsecs.DeploymentInfo) error {
-	deployedCluster := deploymentInfo.AwsInfo
-	k8sDeployment := deploymentInfo.K8sInfo
+func (k8sDeployer *K8SDeployer) DownloadKubeConfig() error {
+	awsCluster := k8sDeployer.AWSCluster
 
-	baseDir := deployedCluster.Deployment.Name + "_kubeconfig"
+	baseDir := awsCluster.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
 	kubeconfigFilePath := basePath + "/kubeconfig"
 
@@ -1488,26 +1465,25 @@ func DownloadKubeConfig(deploymentInfo *awsecs.DeploymentInfo) error {
 
 	os.Remove(kubeconfigFilePath)
 
-	clientConfig, clientConfigErr := deployedCluster.SshConfig("ubuntu")
+	clientConfig, clientConfigErr := awsCluster.SshConfig("ubuntu")
 	if clientConfigErr != nil {
 		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
-	sshClient := common.NewSshClient(k8sDeployment.MasterIp+":22", clientConfig, k8sDeployment.BastionIp+":22")
+	sshClient := common.NewSshClient(k8sDeployer.MasterIp+":22", clientConfig, k8sDeployer.BastionIp+":22")
 	if err := sshClient.CopyRemoteFileToLocal("/home/ubuntu/kubeconfig", kubeconfigFilePath); err != nil {
 		return errors.New("Unable to copy kubeconfig file to local: " + err.Error())
 	}
 
-	k8sDeployment.KubeConfigPath = kubeconfigFilePath
+	k8sDeployer.KubeConfigPath = kubeconfigFilePath
 	return nil
 }
 
 // UploadSshKeyToBastion upload sshKey to bastion-host
 func (k8sDeployer *K8SDeployer) UploadSshKeyToBastion() error {
-	deployedCluster := k8sDeployer.DeploymentInfo.AwsInfo
-	k8sDeployment := k8sDeployer.DeploymentInfo.K8sInfo
+	awsCluster := k8sDeployer.AWSCluster
 
-	baseDir := deployedCluster.Deployment.Name + "_sshkey"
+	baseDir := awsCluster.Name + "_sshkey"
 	basePath := "/tmp/" + baseDir
 	sshKeyFilePath := basePath + "/" + deployedCluster.KeyName() + ".pem"
 
@@ -1517,28 +1493,32 @@ func (k8sDeployer *K8SDeployer) UploadSshKeyToBastion() error {
 
 	os.Remove(sshKeyFilePath)
 
-	privateKey := strings.Replace(*deployedCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+	privateKey := strings.Replace(*awsCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
 	if err := ioutil.WriteFile(sshKeyFilePath, []byte(privateKey), 0400); err != nil {
 		return fmt.Errorf("Unable to create %s sshKey file: %s",
-			deployedCluster.Deployment.Name, err.Error())
+			awsCluster.Name, err.Error())
 	}
 
-	clientConfig, err := deployedCluster.SshConfig("ubuntu")
+	clientConfig, err := awsCluster.SshConfig("ubuntu")
 	if err != nil {
 		return errors.New("Unable to create ssh config: " + err.Error())
 	}
 
-	address := k8sDeployment.BastionIp + ":22"
+	address := k8sDeployer.BastionIp + ":22"
 	scpClient := common.NewSshClient(address, clientConfig, "")
 
-	remotePath := "/home/ubuntu/" + deployedCluster.KeyName() + ".pem"
+	remotePath := "/home/ubuntu/" + awsCluster.KeyName() + ".pem"
 	if err := scpClient.CopyLocalFileToRemote(sshKeyFilePath, remotePath); err != nil {
 		errorMsg := fmt.Sprintf("Unable to upload file %s to server %s: %s",
-			deployedCluster.KeyName(), address, err.Error())
+			awsCluster.KeyName(), address, err.Error())
 		return errors.New(errorMsg)
 	}
 
 	return nil
+}
+
+func (k8sDeployer *K8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
+	return k8sDeployer.AWSCluster
 }
 
 // CheckClusterState check kubernetes cluster state is exist
@@ -1571,27 +1551,22 @@ func CheckClusterState(deploymentInfo *awsecs.DeploymentInfo) error {
 	return nil
 }
 
-// ReloadClusterState reload kubernetes cluster state
-func ReloadClusterState(deploymentInfo *awsecs.DeploymentInfo, deployment *awsecs.K8SStoreDeployment) error {
-	deployedCluster := deploymentInfo.AwsInfo
-	deploymentName := deployedCluster.Deployment.Name
+// ReloadClusterState reloads kubernetes cluster state
+func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error {
+	k8sStoreInfo := storeInfo.(StoreInfo)
+	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
+	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
 
-	k8sDeployment := &awsecs.KubernetesDeployment{
-		BastionIp: deployment.BastionIp,
-		MasterIp:  deployment.MasterIp,
-	}
-	deploymentInfo.K8sInfo = k8sDeployment
-
-	if err := DownloadKubeConfig(deploymentInfo); err != nil {
+	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
 
-	glog.Infof("Downloaded %s kube config at %s", deploymentName, k8sDeployment.KubeConfigPath)
-	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployment.KubeConfigPath)
+	glog.Infof("Downloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
+	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeplokyer.KubeConfigPath)
 	if err != nil {
-		return fmt.Errorf("Unable to parse %s kube config: %s", deploymentName, err.Error())
+		return fmt.Errorf("Unable to parse %s kube config: %s", k8sDeployer.AWSCluster.Name, err.Error())
 	}
-	k8sDeployment.KubeConfig = kubeConfig
+	k8sDeployer.KubeConfig = kubeConfig
 
 	return nil
 }
@@ -1635,4 +1610,11 @@ func GetClusterInfo(deploymentInfo *awsecs.DeploymentInfo) (*ClusterInfo, error)
 	}
 
 	return clusterInfo, nil
+}
+
+func (k8sDeployer *k8sDeployer) GetStoreInfo() interface{} {
+	return &StoreInfo{
+		BastionIp: k8sDeployer.BastionIp,
+		MasterIp:  k8sDeployer.MasterIp,
+	}
 }

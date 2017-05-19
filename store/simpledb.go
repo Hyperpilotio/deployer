@@ -12,275 +12,126 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/simpledb"
 	"github.com/golang/glog"
-	"github.com/hyperpilotio/deployer/awsecs"
 	"github.com/spf13/viper"
 )
 
-type DomainType int
-
-// Possible simpledb domain type
-const (
-	DEPLOYMENT = 0
-	AWSPROFILE = 1
-)
-
-func getTypeString(config *viper.Viper, domainType DomainType) string {
-	switch domainType {
-	case DEPLOYMENT:
-		return config.GetString("store.deploymentDomain")
-	case AWSPROFILE:
-		return config.GetString("store.awsProfileDomain")
-	}
-
-	return ""
+func getDomainName(name string, config *viper.Viper) string {
+	return name + config.GetString("store.domainPostfix")
 }
 
 type SimpleDB struct {
-	Region string
-	Config *viper.Viper
-	Sess   *session.Session
+	Name        string
+	domainName  string
+	Region      string
+	Config      *viper.Viper
+	simpledbSvc *simpledb.SimpleDB
 }
 
-func NewSimpleDB(config *viper.Viper) (*SimpleDB, error) {
+func NewSimpleDB(name string, config *viper.Viper) (*SimpleDB, error) {
 	region := strings.ToLower(config.GetString("store.region"))
 	session, err := createSessionByRegion(config, region)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("Unable to create aws session: " + err.Error())
 	}
 
-	domainTypes := []DomainType{DEPLOYMENT, AWSPROFILE}
-	if err := createDomains(session, config, domainTypes); err != nil {
-		return nil, err
+	simpledbSvc := simpledb.New(session)
+	domainName := getDomainName(name, config)
+	if err := createDomain(simpledbSvc, config, domainName); err != nil {
+		return nil, errors.New("Unable to create simpledb domain: " + err.Error())
 	}
 
 	return &SimpleDB{
-		Region: region,
-		Config: config,
-		Sess:   session,
+		Name:        name,
+		Region:      region,
+		Config:      config,
+		simpledbSvc: simpledbSvc,
+		domainName:  domainName,
 	}, nil
 }
 
-func createDomains(sess *session.Session, config *viper.Viper, domainTypes []DomainType) error {
-	simpledbSvc := simpledb.New(sess)
-	for _, domainType := range domainTypes {
-		createDomainInput := &simpledb.CreateDomainInput{
-			DomainName: aws.String(getTypeString(config, domainType)),
-		}
+func createDomain(simpledbSvc *simpledb.SimpleDB, config *viper.Viper, domainName string) error {
+	createDomainInput := &simpledb.CreateDomainInput{
+		DomainName: aws.String(domainName),
+	}
 
-		if _, err := simpledbSvc.CreateDomain(createDomainInput); err != nil {
-			return errors.New("Unable to create simpleDB domain: " + err.Error())
-		}
+	if _, err := simpledbSvc.CreateDomain(createDomainInput); err != nil {
+		return errors.New("Unable to create simpleDB domain: " + err.Error())
 	}
 
 	return nil
 }
 
-func (db *SimpleDB) StoreNewDeployment(deployment *awsecs.StoreDeployment) error {
-	domainName := getTypeString(db.Config, DEPLOYMENT)
-	simpledbSvc := simpledb.New(db.Sess)
-
+func (db *SimpleDB) Store(key string, object interface{}) error {
 	attributes := []*simpledb.ReplaceableAttribute{}
-	recursiveStructField(&attributes, deployment)
+	recursiveStructField(&attributes, object)
 
 	putAttributesInput := &simpledb.PutAttributesInput{
 		Attributes: attributes,
-		DomainName: aws.String(domainName),
-		ItemName:   aws.String(deployment.Name),
+		DomainName: aws.String(db.domainName),
+		ItemName:   aws.String(key),
 	}
 
-	if _, err := simpledbSvc.PutAttributes(putAttributesInput); err != nil {
+	if _, err := db.simpledbSvc.PutAttributes(putAttributesInput); err != nil {
 		return errors.New("Unable to put attributes to simpleDB: " + err.Error())
 	}
 
 	return nil
 }
 
-func (db *SimpleDB) LoadDeployments() ([]*awsecs.StoreDeployment, error) {
-	domainName := getTypeString(db.Config, DEPLOYMENT)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
+func (db *SimpleDB) LoadAll(f func() interface{}) (interface{}, error) {
+	selectExpression := fmt.Sprintf("select * from `%s`", db.domainName)
 	selectInput := &simpledb.SelectInput{
 		SelectExpression: aws.String(selectExpression),
 	}
 
-	deployments := []*awsecs.StoreDeployment{}
-	selectOutput, err := simpledbSvc.Select(selectInput)
+	selectOutput, err := db.simpledbSvc.Select(selectInput)
 	if err != nil {
 		return nil, errors.New("Unable to select data from simpleDB: " + err.Error())
 	}
 
+	items := []interface{}{}
 	for _, item := range selectOutput.Items {
 		getAttributesInput := &simpledb.GetAttributesInput{
-			DomainName: aws.String(domainName),
+			DomainName: aws.String(db.domainName),
 			ItemName:   item.Name,
 		}
 
-		resp, err := simpledbSvc.GetAttributes(getAttributesInput)
+		resp, err := db.simpledbSvc.GetAttributes(getAttributesInput)
 		if err != nil {
 			return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
 		}
 
-		deployment := &awsecs.StoreDeployment{
-			K8SDeployment: &awsecs.K8SStoreDeployment{},
-		}
-		recursiveSetValue(deployment, resp.Attributes)
+		v := f()
+		recursiveSetValue(f, resp.Attributes)
 
-		deployments = append(deployments, deployment)
+		items = append(items, v)
 	}
 
-	return deployments, nil
+	return items, nil
 }
 
-func (db *SimpleDB) DeleteDeployment(deploymentName string) error {
-	domainName := getTypeString(db.Config, DEPLOYMENT)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	selectExpression := fmt.Sprintf("select * from `%s` where itemName()='%s'", domainName, deploymentName)
+func (db *SimpleDB) Delete(key string) error {
+	selectExpression := fmt.Sprintf("select * from `%s` where itemName()='%s'", db.domainName, key)
 	selectInput := &simpledb.SelectInput{
 		SelectExpression: aws.String(selectExpression),
 	}
 
-	selectOutput, err := simpledbSvc.Select(selectInput)
+	selectOutput, err := db.simpledbSvc.Select(selectInput)
 	if err != nil {
 		return errors.New("Unable to select data from simpleDB: " + err.Error())
 	}
 
 	if len(selectOutput.Items) == 0 {
-		return fmt.Errorf("Unable to find %s data from simpleDB...", deploymentName)
+		return fmt.Errorf("Unable to find %s data from simpleDB", key)
 	}
 
 	deleteAttributesInput := &simpledb.DeleteAttributesInput{
-		DomainName: aws.String(domainName),
+		DomainName: aws.String(db.domainName),
 		ItemName:   selectOutput.Items[0].Name,
 	}
 
-	if _, err := simpledbSvc.DeleteAttributes(deleteAttributesInput); err != nil {
-		return fmt.Errorf("Unable to delete %s attributes from simpleDB: %s", deploymentName, err.Error())
-	}
-
-	return nil
-}
-
-func (db *SimpleDB) StoreNewAWSProfile(awsProfile *awsecs.AWSProfile) error {
-	domainName := getTypeString(db.Config, AWSPROFILE)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	attributes := []*simpledb.ReplaceableAttribute{}
-	recursiveStructField(&attributes, awsProfile)
-
-	putAttributesInput := &simpledb.PutAttributesInput{
-		Attributes: attributes,
-		DomainName: aws.String(domainName),
-		ItemName:   aws.String(awsProfile.UserId),
-	}
-
-	if _, err := simpledbSvc.PutAttributes(putAttributesInput); err != nil {
-		return errors.New("Unable to put attributes to simpleDB: " + err.Error())
-	}
-
-	return nil
-}
-
-func (db *SimpleDB) LoadAWSProfiles() ([]*awsecs.AWSProfile, error) {
-	domainName := getTypeString(db.Config, AWSPROFILE)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
-	selectInput := &simpledb.SelectInput{
-		SelectExpression: aws.String(selectExpression),
-	}
-
-	awsProfiles := []*awsecs.AWSProfile{}
-	selectOutput, err := simpledbSvc.Select(selectInput)
-	if err != nil {
-		return nil, errors.New("Unable to select data from simpleDB: " + err.Error())
-	}
-
-	for _, item := range selectOutput.Items {
-		getAttributesInput := &simpledb.GetAttributesInput{
-			DomainName: aws.String(domainName),
-			ItemName:   item.Name,
-		}
-
-		resp, err := simpledbSvc.GetAttributes(getAttributesInput)
-		if err != nil {
-			return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
-		}
-
-		awsProfile := &awsecs.AWSProfile{}
-		recursiveSetValue(awsProfile, resp.Attributes)
-
-		awsProfiles = append(awsProfiles, awsProfile)
-	}
-
-	return awsProfiles, nil
-}
-
-func (db *SimpleDB) LoadAWSProfile(userId string) (*awsecs.AWSProfile, error) {
-	domainName := getTypeString(db.Config, AWSPROFILE)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	selectExpression := fmt.Sprintf("select * from `%s`", domainName)
-	if userId != "" {
-		selectExpression = selectExpression + fmt.Sprintf(" where UserId='%s'", userId)
-	}
-
-	selectInput := &simpledb.SelectInput{
-		SelectExpression: aws.String(selectExpression),
-	}
-
-	awsProfiles := []*awsecs.AWSProfile{}
-	selectOutput, err := simpledbSvc.Select(selectInput)
-	if err != nil {
-		return nil, errors.New("Unable to select data from simpleDB: " + err.Error())
-	}
-
-	for _, item := range selectOutput.Items {
-		getAttributesInput := &simpledb.GetAttributesInput{
-			DomainName: aws.String(domainName),
-			ItemName:   item.Name,
-		}
-
-		resp, err := simpledbSvc.GetAttributes(getAttributesInput)
-		if err != nil {
-			return nil, errors.New("Unable to get attributes from simpleDB: " + err.Error())
-		}
-
-		awsProfile := &awsecs.AWSProfile{}
-		recursiveSetValue(awsProfile, resp.Attributes)
-
-		awsProfiles = append(awsProfiles, awsProfile)
-	}
-
-	return awsProfiles[0], nil
-}
-
-func (db *SimpleDB) DeleteAWSProfile(userId string) error {
-	domainName := getTypeString(db.Config, AWSPROFILE)
-	simpledbSvc := simpledb.New(db.Sess)
-
-	selectExpression := fmt.Sprintf("select * from `%s` where UserId='%s'", domainName, userId)
-	selectInput := &simpledb.SelectInput{
-		SelectExpression: aws.String(selectExpression),
-	}
-
-	selectOutput, err := simpledbSvc.Select(selectInput)
-	if err != nil {
-		return errors.New("Unable to select data from simpleDB: " + err.Error())
-	}
-
-	if len(selectOutput.Items) == 0 {
-		return fmt.Errorf("Unable to find %s data from simpleDB...", userId)
-	}
-
-	deleteAttributesInput := &simpledb.DeleteAttributesInput{
-		DomainName: aws.String(domainName),
-		ItemName:   selectOutput.Items[0].Name,
-	}
-
-	if _, err := simpledbSvc.DeleteAttributes(deleteAttributesInput); err != nil {
-		return fmt.Errorf("Unable to delete %s attributes from simpleDB: %s", userId, err.Error())
+	if _, err := db.simpledbSvc.DeleteAttributes(deleteAttributesInput); err != nil {
+		return fmt.Errorf("Unable to delete %s attributes from simpleDB: %s", key, err.Error())
 	}
 
 	return nil
@@ -297,9 +148,7 @@ func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
 
 		switch field.Kind() {
 		case reflect.Ptr:
-			if fieldName == "K8SDeployment" {
-				recursiveSetValue(field.Interface().(*awsecs.K8SStoreDeployment), attributes)
-			}
+			recursiveSetValue(field.Interface(), attributes)
 		default:
 			attrValue := restoreValue(fieldName, attributes)
 			field.Set(reflect.ValueOf(attrValue))
@@ -323,9 +172,7 @@ func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}
 
 		switch field.Kind() {
 		case reflect.Ptr:
-			if fieldName == "K8SDeployment" {
-				recursiveStructField(attrs, field.Interface().(*awsecs.K8SStoreDeployment))
-			}
+			recursiveStructField(attrs, field.Interface())
 		default:
 			appendAttributes(attrs, fieldName, fieldValue)
 		}
