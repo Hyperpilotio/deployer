@@ -9,7 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -311,8 +310,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 
-		daemonsGroup.GET("/:deployment/tasks/:task/node_address", server.getNodeAddressForTask)
-		daemonsGroup.GET("/:deployment/containers/:container/url", server.getContainerUrl)
+		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -323,53 +321,6 @@ func (server *Server) StartServer() error {
 	}
 
 	return router.Run(":" + server.Config.GetString("port"))
-}
-
-func (server *Server) getNodeAddressForTask(c *gin.Context) {
-	deploymentName := c.Param("deployment")
-	taskName := c.Param("task")
-
-	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
-	deploymentInfo, ok := server.DeployedClusters[deploymentName]
-	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find deployment",
-		})
-		return
-	}
-
-	nodeId := -1
-	for _, nodeMapping := range deploymentInfo.awsInfo.Deployment.NodeMapping {
-		if nodeMapping.Task == taskName {
-			nodeId = nodeMapping.Id
-			break
-		}
-	}
-
-	if nodeId == -1 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find task in deployment node mappings",
-		})
-		return
-	}
-
-	nodeInfo, nodeOk := deploymentInfo.awsInfo.NodeInfos[nodeId]
-	if !nodeOk {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find node in cluster",
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  nodeInfo.PublicDnsName,
-	})
 }
 
 func (server *Server) storeUploadedFile(fileId string, c *gin.Context) (*string, error) {
@@ -700,15 +651,15 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			err = awsecs.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
 		}
 
-		server.mutex.Lock()
 		if err != nil {
 			deploymentInfo.state = FAILED
-			deploymentInfo.awsInfo.Logger.Error("Unable to delete deployment")
+			deploymentInfo.awsInfo.Logger.Error("Unable to delete deployment: " + err.Error())
 		} else {
 			deploymentInfo.state = DELETED
 			deploymentInfo.awsInfo.Logger.Infof("Delete deployment successfully!")
 		}
-		server.storeDeploymentStatus(deploymentInfo.awsInfo.Deployment.Name)
+		server.mutex.Lock()
+		server.storeDeploymentStatus(deploymentName)
 		delete(server.DeployedClusters, deploymentName)
 		server.mutex.Unlock()
 	}()
@@ -761,9 +712,9 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 	})
 }
 
-func (server *Server) getContainerUrl(c *gin.Context) {
+func (server *Server) getServiceUrl(c *gin.Context) {
 	deploymentName := c.Param("deployment")
-	containerName := c.Param("container")
+	serviceName := c.Param("service")
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
@@ -777,54 +728,23 @@ func (server *Server) getContainerUrl(c *gin.Context) {
 		return
 	}
 
-	deployedCluster := deploymentInfo.awsInfo
-
-	nodePort := ""
-	taskFamilyName := ""
-	for _, task := range deployedCluster.Deployment.TaskDefinitions {
-		for _, container := range task.ContainerDefinitions {
-			if *container.Name == containerName {
-				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
-				taskFamilyName = *task.Family
-				break
-			}
-		}
+	serviceUrl := ""
+	var err error
+	if k8sDeployment, ok := server.KubernetesClusters.Clusters[deploymentName]; ok {
+		serviceUrl, err = k8sDeployment.GetServiceUrl(serviceName)
+	} else {
+		serviceUrl, err = awsecs.GetServiceUrl(deploymentInfo.awsInfo, serviceName)
 	}
 
-	if nodePort == "" {
-		c.JSON(http.StatusNotFound, gin.H{
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to find container in deployment container defintiions",
+			"data":  "Unable to get service url: " + err.Error(),
 		})
 		return
 	}
 
-	nodeId := -1
-	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
-		if nodeMapping.Task == taskFamilyName {
-			nodeId = nodeMapping.Id
-			break
-		}
-	}
-
-	if nodeId == -1 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find task in deployment node mappings",
-		})
-		return
-	}
-
-	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
-	if !nodeOk {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find node in cluster",
-		})
-		return
-	}
-
-	c.String(http.StatusOK, nodeInfo.PublicDnsName+":"+nodePort)
+	c.String(http.StatusOK, serviceUrl)
 }
 
 func (server *Server) storeDeploymentStatus(deploymentName string) error {

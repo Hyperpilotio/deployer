@@ -61,10 +61,7 @@ func (file *FileStore) StoreNewDeployment(deployment *StoreDeployment) error {
 	return nil
 }
 
-func (file *FileStore) LoadDeployments() ([]*StoreDeployment, error) {
-	file.deploymentMutex.Lock()
-	defer file.deploymentMutex.Unlock()
-
+func (file *FileStore) loadDeployments() ([]*StoreDeployment, error) {
 	fileDeployment := &FileDeployment{}
 	if _, err := os.Stat(file.DeploymentPath); err == nil {
 		if err := common.LoadFileToObject(file.DeploymentPath, fileDeployment); err != nil {
@@ -73,6 +70,13 @@ func (file *FileStore) LoadDeployments() ([]*StoreDeployment, error) {
 	}
 
 	return fileDeployment.Deployments, nil
+}
+
+func (file *FileStore) LoadDeployments() ([]*StoreDeployment, error) {
+	file.deploymentMutex.Lock()
+	defer file.deploymentMutex.Unlock()
+
+	return file.loadDeployments()
 }
 
 func (file *FileStore) DeleteDeployment(deploymentName string) error {
@@ -197,7 +201,7 @@ func (file *FileStore) DeleteAWSProfile(userId string) error {
 func (file *FileStore) getDeployInfos() (map[string]*StoreDeployment, error) {
 	deployInfos := map[string]*StoreDeployment{}
 	if _, err := os.Stat(file.DeploymentPath); err == nil {
-		deployments, err := file.LoadDeployments()
+		deployments, err := file.loadDeployments()
 		if err != nil {
 			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
 		}

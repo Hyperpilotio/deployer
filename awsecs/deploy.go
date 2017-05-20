@@ -1513,3 +1513,40 @@ func GetClusterInfo(awsProfile *AWSProfile, deployedCluster *DeployedCluster) (*
 
 	return clusterInfo, nil
 }
+
+func GetServiceUrl(deployedCluster *DeployedCluster, serviceName string) (string, error) {
+	nodePort := ""
+	taskFamilyName := ""
+	for _, task := range deployedCluster.Deployment.TaskDefinitions {
+		for _, container := range task.ContainerDefinitions {
+			if *container.Name == serviceName {
+				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+				taskFamilyName = *task.Family
+				break
+			}
+		}
+	}
+
+	if nodePort == "" {
+		return "", errors.New("Unable to find container in deployment container defintiions")
+	}
+
+	nodeId := -1
+	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
+		if nodeMapping.Task == taskFamilyName {
+			nodeId = nodeMapping.Id
+			break
+		}
+	}
+
+	if nodeId == -1 {
+		return "", errors.New("Unable to find task in deployment node mappings")
+	}
+
+	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
+	if !nodeOk {
+		return "", errors.New("Unable to find node in cluster")
+	}
+
+	return nodeInfo.PublicDnsName + ":" + nodePort, nil
+}

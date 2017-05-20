@@ -1371,7 +1371,8 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	log := k8sDeployment.DeployedCluster.Logger
-	allNamespaces := k8sDeployment.getAllDeployedNamespaces()
+	allNamespaces := []string{"default", "hyperpilot"}
+	//k8sDeployment.getAllDeployedNamespaces()
 	endpoints := map[string]string{}
 	c := make(chan bool, 1)
 	quit := make(chan bool)
@@ -1419,7 +1420,7 @@ func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.
 
 	select {
 	case <-c:
-		log.Info("All public endpoints recorded.")
+		//log.Info("All public endpoints recorded.")
 		k8sDeployment.Endpoints = endpoints
 	case <-time.After(time.Duration(2) * time.Minute):
 		quit <- true
@@ -1536,6 +1537,12 @@ func ReloadClusterState(deployment *StoreDeployment, deployedCluster *awsecs.Dep
 		} else {
 			k8sDeployment.KubeConfig = kubeConfig
 		}
+
+		k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+		if err != nil {
+			return nil, errors.New("Unable to connect to kubernetes during get cluster: " + err.Error())
+		}
+		k8sDeployment.recordPublicEndpoints(k8sClient)
 	}
 
 	return k8sDeployment, nil
@@ -1579,4 +1586,14 @@ func (k8sDeployment *KubernetesDeployment) GetClusterInfo() (*ClusterInfo, error
 	}
 
 	return clusterInfo, nil
+}
+
+func (k8sDeployment *KubernetesDeployment) GetServiceUrl(serviceName string) (string, error) {
+	if endpoint, ok := k8sDeployment.Endpoints[serviceName]; ok {
+		return endpoint, nil
+	} else if endpoint, ok = k8sDeployment.Endpoints[serviceName+"-publicport0"]; ok {
+		return endpoint, nil
+	}
+
+	return "", errors.New("Service not found in endpoints")
 }
