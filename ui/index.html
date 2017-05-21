@@ -163,9 +163,11 @@
           }
 
           let activeDeployment;
+          let previousStatus;
           $('li.deployment').not(':first').each(function() {
             if ($(this).hasClass('active')) {
               activeDeployment = $(this).data('name');
+              previousStatus = $(this).data('status');
             }
             $(this).remove();
           });
@@ -174,7 +176,7 @@
             let deployment = $('#deploymentTemplate').clone();
             if (activeDeployment && element.Name === activeDeployment) {
               deployment.addClass('active');
-              if (element.Status !== 'Available') {
+              if (element.Status !== 'Available' || previousStatus !== 'Available') {
                 getDeploymentLogContent(element.Name);
               }
             }
