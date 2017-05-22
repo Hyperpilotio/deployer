@@ -500,10 +500,14 @@ func (server *Server) createDeployment(c *gin.Context) {
 			log.Logger.Infof("Unable to create deployment: " + err.Error())
 			deploymentInfo.State = FAILED
 		} else {
-			resJson, _ := json.Marshal(resp)
-			log.Logger.Infof(string(resJson))
 			log.Logger.Infof("Create deployment successfully!")
 			deploymentInfo.Created = time.Now()
+
+			if resp != nil {
+				resJson, _ := json.Marshal(resp)
+				log.Logger.Infof(string(resJson))
+			}
+
 			if err := server.NewShutDownScheduler(deployer, deploymentInfo, ""); err != nil {
 				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
 			}
