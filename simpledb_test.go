@@ -46,7 +46,7 @@ func init() {
 		AwsSecret: config.GetString("awsSecret"),
 	}
 
-	deployer, _ := clustermanagers.NewDeployer(config, awsProfile, kubernetesDeployment)
+	deployer, _ := clustermanagers.NewDeployer(config, awsProfile, "K8S", kubernetesDeployment, true)
 	k8sDeployer = deployer.(*kubernetes.K8SDeployer)
 	k8sDeployer.BastionIp = testBastionIp
 	k8sDeployer.MasterIp = testMasterIp
@@ -56,6 +56,10 @@ func TestDeployments(t *testing.T) {
 	t.Run("Store Deployments", testStoreDeployments)
 	t.Run("Load Deployments", testLoadAllDeployments)
 	t.Run("Delete Deployments", testDeleteDeployments)
+}
+
+func TestAWSProfiles(t *testing.T) {
+	t.Run("Load Deployments", testLoadAllAWSProfiles)
 }
 
 func testStoreDeployments(t *testing.T) {
@@ -91,7 +95,6 @@ func testLoadAllDeployments(t *testing.T) {
 		t.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
-	t.Log(len(deployments.([]interface{})))
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		if storeDeployment.Name == testDeploymentName {
@@ -105,5 +108,23 @@ func testLoadAllDeployments(t *testing.T) {
 func testDeleteDeployments(t *testing.T) {
 	if err := deploymentStore.Delete(k8sDeployer.Deployment.Name); err != nil {
 		t.Errorf("Unable to delete deployment status: %s", err.Error())
+	}
+}
+
+func testLoadAllAWSProfiles(t *testing.T) {
+	profiles, err := profileStore.LoadAll(func() interface{} {
+		return &hpaws.AWSProfile{}
+	})
+
+	if err != nil {
+		t.Errorf("Unable to load awsProfile: %s", err.Error())
+	}
+
+	for _, profile := range profiles.([]interface{}) {
+		awsProfile := profile.(*hpaws.AWSProfile)
+		if awsProfile.UserId == testUserId {
+			assert.Equal(t, awsProfile.AwsId, config.GetString("awsId"))
+			assert.Equal(t, awsProfile.AwsSecret, config.GetString("awsSecret"))
+		}
 	}
 }
