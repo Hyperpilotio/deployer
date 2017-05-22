@@ -1500,11 +1500,15 @@ func (k8sDeployer *K8SDeployer) CheckClusterState() error {
 
 // ReloadClusterState reloads kubernetes cluster state
 func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error {
+	deploymentName := k8sDeployer.AWSCluster.Name
+	if err := k8sDeployer.CheckClusterState(); err != nil {
+		return fmt.Errorf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
+	}
+
 	k8sStoreInfo := storeInfo.(StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
 	kubeConfigPath := k8sDeployer.KubeConfigPath
-	deploymentName := k8sDeployer.AWSCluster.Name
 
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
