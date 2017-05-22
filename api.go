@@ -67,6 +67,9 @@ type DeploymentInfo struct {
 	awsInfo *awsecs.DeployedCluster
 	created time.Time
 	state   DeploymentState
+
+	// Temporarily stored here until the refactored code is merged
+	logFile *os.File
 }
 
 func (deploymentInfo *DeploymentInfo) getDeploymentType() string {
@@ -102,7 +105,7 @@ func NewServer(config *viper.Viper) *Server {
 }
 
 // NewLogger create per deployment logger
-func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.File, error) {
+func (server *Server) NewLogger(deploymentInfo *DeploymentInfo, deployedCluster *awsecs.DeployedCluster) error {
 	deploymentName := deployedCluster.Deployment.Name
 	log := logging.MustGetLogger(deploymentName)
 
@@ -114,7 +117,7 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 	logFilePath := path.Join(logDirPath, deploymentName+".log")
 	logFile, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0666)
 	if err != nil {
-		return logFile, errors.New("Unable to create deployment log file:" + err.Error())
+		return errors.New("Unable to create deployment log file:" + err.Error())
 	}
 
 	fileLog := logging.NewLogBackend(logFile, "["+deploymentName+"]", 0)
@@ -128,9 +131,10 @@ func (server *Server) NewLogger(deployedCluster *awsecs.DeployedCluster) (*os.Fi
 
 	log.SetBackend(logging.SetBackend(fileLogBackend, consoleLogBackend))
 
+	deploymentInfo.logFile = logFile
 	deployedCluster.Logger = log
 
-	return logFile, nil
+	return nil
 }
 
 // NewStoreDeployment create deployment that needs to be stored
@@ -201,10 +205,18 @@ func (server *Server) reloadClusterState() error {
 			Region: storeDeployment.Region,
 		}
 		deployedCluster := awsecs.NewDeployedCluster(deployment)
+		deploymentInfo := &DeploymentInfo{
+			awsInfo: deployedCluster,
+			state:   AVAILABLE,
+			created: time.Now(),
+		}
+		if err := server.NewLogger(deploymentInfo, deployedCluster); err != nil {
+			glog.Warningf("Skip reloading cluster %s: Unable to reinitialize log: %s", deploymentName, err.Error())
+		}
 
 		// Reload keypair
 		if err := awsecs.ReloadKeyPair(awsProfile, deployedCluster, storeDeployment.KeyMaterial); err != nil {
-			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+			glog.Warningf("Skip reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
 			continue
 		}
 
@@ -238,11 +250,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		if reloaded {
-			server.DeployedClusters[deploymentName] = &DeploymentInfo{
-				awsInfo: deployedCluster,
-				state:   AVAILABLE,
-				created: time.Now(),
-			}
+			server.DeployedClusters[deploymentName] = deploymentInfo
 		}
 	}
 
@@ -444,20 +452,10 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	deploymentInfo.state = UPDATING
 	server.mutex.Unlock()
 
-	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
-	if logErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
-		})
-		return
-	}
-
 	go func() {
 		defer func() {
 			deploymentInfo.state = AVAILABLE
 		}()
-		defer f.Close()
 		// TODO: Check if it's ECS or kubernetes
 		err := server.KubernetesClusters.UpdateDeployment(awsProfile, &deployment, deploymentInfo.awsInfo)
 		if err != nil {
@@ -515,46 +513,42 @@ func (server *Server) createDeployment(c *gin.Context) {
 	deployment.Name = createUniqueDeploymentName(deployment.Name)
 	deployedCluster := awsecs.NewDeployedCluster(&deployment)
 
-	f, logErr := server.NewLogger(deployedCluster)
-	if logErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
-		})
-		return
-	}
-
-	server.mutex.Lock()
-	if _, ok := server.DeployedClusters[deployment.Name]; ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Already deployed",
-		})
-		return
-	}
-
-	awsProfile, ok := server.AWSProfiles[deployment.UserId]
-	if !ok {
-		server.mutex.Unlock()
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find aws profile for user: " + deployment.UserId,
-		})
-		return
-	}
-
 	deploymentInfo := &DeploymentInfo{
 		awsInfo: deployedCluster,
 		created: time.Now(),
 		state:   CREATING,
 	}
-	server.DeployedClusters[deployment.Name] = deploymentInfo
-	server.mutex.Unlock()
+
+	awsProfile, err := func() (*awsecs.AWSProfile, error) {
+		server.mutex.Lock()
+		defer server.mutex.Unlock()
+		if _, ok := server.DeployedClusters[deployment.Name]; ok {
+			return nil, errors.New("Already deployed")
+		}
+
+		awsProfile, ok := server.AWSProfiles[deployment.UserId]
+		if !ok {
+			return nil, errors.New("Unable to find aws profile for user: " + deployment.UserId)
+		}
+
+		if err := server.NewLogger(deploymentInfo, deployedCluster); err != nil {
+			return nil, errors.New("Error creating deployment logger:" + err.Error())
+		}
+
+		server.DeployedClusters[deployment.Name] = deploymentInfo
+
+		return awsProfile, nil
+	}()
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  err.Error(),
+		})
+		return
+	}
 
 	go func() {
-		defer f.Close()
-
 		var err error
 		switch deploymentInfo.getDeploymentType() {
 		case "ECS":
@@ -632,18 +626,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	deploymentInfo.state = DELETING
 	server.mutex.Unlock()
 
-	f, logErr := server.NewLogger(deploymentInfo.awsInfo)
-	if logErr != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error creating deployment logger:" + logErr.Error(),
-		})
-		return
-	}
-
 	go func() {
-		defer f.Close()
-
 		var err error
 		if deploymentInfo.awsInfo.Deployment.KubernetesDeployment != nil {
 			server.KubernetesClusters.DeleteDeployment(awsProfile, deploymentInfo.awsInfo)
@@ -662,6 +645,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.storeDeploymentStatus(deploymentName)
 		delete(server.DeployedClusters, deploymentName)
 		server.mutex.Unlock()
+		deploymentInfo.logFile.Close()
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{

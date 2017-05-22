@@ -1363,7 +1363,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 		},
 	}
 	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
-		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
+		log.Warningf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
 	return nil
@@ -1371,8 +1371,7 @@ func (k8sDeployment *KubernetesDeployment) deployServices(k8sClient *k8s.Clients
 
 func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	log := k8sDeployment.DeployedCluster.Logger
-	allNamespaces := []string{"default", "hyperpilot"}
-	//k8sDeployment.getAllDeployedNamespaces()
+	allNamespaces := k8sDeployment.getAllDeployedNamespaces()
 	endpoints := map[string]string{}
 	c := make(chan bool, 1)
 	quit := make(chan bool)
@@ -1420,7 +1419,7 @@ func (k8sDeployment *KubernetesDeployment) recordPublicEndpoints(k8sClient *k8s.
 
 	select {
 	case <-c:
-		//log.Info("All public endpoints recorded.")
+		log.Info("All public endpoints recorded.")
 		k8sDeployment.Endpoints = endpoints
 	case <-time.After(time.Duration(2) * time.Minute):
 		quit <- true
