@@ -144,6 +144,9 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 	}
 
 	storeDeployment := &StoreDeployment{
+		Name:           deploymentInfo.Deployment.Name,
+		UserId:         deploymentInfo.Deployment.UserId,
+		Region:         deploymentInfo.Deployment.Region,
 		Deployment:     string(b),
 		Status:         GetStateString(deploymentInfo.State),
 		Created:        deploymentInfo.Created.Format(time.RFC822),
@@ -447,16 +450,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	server.mutex.Lock()
-	_, clusterOk := server.DeployedClusters[deployment.Name]
 	awsProfile, profileOk := server.AWSProfiles[deployment.UserId]
 	server.mutex.Unlock()
-	if !clusterOk {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Already deployed",
-		})
-		return
-	}
 
 	if !profileOk {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -482,6 +477,17 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 	deploymentInfo.Deployer = deployer
+
+	server.mutex.Lock()
+	_, clusterOk := server.DeployedClusters[deployment.Name]
+	server.mutex.Unlock()
+	if clusterOk {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Already deployed",
+		})
+		return
+	}
 
 	server.mutex.Lock()
 	server.DeployedClusters[deployment.Name] = deploymentInfo
@@ -713,13 +719,15 @@ func (server *Server) reloadClusterState() error {
 	}
 
 	awsProfileInfos := map[string]*hpaws.AWSProfile{}
-	for _, awsProfile := range profiles.([]*hpaws.AWSProfile) {
-		awsProfileInfos[awsProfile.UserId] = awsProfile
+	for _, awsProfile := range profiles.([]interface{}) {
+		awsProfileInfos[awsProfile.(*hpaws.AWSProfile).UserId] = awsProfile.(*hpaws.AWSProfile)
 	}
 	server.AWSProfiles = awsProfileInfos
 
 	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
-		return &StoreDeployment{}
+		return &StoreDeployment{
+			ClusterManager: &kubernetes.StoreInfo{},
+		}
 	})
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
@@ -730,7 +738,8 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
 
-	for _, storeDeployment := range deployments.([]*StoreDeployment) {
+	for _, deployment := range deployments.([]interface{}) {
+		storeDeployment := deployment.(*StoreDeployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			continue
 		}
@@ -765,26 +774,23 @@ func (server *Server) reloadClusterState() error {
 			Deployer:   deployer,
 			Deployment: deployment,
 			Created:    time.Now(),
-			State:      CREATING,
+			State:      ParseStateString(storeDeployment.Status),
 		}
 
 		// Reload keypair
 		if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+			}
 			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
 			continue
 		}
 
-		// TODO: This should go into reload cluster state
-		//if err := kubernetes.CheckClusterState(deploymentInfo); err != nil {
-		//	if err := server.Store.DeleteDeployment(deploymentName); err != nil {
-		//		glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-		//	}
-		//	glog.Warningf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
-		// continue
-		//}
-
 		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
-			glog.Warningf("Unable to load %s ECS deployedCluster status: %s", deploymentName, err.Error())
+			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+			}
+			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
 		} else {
 			deploymentInfo.State = ParseStateString(storeDeployment.Status)
 			newScheduleRunTime := ""
