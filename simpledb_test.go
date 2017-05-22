@@ -19,10 +19,12 @@ var deploymentStore store.Store
 var profileStore store.Store
 var k8sDeployer *kubernetes.K8SDeployer
 
-var testUserId = "alan"
-var testDeploymentName = "tech-demo"
-var testBastionIp = "1.1.1.1"
-var testMasterIp = "2.2.2.2"
+const (
+	TEST_USER_ID         = "alan"
+	TEST_DEPLOYMENT_NAME = "tech-demo"
+	TEST_BASTION_IP      = "1.1.1.1"
+	TEST_MASTER_IP       = "2.2.2.2"
+)
 
 func init() {
 	config = viper.New()
@@ -34,22 +36,22 @@ func init() {
 	profileStore, _ = store.NewStore("AWSProfiles", config)
 
 	kubernetesDeployment := &apis.Deployment{
-		UserId:               testUserId,
-		Name:                 testDeploymentName,
+		UserId:               TEST_USER_ID,
+		Name:                 TEST_DEPLOYMENT_NAME,
 		Region:               "us-east-1",
 		KubernetesDeployment: &apis.KubernetesDeployment{},
 	}
 
 	awsProfile := &hpaws.AWSProfile{
-		UserId:    testUserId,
+		UserId:    TEST_USER_ID,
 		AwsId:     config.GetString("awsId"),
 		AwsSecret: config.GetString("awsSecret"),
 	}
 
 	deployer, _ := clustermanagers.NewDeployer(config, awsProfile, "K8S", kubernetesDeployment, true)
 	k8sDeployer = deployer.(*kubernetes.K8SDeployer)
-	k8sDeployer.BastionIp = testBastionIp
-	k8sDeployer.MasterIp = testMasterIp
+	k8sDeployer.BastionIp = TEST_BASTION_IP
+	k8sDeployer.MasterIp = TEST_MASTER_IP
 }
 
 func TestDeployments(t *testing.T) {
@@ -80,7 +82,7 @@ func testStoreDeployments(t *testing.T) {
 	}
 
 	if err := deploymentStore.Store(storeDeployment.Name, storeDeployment); err != nil {
-		t.Errorf("Unable to store %s deployment status: %s", testDeploymentName, err.Error())
+		t.Errorf("Unable to store %s deployment status: %s", TEST_DEPLOYMENT_NAME, err.Error())
 	}
 }
 
@@ -97,10 +99,10 @@ func testLoadAllDeployments(t *testing.T) {
 
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
-		if storeDeployment.Name == testDeploymentName {
-			assert.Equal(t, testUserId, storeDeployment.UserId)
-			assert.Equal(t, testBastionIp, storeDeployment.ClusterManager.(kubernetes.StoreInfo).BastionIp)
-			assert.Equal(t, testMasterIp, storeDeployment.ClusterManager.(kubernetes.StoreInfo).MasterIp)
+		if storeDeployment.Name == TEST_DEPLOYMENT_NAME {
+			assert.Equal(t, TEST_USER_ID, storeDeployment.UserId)
+			assert.Equal(t, TEST_BASTION_IP, storeDeployment.ClusterManager.(kubernetes.StoreInfo).BastionIp)
+			assert.Equal(t, TEST_MASTER_IP, storeDeployment.ClusterManager.(kubernetes.StoreInfo).MasterIp)
 		}
 	}
 }
@@ -122,7 +124,7 @@ func testLoadAllAWSProfiles(t *testing.T) {
 
 	for _, profile := range profiles.([]interface{}) {
 		awsProfile := profile.(*hpaws.AWSProfile)
-		if awsProfile.UserId == testUserId {
+		if awsProfile.UserId == TEST_USER_ID {
 			assert.Equal(t, awsProfile.AwsId, config.GetString("awsId"))
 			assert.Equal(t, awsProfile.AwsSecret, config.GetString("awsSecret"))
 		}
