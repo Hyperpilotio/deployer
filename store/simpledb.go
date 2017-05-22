@@ -102,7 +102,7 @@ func (db *SimpleDB) LoadAll(f func() interface{}) (interface{}, error) {
 		}
 
 		v := f()
-		recursiveSetValue(f, resp.Attributes)
+		recursiveSetValue(v, resp.Attributes)
 
 		items = append(items, v)
 	}
@@ -147,7 +147,7 @@ func recursiveSetValue(v interface{}, attributes []*simpledb.Attribute) {
 		fieldName := modelRefType.Field(i).Name
 
 		switch field.Kind() {
-		case reflect.Ptr:
+		case reflect.Interface:
 			recursiveSetValue(field.Interface(), attributes)
 		default:
 			attrValue := restoreValue(fieldName, attributes)
@@ -171,7 +171,7 @@ func recursiveStructField(attrs *[]*simpledb.ReplaceableAttribute, v interface{}
 		fieldValue := fmt.Sprintf("%v", field.Interface())
 
 		switch field.Kind() {
-		case reflect.Ptr:
+		case reflect.Interface:
 			recursiveStructField(attrs, field.Interface())
 		default:
 			appendAttributes(attrs, fieldName, fieldValue)
