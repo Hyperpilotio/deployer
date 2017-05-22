@@ -1594,5 +1594,24 @@ func (k8sDeployment *KubernetesDeployment) GetServiceUrl(serviceName string) (st
 		return endpoint, nil
 	}
 
+	k8sClient, err := k8s.NewForConfig(k8sDeployment.KubeConfig)
+	if err != nil {
+		return "", errors.New("Unable to connect to kubernetes during get container Url")
+	}
+
+	services, _ := k8sClient.CoreV1().Services("").List(metav1.ListOptions{})
+	if err != nil {
+		return "", errors.New("Unable to find any service in the cluster")
+	}
+
+	for _, service := range services.Items {
+		if service.ObjectMeta.Name == serviceName && string(service.Spec.Type) == "LoadBalancer" {
+			port := service.Spec.Ports[0].Port
+			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
+			serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10) + "\n"
+			return serviceUrl, nil
+		}
+	}
+
 	return "", errors.New("Service not found in endpoints")
 }
