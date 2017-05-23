@@ -394,6 +394,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
+	server.mutex.Unlock()
 
 	// Update deployment
 	deploymentInfo.Deployment = &deployment
@@ -403,8 +404,6 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	case "K8S":
 		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = &deployment
 	}
-	server.mutex.Unlock()
-
 	deploymentInfo.State = UPDATING
 
 	go func() {
