@@ -1391,3 +1391,40 @@ func GetClusterInfo(awsProfile *hpaws.AWSProfile, awsCluster *hpaws.AWSCluster) 
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
 }
+
+func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error) {
+	nodePort := ""
+	taskFamilyName := ""
+	for _, task := range ecsDeployer.Deployment.TaskDefinitions {
+		for _, container := range task.ContainerDefinitions {
+			if *container.Name == serviceName {
+				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
+				taskFamilyName = *task.Family
+				break
+			}
+		}
+	}
+
+	if nodePort == "" {
+		return "", errors.New("Unable to find container in deployment container defintiions")
+	}
+
+	nodeId := -1
+	for _, nodeMapping := range ecsDeployer.Deployment.NodeMapping {
+		if nodeMapping.Task == taskFamilyName {
+			nodeId = nodeMapping.Id
+			break
+		}
+	}
+
+	if nodeId == -1 {
+		return "", errors.New("Unable to find task in deployment node mappings")
+	}
+
+	nodeInfo, nodeOk := ecsDeployer.AWSCluster.NodeInfos[nodeId]
+	if !nodeOk {
+		return "", errors.New("Unable to find node in cluster")
+	}
+
+	return nodeInfo.PublicDnsName + ":" + nodePort, nil
+}

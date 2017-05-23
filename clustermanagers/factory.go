@@ -26,6 +26,7 @@ type Deployer interface {
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.DeploymentLog
 	GetScheduler() *job.Scheduler
+	GetServiceUrl(serviceName string) (string, error)
 }
 
 func NewDeployer(

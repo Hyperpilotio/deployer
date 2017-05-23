@@ -1294,26 +1294,6 @@ func deployServices(k8sDeployer *K8SDeployer, k8sClient *k8s.Clientset, existing
 		log.Infof("%s deployment created", family)
 	}
 
-	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
-	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
-		RoleRef: rbac.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "cluster-admin",
-		},
-		Subjects: []rbac.Subject{
-			rbac.Subject{
-				Kind:      rbac.ServiceAccountKind,
-				Name:      "default",
-				Namespace: "hyperpilot",
-			},
-		},
-	}
-	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
-		return fmt.Errorf("Unable to create hyperpilot role binding: " + err.Error())
-	}
-
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.DaemonSet == nil {
 			continue
@@ -1334,6 +1314,26 @@ func deployServices(k8sDeployer *K8SDeployer, k8sClient *k8s.Clientset, existing
 		if _, err := daemonSets.Create(daemonSet); err != nil {
 			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
 		}
+	}
+
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "cluster-admin",
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: "hyperpilot",
+			},
+		},
+	}
+	if _, err := clusterRoleBindings.Create(hyperpilotRoleBinding); err != nil {
+		log.Warningf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
 	return nil
@@ -1505,7 +1505,7 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 		return fmt.Errorf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
 	}
 
-	k8sStoreInfo := storeInfo.(StoreInfo)
+	k8sStoreInfo := storeInfo.(*StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
 	kubeConfigPath := k8sDeployer.KubeConfigPath
@@ -1513,13 +1513,19 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
-
 	glog.Infof("Downloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
+
 	kubeConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
 	if err != nil {
 		return fmt.Errorf("Unable to parse %s kube config: %s", k8sDeployer.AWSCluster.Name, err.Error())
 	}
 	k8sDeployer.KubeConfig = kubeConfig
+
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during get cluster: " + err.Error())
+	}
+	recordPublicEndpoints(k8sDeployer, k8sClient)
 
 	return nil
 }
@@ -1569,4 +1575,14 @@ func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 		BastionIp: k8sDeployer.BastionIp,
 		MasterIp:  k8sDeployer.MasterIp,
 	}
+}
+
+func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {
+	if endpoint, ok := k8sDeployer.Endpoints[serviceName]; ok {
+		return endpoint, nil
+	} else if endpoint, ok = k8sDeployer.Endpoints[serviceName+"-publicport0"]; ok {
+		return endpoint, nil
+	}
+
+	return "", errors.New("Service not found in endpoints")
 }
