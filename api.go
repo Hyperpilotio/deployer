@@ -393,6 +393,15 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
+
+	// Update deployment
+	deploymentInfo.Deployment = &deployment
+	switch deploymentInfo.GetDeploymentType() {
+	case "ECS":
+		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = &deployment
+	case "K8S":
+		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = &deployment
+	}
 	server.mutex.Unlock()
 
 	deploymentInfo.State = UPDATING
