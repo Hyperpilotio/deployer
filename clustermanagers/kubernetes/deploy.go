@@ -1508,14 +1508,13 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	k8sStoreInfo := storeInfo.(StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
-	kubeConfigPath := k8sDeployer.KubeConfigPath
 
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
-
 	glog.Infof("Downloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
-	kubeConfig, err := clientcmd.BuildConfigFromFlags("", kubeConfigPath)
+
+	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployer.KubeConfigPath)
 	if err != nil {
 		return fmt.Errorf("Unable to parse %s kube config: %s", k8sDeployer.AWSCluster.Name, err.Error())
 	}
