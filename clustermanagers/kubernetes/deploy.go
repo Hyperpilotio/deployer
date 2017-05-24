@@ -1563,10 +1563,10 @@ func (k8sDeployer *K8SDeployer) GetClusterInfo() (*ClusterInfo, error) {
 	return clusterInfo, nil
 }
 
-func (k8sDeployment *KubernetesDeployment) GetServiceUrl(serviceName string) (string, error) {
-	if endpoint, ok := k8sDeployment.Endpoints[serviceName]; ok {
+func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {
+	if endpoint, ok := k8sDeployer.Endpoints[serviceName]; ok {
 		return endpoint, nil
-	} else if endpoint, ok = k8sDeployment.Endpoints[serviceName+"-publicport0"]; ok {
+	} else if endpoint, ok = k8sDeployer.Endpoints[serviceName+"-publicport0"]; ok {
 		return endpoint, nil
 	}
 

@@ -1388,10 +1388,10 @@ func GetClusterInfo(awsProfile *hpaws.AWSProfile, awsCluster *hpaws.AWSCluster) 
 	return clusterInfo, nil
 }
 
-func GetServiceUrl(deployedCluster *DeployedCluster, serviceName string) (string, error) {
+func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error) {
 	nodePort := ""
 	taskFamilyName := ""
-	for _, task := range deployedCluster.Deployment.TaskDefinitions {
+	for _, task := range ecsDeployer.Deployment.TaskDefinitions {
 		for _, container := range task.ContainerDefinitions {
 			if *container.Name == serviceName {
 				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
@@ -1406,7 +1406,7 @@ func GetServiceUrl(deployedCluster *DeployedCluster, serviceName string) (string
 	}
 
 	nodeId := -1
-	for _, nodeMapping := range deployedCluster.Deployment.NodeMapping {
+	for _, nodeMapping := range ecsDeployer.Deployment.NodeMapping {
 		if nodeMapping.Task == taskFamilyName {
 			nodeId = nodeMapping.Id
 			break
@@ -1417,7 +1417,7 @@ func GetServiceUrl(deployedCluster *DeployedCluster, serviceName string) (string
 		return "", errors.New("Unable to find task in deployment node mappings")
 	}
 
-	nodeInfo, nodeOk := deployedCluster.NodeInfos[nodeId]
+	nodeInfo, nodeOk := ecsDeployer.AWSCluster.NodeInfos[nodeId]
 	if !nodeOk {
 		return "", errors.New("Unable to find node in cluster")
 	}

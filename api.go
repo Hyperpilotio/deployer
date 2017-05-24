@@ -9,7 +9,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -581,7 +580,6 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Lock()
 		delete(server.DeployedClusters, deploymentName)
 		server.mutex.Unlock()
-		deploymentInfo.logFile.Close()
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -658,44 +656,7 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 		return
 	}
 
-	deployedCluster := deploymentInfo.Deployer.GetAWSCluster()
-
-	nodePort := ""
-	taskFamilyName := ""
-	for _, task := range deploymentInfo.Deployment.TaskDefinitions {
-		for _, container := range task.ContainerDefinitions {
-			if *container.Name == containerName {
-				nodePort = strconv.FormatInt(*container.PortMappings[0].HostPort, 10)
-				taskFamilyName = *task.Family
-				break
-			}
-		}
-	}
-
-	if nodePort == "" {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find container in deployment container defintiions",
-		})
-		return
-	}
-
-	nodeId := -1
-	for _, nodeMapping := range deploymentInfo.Deployment.NodeMapping {
-		if nodeMapping.Task == taskFamilyName {
-			nodeId = nodeMapping.Id
-			break
-		}
-	}
-
-	if nodeId == -1 {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find task in deployment node mappings",
-		})
-		return
-	}
-
+	serviceUrl, err := deploymentInfo.Deployer.GetServiceUrl(serviceName)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
