@@ -396,6 +396,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	server.mutex.Unlock()
 
 	// Update deployment
+	deployment.Name = deploymentName
 	deploymentInfo.Deployment = &deployment
 	switch deploymentInfo.GetDeploymentType() {
 	case "ECS":
