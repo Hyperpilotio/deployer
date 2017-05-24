@@ -1505,7 +1505,7 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 		return fmt.Errorf("Skipping reloading because unable to load %s stack: %s", deploymentName, err.Error())
 	}
 
-	k8sStoreInfo := storeInfo.(StoreInfo)
+	k8sStoreInfo := storeInfo.(*StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
 
@@ -1519,6 +1519,12 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 		return fmt.Errorf("Unable to parse %s kube config: %s", k8sDeployer.AWSCluster.Name, err.Error())
 	}
 	k8sDeployer.KubeConfig = kubeConfig
+
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during get cluster: " + err.Error())
+	}
+	recordPublicEndpoints(k8sDeployer, k8sClient)
 
 	return nil
 }
