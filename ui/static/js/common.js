@@ -16,12 +16,14 @@ $(function() {
             $('#filterUserId').val($(this).data('value'));
             $('#statusMsg').show();
             $('#statusMsg').html('querying...');
+            $('.nav-tabs li.active a').click();
         });
 
         $('#filterUserId').on('keyup blur change', function(e) {
             $('#userId').val($(this).val());
             $('#statusMsg').show();
             $('#statusMsg').html('querying...');
+            $('.nav-tabs li.active a').click();
         });
     }
 });
