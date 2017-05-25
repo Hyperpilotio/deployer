@@ -2,8 +2,8 @@
 <html>
 
 <head>
-<title>Deployer</title>
-<link rel="import" href="/static/common/linkCss.html">
+    <title>Deployer</title>
+    <link rel="import" href="/static/common/linkCss.html">
 </head>
 
 <body>
@@ -39,27 +39,26 @@
 
     <!-- sidebar -->
     <aside>
-      <ul class="nav nav-tabs">
-        <li class="active"><a href="#" data-status="Running">Running</a></li>
-        <li><a href="#" data-status="Deleted">Deleted</a></li>
-        <li><a href="#" data-status="Failed">Failed</a></li>
-      </ul>
-      <ul class="deployment-list">
-        <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
-          <div class="logName"></div>
-          <span class="logUser"></span>
-          <span class="logTime"></span>
-          <span class="badge"></span>
-        </li>
-        {{range $k,$v := .logs}}
-        <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
-            <div class="logName">{{$v.Name}}</div>
-            <span class="logUser">{{$v.UserId}}</span>
-            <span class="logTime">{{$v.Time}}</span>
-            <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
-        </li>
-        {{end}}
-      </ul>
+        <ul class="nav nav-tabs">
+            <li class="active"><a href="#" data-status="Running">Running</a></li>
+            <li><a href="#" data-status="Failed">Failed</a></li>
+        </ul>
+        <ul class="deployment-list">
+            <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
+                <div class="logName"></div>
+                <span class="logUser"></span>
+                <span class="logTime"></span>
+                <span class="badge"></span>
+            </li>
+            {{range $k,$v := .logs}}
+            <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
+                <div class="logName">{{$v.Name}}</div>
+                <span class="logUser">{{$v.UserId}}</span>
+                <span class="logTime">{{$v.Time}}</span>
+                <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
+            </li>
+            {{end}}
+        </ul>
     </aside>
 
     <!-- main -->
@@ -82,154 +81,152 @@
 <script src="/static/js/jquery.loadmask.min.js"></script>
 <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js" integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa" crossorigin="anonymous"></script>
 <script>
-  $(function() {
-    var realHeight = $('.deployment-list').height();
-    $(".deployment-list").css('height', (realHeight + 100) + 'px');
+    $(function() {
+        $('ul.nav-tabs a').on('click', function(event) {
+            event.preventDefault();
+            $('ul.nav-tabs li').removeClass('active');
+            $(this).parent().addClass('active');
+            if ($(this).data('status') !== 'Running') {
+                $('.deployment-btn').hide();
+            }
 
-    $('ul.nav-tabs a').on('click', function(event) {
-      event.preventDefault();
-      $('ul.nav-tabs li').removeClass('active');
-      $(this).parent().addClass('active');
-      if ($(this).data('status') !== 'Running') {
-        $('.deployment-btn').hide();
-      }
+            $('.deployment-log').hide();
+            refreshUI($(this).data('status'));
+        });
 
-      $('.deployment-log').hide();
-      refreshUI($(this).data('status'));
-    });
+        $('.deployment-list').on('click', 'li', function() {
+            $('.deployment-list li').removeClass('active');
+            $(this).addClass('active');
+            if ($('ul.nav-tabs li').first().hasClass('active')) {
+                $('.deployment-btn').show();
+                if ($(this).data('type') == 'K8S') {
+                    $('#downloadKubeconfigBtn').show();
+                } else if ($(this).data('type') == 'ECS') {
+                    $('#downloadKubeconfigBtn').hide();
+                }
+            }
 
-    $('.deployment-list').on('click', 'li', function() {
-      $('.deployment-list li').removeClass('active');
-      $(this).addClass('active');
-      if ($('ul.nav-tabs li').first().hasClass('active')) {
-        $('.deployment-btn').show();
-        if ($(this).data('type') == 'K8S') {
-          $('#downloadKubeconfigBtn').show();
-        } else if ($(this).data('type') == 'ECS') {
-          $('#downloadKubeconfigBtn').hide();
-        }
-      }
+            $('main h1').remove();
+            $('.deployment-detail').show();
+            getDeploymentLogContent($(this).data('name'));
+        });
 
-      $('main h1').remove();
-      $('.deployment-detail').show();
-      getDeploymentLogContent($(this).data('name'));
-    });
+        $('#deleteBtn').click(function() {
+            var logFileName = $('.deployment-list .active').data('name');
+            var deploymentName = logFileName.replace('.log', '');
+            if (confirm('Delete ' + deploymentName + 'deployment?')) {
+                $.ajax({
+                    url: '/v1/deployments/' + deploymentName,
+                    type: 'DELETE',
+                    success: function(json) {
+                        return;
+                    }
+                });
 
-    $('#deleteBtn').click(function() {
-      var logFileName = $('.deployment-list .active').data('name');
-      var deploymentName = logFileName.replace('.log', '');
-      if (confirm('Delete ' + deploymentName + 'deployment?')) {
-        $.ajax({
-          url: '/v1/deployments/' + deploymentName,
-          type: 'DELETE',
-          success: function(json) {
-            return;
-          }
+                refreshUI('Running');
+            }
+        });
+
+        $('#downloadSshKeyBtn').click(function() {
+            var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+            $.ajax({
+                url: '/v1/deployments/' + deploymentName + '/ssh_key',
+                success: download.bind(true, 'text/plain', deploymentName + '-key')
+            });
+        });
+
+        $('#downloadKubeconfigBtn').click(function() {
+            var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
+            $.ajax({
+                url: '/v1/deployments/' + deploymentName + '/kubeconfig',
+                success: download.bind(true, 'text/plain', 'kubeconfig')
+            });
         });
 
         refreshUI('Running');
-      }
     });
 
-    $('#downloadSshKeyBtn').click(function() {
-      var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
-      $.ajax({
-        url: '/v1/deployments/' + deploymentName + '/ssh_key',
-        success: download.bind(true, 'text/plain', deploymentName + '-key')
-      });
-    });
+    function refreshUI(status) {
+        $.ajax({
+            url: '/ui/list/' + status + '?userId=' + $('#userId').val(),
+            type: 'GET',
+            dataType: 'json',
+            status: status,
+            success: function(json) {
+                if (json.error == false) {
+                    if ($('ul.nav-tabs li.active').text() !== this.status) {
+                        return;
+                    }
 
-    $('#downloadKubeconfigBtn').click(function() {
-      var deploymentName = $('.deployment-list .active').data('name').replace('.log', '');
-      $.ajax({
-        url: '/v1/deployments/' + deploymentName + '/kubeconfig',
-        success: download.bind(true, 'text/plain', 'kubeconfig')
-      });
-    });
+                    let activeDeployment;
+                    let previousStatus;
+                    $('li.deployment').not(':first').each(function() {
+                        if ($(this).hasClass('active')) {
+                            activeDeployment = $(this).data('name');
+                            previousStatus = $(this).data('status');
+                        }
+                        $(this).remove();
+                    });
 
-    refreshUI('Running');
-  });
+                    $.each(json.data, function(index, element) {
+                        let deployment = $('#deploymentTemplate').clone();
+                        if (activeDeployment && element.Name === activeDeployment) {
+                            deployment.addClass('active');
+                            if (element.Status !== 'Available' || previousStatus !== 'Available') {
+                                getDeploymentLogContent(element.Name);
+                            }
+                        }
 
-  function refreshUI(status) {
-    $.ajax({
-      url: '/ui/list/' + status + '?userId=' + $('#userId').val(),
-      type: 'GET',
-      dataType: 'json',
-      status: status,
-      success: function(json) {
-        if (json.error == false) {
-          if ($('ul.nav-tabs li.active').text() !== this.status) {
-            return;
-          }
+                        deployment.attr('data-name', element.Name);
+                        deployment.attr('data-type', element.Type);
+                        deployment.attr('data-status', element.Status);
+                        deployment.find('.logName').text(element.Name);
+                        deployment.find('.logUser').text(element.UserId);
+                        deployment.find('.logTime').text(element.Time);
+                        deployment.find('.badge').text(element.Status);
+                        deployment.find('.badge').addClass('badge-' + element.Status);
+                        deployment.removeAttr('id style');
+                        deployment.insertAfter('li.deployment:last');
+                    })
+                }
 
-          let activeDeployment;
-          let previousStatus;
-          $('li.deployment').not(':first').each(function() {
-            if ($(this).hasClass('active')) {
-              activeDeployment = $(this).data('name');
-              previousStatus = $(this).data('status');
+                if (json.data.length == 0) {
+                    $('.deployment-detail').hide();
+                    $('#statusMsg').show();
+                    $('#statusMsg').html('No deployment found');
+                } else {
+                    $('#statusMsg').hide();
+                    $('#statusMsg').html('');
+                }
+
+                if ($('ul.nav-tabs li.active').text() == 'Running') {
+                    $('li.deployment').not(':first').each(function(i, element) {
+                        if (element.dataset.status !== 'Available') {
+                            setTimeout(refreshUI, 5000, 'Running');
+                            return false;
+                        }
+                    })
+                }
             }
-            $(this).remove();
-          });
+        });
+    };
 
-          $.each(json.data, function(index, element) {
-            let deployment = $('#deploymentTemplate').clone();
-            if (activeDeployment && element.Name === activeDeployment) {
-              deployment.addClass('active');
-              if (element.Status !== 'Available' || previousStatus !== 'Available') {
-                getDeploymentLogContent(element.Name);
-              }
+    function getDeploymentLogContent(logFileName) {
+        $.ajax({
+            url: '/ui/logs/' + logFileName,
+            type: 'GET',
+            dataType: 'json',
+            success: function(json) {
+                if (json.error == false) {
+                    $('.deployment-log').html('');
+                    $.each(json.data, function(i, line) {
+                        $('.deployment-log').append('<p class="line">' + line + '</p>');
+                    });
+                    $('.deployment-log').show();
+                }
             }
-
-            deployment.attr('data-name', element.Name);
-            deployment.attr('data-type', element.Type);
-            deployment.attr('data-status', element.Status);
-            deployment.find('.logName').text(element.Name);
-            deployment.find('.logUser').text(element.UserId);
-            deployment.find('.logTime').text(element.Time);
-            deployment.find('.badge').text(element.Status);
-            deployment.find('.badge').addClass('badge-' + element.Status);
-            deployment.removeAttr('id style');
-            deployment.insertAfter('li.deployment:last');
-          })
-        }
-
-        if (json.data.length == 0) {
-          $('.deployment-detail').hide();
-          $('#statusMsg').show();
-          $('#statusMsg').html('No deployment found');
-        } else {
-          $('#statusMsg').hide();
-          $('#statusMsg').html('');
-        }
-
-        if ($('ul.nav-tabs li.active').text() == 'Running') {
-          $('li.deployment').not(':first').each(function(i, element) {
-            if (element.dataset.status !== 'Available') {
-              setTimeout(refreshUI, 5000, 'Running');
-              return false;
-            }
-          })
-        }
-      }
-    });
-  };
-
-  function getDeploymentLogContent(logFileName) {
-    $.ajax({
-      url: '/ui/logs/' + logFileName,
-      type: 'GET',
-      dataType: 'json',
-      success: function(json) {
-        if (json.error == false) {
-          $('.deployment-log').html('');
-          $.each(json.data, function(i, line) {
-              $('.deployment-log').append('<p class="line">' + line + '</p>');
-          });
-          $('.deployment-log').show();
-        }
-      }
-    });
-  }
+        });
+    }
 </script>
+
 </html>
