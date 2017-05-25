@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"errors"
-	"fmt"
 	"os"
 	"path"
 	"sort"
@@ -105,57 +104,44 @@ func (server *Server) getDeploymentLogContent(c *gin.Context) {
 }
 
 func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) {
-	allDeploymentLogs := DeploymentLogs{}
+	deploymentLogs := DeploymentLogs{}
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	switch status := c.Param("status"); status {
-	case "Deleted", "Failed":
-		// We don't need to ask for store every time on the UI, just use server state
-		deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
-			return &StoreDeployment{}
-		})
-		if err != nil {
-			return nil, fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	filterDeploymentStatus := c.Param("status")
+	for name, deploymentInfo := range server.DeployedClusters {
+		deploymentLog := &DeploymentLog{
+			Name:   name,
+			Time:   deploymentInfo.Created,
+			Type:   deploymentInfo.GetDeploymentType(),
+			Status: GetStateString(deploymentInfo.State),
+			UserId: deploymentInfo.Deployment.UserId,
 		}
-		for _, deployment := range deployments.([]StoreDeployment) {
-			if deployment.Status == status {
-				deploymentLog := &DeploymentLog{
-					Name:   deployment.Name,
-					Type:   deployment.Type,
-					Status: deployment.Status,
-					UserId: deployment.UserId,
-				}
-				if logTime, err := time.Parse(time.RFC822, deployment.Created); err == nil {
-					deploymentLog.Time = logTime
-				}
-				allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
+
+		if filterDeploymentStatus == "Failed" {
+			// Failed tab only show seployment status is failed
+			if deploymentLog.Status == filterDeploymentStatus {
+				deploymentLogs = append(deploymentLogs, deploymentLog)
 			}
-		}
-	default:
-		for name, deploymentInfo := range server.DeployedClusters {
-			deploymentLog := &DeploymentLog{
-				Name:   name,
-				Time:   deploymentInfo.Created,
-				Type:   deploymentInfo.GetDeploymentType(),
-				Status: GetStateString(deploymentInfo.State),
-				UserId: deploymentInfo.Deployment.UserId,
+		} else {
+			// Running tab show Available, Creating, Updating, Deleting
+			if deploymentLog.Status != "Failed" {
+				deploymentLogs = append(deploymentLogs, deploymentLog)
 			}
-			allDeploymentLogs = append(allDeploymentLogs, deploymentLog)
 		}
 	}
 
 	userDeploymentLogs := DeploymentLogs{}
 	userId, _ := c.GetQuery("userId")
 	if userId != "" {
-		for _, deploymentLog := range allDeploymentLogs {
+		for _, deploymentLog := range deploymentLogs {
 			if deploymentLog.UserId == userId {
 				userDeploymentLogs = append(userDeploymentLogs, deploymentLog)
 			}
 		}
 	} else {
-		userDeploymentLogs = allDeploymentLogs
+		userDeploymentLogs = deploymentLogs
 	}
 
 	sort.Sort(userDeploymentLogs)
