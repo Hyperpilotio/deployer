@@ -663,13 +663,21 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 
 func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
-	deployment, err := deploymentInfo.NewStoreDeployment()
-	if err != nil {
-		return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
-	}
 
-	if err := server.DeploymentStore.Store(deploymentName, deployment); err != nil {
-		return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
+	switch deploymentInfo.State {
+	case DELETED:
+		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
+		}
+	default:
+		deployment, err := deploymentInfo.NewStoreDeployment()
+		if err != nil {
+			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
+		}
+
+		if err := server.DeploymentStore.Store(deploymentName, deployment); err != nil {
+			return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
+		}
 	}
 
 	return nil
