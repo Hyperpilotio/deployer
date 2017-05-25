@@ -327,14 +327,6 @@ func (server *Server) uploadFile(c *gin.Context) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	if _, ok := server.UploadedFiles[fileId]; ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "File already uploaded",
-		})
-		return
-	}
-
 	file, err := server.storeUploadedFile(fileId, c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
