@@ -17,18 +17,19 @@ import (
 )
 
 type DeploymentLog struct {
-	Name   string
-	Time   time.Time
-	Type   string
-	Status string
-	UserId string
+	Name     string
+	Create   time.Time
+	ShutDown time.Time
+	Type     string
+	Status   string
+	UserId   string
 }
 
 type DeploymentLogs []*DeploymentLog
 
 func (d DeploymentLogs) Len() int { return len(d) }
 func (d DeploymentLogs) Less(i, j int) bool {
-	return d[i].Time.Before(d[j].Time)
+	return d[i].Create.Before(d[j].Create)
 }
 func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
@@ -112,11 +113,12 @@ func (server *Server) getDeploymentLogs(c *gin.Context) (DeploymentLogs, error) 
 	filterDeploymentStatus := c.Param("status")
 	for name, deploymentInfo := range server.DeployedClusters {
 		deploymentLog := &DeploymentLog{
-			Name:   name,
-			Time:   deploymentInfo.Created,
-			Type:   deploymentInfo.GetDeploymentType(),
-			Status: GetStateString(deploymentInfo.State),
-			UserId: deploymentInfo.Deployment.UserId,
+			Name:     name,
+			Create:   deploymentInfo.Created,
+			ShutDown: deploymentInfo.ShutDown,
+			Type:     deploymentInfo.GetDeploymentType(),
+			Status:   GetStateString(deploymentInfo.State),
+			UserId:   deploymentInfo.Deployment.UserId,
 		}
 
 		if filterDeploymentStatus == "Failed" {
