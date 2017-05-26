@@ -45,8 +45,9 @@ type DeploymentInfo struct {
 	Deployer   clustermanagers.Deployer
 	Deployment *apis.Deployment
 
-	Created time.Time
-	State   DeploymentState
+	Created  time.Time
+	ShutDown time.Time
+	State    DeploymentState
 }
 
 // This defines what's being persisted in store
@@ -811,7 +812,10 @@ func (server *Server) NewShutDownScheduler(deployer clustermanagers.Deployer,
 	if err != nil {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
-	glog.Infof("New %s schedule at %s", deploymentInfo.Deployment.Name, time.Now().Add(startTime))
+
+	shutDownTime := time.Now().Add(startTime)
+	deploymentInfo.ShutDown = shutDownTime
+	glog.Infof("New %s schedule at %s", deploymentInfo.Deployment.Name, shutDownTime)
 
 	scheduler := job.NewScheduler(startTime, func() {
 		go func() {

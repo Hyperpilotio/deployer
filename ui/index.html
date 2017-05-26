@@ -47,14 +47,20 @@
             <li id="deploymentTemplate" class="deployment" style="display: none;" data-name data-type data-status>
                 <div class="logName"></div>
                 <span class="logUser"></span>
-                <span class="logTime"></span>
+                <span class="timeLabel">Create:</span><span class="createTime"></span><br/>
+                <span class="timeLabel">ShutDown:</span><span class="shutDownTime"></span>
                 <span class="badge"></span>
             </li>
             {{range $k,$v := .logs}}
             <li class="deployment" data-name="{{$v.Name}}" data-type="{{$v.Type}}" data-status="{{$v.Status}}">
                 <div class="logName">{{$v.Name}}</div>
                 <span class="logUser">{{$v.UserId}}</span>
-                <span class="logTime">{{$v.Time}}</span>
+                <span class="timeLabel">Create:</span><span class="createTime">{{$v.Create}}</span><br/>
+                {{if $v.ShutDown}}
+                <span class="timeLabel">ShutDown:</span><span class="shutDownTime"></span>
+                {{else}}
+                <span class="timeLabel">ShutDown:</span><span class="shutDownTime">{{$v.ShutDown}}</span>
+                {{end}}
                 <span class="badge badge-{{$v.Status}}">{{$v.Status}}</span>
             </li>
             {{end}}
@@ -182,7 +188,8 @@
                         deployment.attr('data-status', element.Status);
                         deployment.find('.logName').text(element.Name);
                         deployment.find('.logUser').text(element.UserId);
-                        deployment.find('.logTime').text(element.Time);
+                        deployment.find('.createTime').text(element.Create);
+                        deployment.find('.shutDownTime').text((element.ShutDown == '0001-01-01T00:00:00Z' ? '' : element.ShutDown));
                         deployment.find('.badge').text(element.Status);
                         deployment.find('.badge').addClass('badge-' + element.Status);
                         deployment.removeAttr('id style');
