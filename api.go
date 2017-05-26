@@ -21,6 +21,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/store"
 	"github.com/spf13/viper"
@@ -228,6 +229,7 @@ func (server *Server) StartServer() error {
 
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
+		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 	}
@@ -632,6 +634,49 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 		"error": true,
 		"data":  c.Param("deployment") + " not found.",
 	})
+}
+
+func (server *Server) getDeploymentState(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  deploymentName + " not found.",
+		})
+		return
+	}
+	server.mutex.Unlock()
+
+	var err error
+	timeout := time.Duration(5) * time.Minute
+
+	switch deploymentInfo.State {
+	case CREATING:
+		err = common.WaitUntilFunctionComplete(timeout, func() bool {
+			return deploymentInfo.State == AVAILABLE
+		})
+	case DELETING:
+		err = common.WaitUntilFunctionComplete(timeout, func() bool {
+			return deploymentInfo.State == DELETED
+		})
+	case UPDATING:
+		err = common.WaitUntilFunctionComplete(timeout, func() bool {
+			return deploymentInfo.State == AVAILABLE
+		})
+	}
+
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to read deployment state: " + err.Error(),
+		})
+	}
+
+	c.String(http.StatusOK, GetStateString(deploymentInfo.State))
 }
 
 func (server *Server) getServiceUrl(c *gin.Context) {
