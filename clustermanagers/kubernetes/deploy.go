@@ -363,7 +363,7 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 				Value: aws.String(awsCluster.Name),
 			},
 		},
-		TemplateURL:      aws.String("https://hyperpilot-snap-collectors.s3.amazonaws.com/kubernetes-cluster-with-new-vpc-1.6.2.template"),
+		TemplateURL:      aws.String("https://hyperpilot-snap-collectors.s3.amazonaws.com/kubernetes-cluster-with-new-vpc-1.6.4.template"),
 		TimeoutInMinutes: aws.Int64(30),
 	}
 	log.Info("Creating kubernetes stack...")
