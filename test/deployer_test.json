@@ -1,0 +1,73 @@
+{
+    "userId": "alan",
+    "name": "nginx-test",
+    "region": "us-east-1",
+    "nodeMapping": [
+        {
+            "task": "nginx",
+            "id": 1
+        }
+    ],
+    "clusterDefinition": {
+        "nodes": [
+            {
+                "instanceType": "t2.micro",
+                "id": 1
+            }
+        ]
+    },
+    "kubernetes": {
+        "taskDefinitions": [
+            {
+                "deployment": {
+                    "apiVersion": "extensions/v1beta1",
+                    "kind": "Deployment",
+                    "metadata": {
+                        "labels": {
+                            "app": "nginx"
+                        },
+                        "name": "nginx",
+                        "namespace": "hyperpilot"
+                    },
+                    "spec": {
+                        "replicas": 1,
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    "app": "nginx"
+                                }
+                            },
+                            "spec": {
+                                "hostname": "nginx",
+                                "containers": [
+                                    {
+                                        "image": "nginx",
+                                        "name": "nginx",
+                                        "ports": [
+                                            {
+                                                "containerPort": 80,
+                                                "hostPort": 80,
+                                                "protocol": "TCP"
+                                            }
+                                        ],
+                                        "resources": {
+                                            "requests": {
+                                                "cpu": "256m",
+                                                "memory": "256Mi"
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                "family": "nginx",
+                "portTypes": [
+                    1
+                ]
+            }
+        ]
+    },
+    "shutDownTime": "50m"
+}
