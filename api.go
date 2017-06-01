@@ -708,7 +708,11 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
 
-	scheduleRunTime, err := time.ParseDuration(server.Config.GetString("shutDownTime"))
+	shutdownTime := server.Config.GetString("shutDownTime")
+	if shutdownTime == "" {
+		shutdownTime = "12h"
+	}
+	scheduleRunTime, err := time.ParseDuration(shutdownTime)
 	if err != nil {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
