@@ -218,6 +218,14 @@ func (server *Server) StartServer() error {
 		uiGroup.GET("/clusters/:deploymentType/:clusterName", server.getCluster)
 	}
 
+	usersGroup := router.Group("/v1/users")
+	{
+		usersGroup.POST("/:userId/deployments", server.createDeployment)
+		usersGroup.PUT("/:userId/deployments/:deployment", server.updateDeployment)
+
+		usersGroup.POST("/:userId/files/:fileId", server.uploadFile)
+	}
+
 	daemonsGroup := router.Group("/v1/deployments")
 	{
 		daemonsGroup.GET("", server.getAllDeployments)
@@ -290,10 +298,10 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 	})
 }
 
-func (server *Server) storeUploadedFile(fileId string, c *gin.Context) (*string, error) {
+func (server *Server) storeUploadedFile(fileId string, userId string, c *gin.Context) (*string, error) {
 	file, _, err := c.Request.FormFile("upload")
-	tempFile := "/tmp/" + fileId + ".tmp"
-	destination := path.Join(server.Config.GetString("filesPath"), fileId)
+	tempFile := "/tmp/" + userId + "_" + fileId + ".tmp"
+	destination := path.Join(server.Config.GetString("filesPath"), userId+"_"+fileId)
 	out, err := os.Create(tempFile)
 	defer func() {
 		out.Close()
@@ -325,11 +333,20 @@ func (server *Server) getFiles(c *gin.Context) {
 }
 
 func (server *Server) uploadFile(c *gin.Context) {
+	userId := c.Param("userId")
+	if userId == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find userId",
+		})
+		return
+	}
+
 	fileId := c.Param("fileId")
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	file, err := server.storeUploadedFile(fileId, c)
+	file, err := server.storeUploadedFile(fileId, userId, c)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
@@ -338,7 +355,7 @@ func (server *Server) uploadFile(c *gin.Context) {
 		return
 	}
 
-	server.UploadedFiles[fileId] = *file
+	server.UploadedFiles[userId+"_"+fileId] = *file
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
@@ -359,8 +376,11 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
 	// TODO Implement function to update deployment
-	var deployment apis.Deployment
-	if err := c.BindJSON(&deployment); err != nil {
+	deployment := &apis.Deployment{
+		UserId: c.Param("userId"),
+	}
+
+	if err := c.BindJSON(deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Error deserializing deployment: " + err.Error(),
@@ -391,12 +411,12 @@ func (server *Server) updateDeployment(c *gin.Context) {
 
 	// Update deployment
 	deployment.Name = deploymentName
-	deploymentInfo.Deployment = &deployment
+	deploymentInfo.Deployment = deployment
 	switch deploymentInfo.GetDeploymentType() {
 	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = &deployment
+		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
 	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = &deployment
+		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
 	}
 	deploymentInfo.State = UPDATING
 
@@ -442,8 +462,11 @@ func (server *Server) getDeployment(c *gin.Context) {
 
 func (server *Server) createDeployment(c *gin.Context) {
 	// FIXME document the structure of deployment in the doc file
-	var deployment apis.Deployment
-	if err := c.BindJSON(&deployment); err != nil {
+	deployment := &apis.Deployment{
+		UserId: c.Param("userId"),
+	}
+
+	if err := c.BindJSON(deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Error deserializing deployment: " + err.Error(),
@@ -464,13 +487,13 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	deploymentInfo := &DeploymentInfo{
-		Deployment: &deployment,
+		Deployment: deployment,
 		Created:    time.Now(),
 		State:      CREATING,
 	}
 
 	deployer, err := clustermanagers.NewDeployer(
-		server.Config, awsProfile, deploymentInfo.GetDeploymentType(), &deployment, true)
+		server.Config, awsProfile, deploymentInfo.GetDeploymentType(), deployment, true)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
