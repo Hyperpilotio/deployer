@@ -481,7 +481,7 @@ func uploadFiles(user string, ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster, dep
 		for _, deployFile := range deployment.Files {
 			// TODO: Bulk upload all files, where ssh client needs to support multiple files transfer
 			// in the same connection
-			location, ok := uploadedFiles[deployFile.FileId]
+			location, ok := uploadedFiles[deployment.UserId+"_"+deployFile.FileId]
 			if !ok {
 				return errors.New("Unable to find uploaded file " + deployFile.FileId)
 			}
