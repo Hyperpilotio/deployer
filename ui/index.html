@@ -92,10 +92,6 @@
             event.preventDefault();
             $('ul.nav-tabs li').removeClass('active');
             $(this).parent().addClass('active');
-            if ($(this).data('status') !== 'Running') {
-                $('.deployment-btn').hide();
-            }
-
             $('.deployment-log').hide();
             refreshUI($(this).data('status'));
         });
