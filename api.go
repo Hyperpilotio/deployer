@@ -865,8 +865,18 @@ func (server *Server) NewShutDownScheduler(deployer clustermanagers.Deployer,
 
 	scheduler := job.NewScheduler(startTime, func() {
 		go func() {
-			deployer.DeleteDeployment()
 			defer deployer.GetLog().LogFile.Close()
+
+			if err := deployer.DeleteDeployment(); err != nil {
+				deploymentInfo.State = FAILED
+			} else {
+				deploymentInfo.State = DELETED
+			}
+			server.storeDeploymentStatus(deploymentInfo)
+
+			server.mutex.Lock()
+			delete(server.DeployedClusters, deploymentInfo.Deployment.Name)
+			server.mutex.Unlock()
 		}()
 	})
 
