@@ -69,6 +69,7 @@ type Deployment struct {
 	*ECSDeployment        `form:"ecs" json:"ecs,omitempty"`
 	*KubernetesDeployment `form:"kubernetes" json:"kubernetes,omitempty"`
 
+	Base         string `form:"base" json:"base"`
 	ShutDownTime string `form:"shutDownTime" json:"shutDownTime,omitempty"`
 }
 

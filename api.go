@@ -115,6 +115,7 @@ type Server struct {
 	Config          *viper.Viper
 	DeploymentStore store.Store
 	ProfileStore    store.Store
+	TemplateStore   store.Store
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -175,15 +176,21 @@ func (server *Server) StartServer() error {
 	}
 
 	if deploymentStore, err := store.NewStore("Deployments", server.Config); err != nil {
-		return errors.New("Unable to create deployment store: " + err.Error())
+		return errors.New("Unable to create deployments store: " + err.Error())
 	} else {
 		server.DeploymentStore = deploymentStore
 	}
 
 	if profileStore, err := store.NewStore("AWSProfiles", server.Config); err != nil {
-		return errors.New("Unable to create deployment store: " + err.Error())
+		return errors.New("Unable to create awsProfiles store: " + err.Error())
 	} else {
 		server.ProfileStore = profileStore
+	}
+
+	if templateStore, err := store.NewStore("Templates", server.Config); err != nil {
+		return errors.New("Unable to create templates store: " + err.Error())
+	} else {
+		server.TemplateStore = templateStore
 	}
 
 	if err := server.reloadClusterState(); err != nil {
@@ -239,6 +246,11 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
+	}
+
+	templateGroup := router.Group("/v1/templates")
+	{
+		templateGroup.POST("/:templateId", server.storeTemplateFile)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -472,6 +484,19 @@ func (server *Server) createDeployment(c *gin.Context) {
 			"data":  "Error deserializing deployment: " + err.Error(),
 		})
 		return
+	}
+
+	templateId := deployment.Base
+	if templateId != "" {
+		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, &deployment)
+		if mergeErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Error merge template deployment: " + mergeErr.Error(),
+			})
+			return
+		}
+		deployment = *mergeDeployment
 	}
 
 	server.mutex.Lock()
@@ -724,6 +749,70 @@ func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) erro
 	}
 
 	return nil
+}
+
+func (server *Server) storeTemplateFile(c *gin.Context) {
+	var deployment apis.Deployment
+	if err := c.BindJSON(&deployment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error deserializing deployment: " + err.Error(),
+		})
+		return
+	}
+
+	templateId := c.Param("templateId")
+	if err := server.TemplateStore.Store(templateId, deployment); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": true,
+			"data":  fmt.Errorf("Unable to store %s templates: %s", templateId, err.Error()),
+		})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  "",
+	})
+}
+
+func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment *apis.Deployment) (*apis.Deployment, error) {
+	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
+		return &apis.Deployment{}
+	})
+	if templateErr != nil {
+		return nil, fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
+	}
+
+	findTemplate := false
+	templateDeployment := &apis.Deployment{}
+	for _, template := range templates.([]interface{}) {
+		if template.(*apis.Deployment).Base == templateId {
+			templateDeployment = template.(*apis.Deployment)
+			findTemplate = true
+			break
+		}
+	}
+
+	if !findTemplate {
+		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
+	}
+
+	if needMergeDeployment.Region != "" {
+		templateDeployment.Region = needMergeDeployment.Region
+	}
+
+	if needMergeDeployment.NodeMapping != nil {
+		templateDeployment.NodeMapping = needMergeDeployment.NodeMapping
+	}
+
+	if needMergeDeployment.ClusterDefinition.Nodes != nil {
+		templateDeployment.ClusterDefinition = needMergeDeployment.ClusterDefinition
+	}
+
+	templateDeployment.KubernetesDeployment = needMergeDeployment.KubernetesDeployment
+
+	return templateDeployment, nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
