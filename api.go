@@ -64,6 +64,11 @@ type StoreDeployment struct {
 	ClusterManager interface{}
 }
 
+type TemplateDeployment struct {
+	TemplateId string
+	Deployment string
+}
+
 func (deploymentInfo *DeploymentInfo) GetDeploymentType() string {
 	if deploymentInfo.Deployment.KubernetesDeployment != nil {
 		return "K8S"
@@ -752,7 +757,9 @@ func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) erro
 }
 
 func (server *Server) storeTemplateFile(c *gin.Context) {
-	var deployment apis.Deployment
+	deployment := &apis.Deployment{
+		UserId: "",
+	}
 	if err := c.BindJSON(&deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -761,8 +768,22 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 		return
 	}
 
+	b, jsonErr := json.Marshal(deployment)
+	if jsonErr != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to marshal deployment to json: " + jsonErr.Error(),
+		})
+		return
+	}
+
 	templateId := c.Param("templateId")
-	if err := server.TemplateStore.Store(templateId, deployment); err != nil {
+	templateDeployment := &TemplateDeployment{
+		TemplateId: templateId,
+		Deployment: string(b),
+	}
+
+	if err := server.TemplateStore.Store(templateId, templateDeployment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": true,
 			"data":  fmt.Errorf("Unable to store %s templates: %s", templateId, err.Error()),
@@ -778,17 +799,17 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 
 func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment *apis.Deployment) (*apis.Deployment, error) {
 	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
-		return &apis.Deployment{}
+		return &TemplateDeployment{}
 	})
 	if templateErr != nil {
 		return nil, fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
 	}
 
 	findTemplate := false
-	templateDeployment := &apis.Deployment{}
+	templateDeployment := &TemplateDeployment{}
 	for _, template := range templates.([]interface{}) {
-		if template.(*apis.Deployment).Base == templateId {
-			templateDeployment = template.(*apis.Deployment)
+		if template.(*TemplateDeployment).TemplateId == templateId {
+			templateDeployment = template.(*TemplateDeployment)
 			findTemplate = true
 			break
 		}
@@ -798,21 +819,16 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
 	}
 
-	if needMergeDeployment.Region != "" {
-		templateDeployment.Region = needMergeDeployment.Region
+	deployment := &apis.Deployment{}
+	unmarshalErr := json.Unmarshal([]byte(templateDeployment.Deployment), deployment)
+	if unmarshalErr != nil {
+		return nil, fmt.Errorf("Unable to load %s deployment manifest for deployment", templateId)
 	}
 
-	if needMergeDeployment.NodeMapping != nil {
-		templateDeployment.NodeMapping = needMergeDeployment.NodeMapping
-	}
+	deployment.UserId = needMergeDeployment.UserId
+	deployment.KubernetesDeployment = needMergeDeployment.KubernetesDeployment
 
-	if needMergeDeployment.ClusterDefinition.Nodes != nil {
-		templateDeployment.ClusterDefinition = needMergeDeployment.ClusterDefinition
-	}
-
-	templateDeployment.KubernetesDeployment = needMergeDeployment.KubernetesDeployment
-
-	return templateDeployment, nil
+	return deployment, nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
