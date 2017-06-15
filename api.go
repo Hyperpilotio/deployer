@@ -248,6 +248,7 @@ func (server *Server) StartServer() error {
 	templateGroup := router.Group("/v1/templates")
 	{
 		templateGroup.POST("/:templateId", server.storeTemplateFile)
+		templateGroup.POST("/:templateId/deployments", server.createDeployment)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -468,7 +469,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	templateId := deployment.Base
+	templateId := c.Param("templateId")
 	if templateId != "" {
 		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, &deployment)
 		if mergeErr != nil {
@@ -803,6 +804,9 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 	}
 
 	deployment.UserId = needMergeDeployment.UserId
+	deployment.Name = needMergeDeployment.Name
+	deployment.NodeMapping = needMergeDeployment.NodeMapping
+	deployment.ClusterDefinition = needMergeDeployment.ClusterDefinition
 	deployment.KubernetesDeployment = needMergeDeployment.KubernetesDeployment
 
 	return deployment, nil
