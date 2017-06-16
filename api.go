@@ -830,7 +830,7 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 	deployment.Name = needMergeDeployment.Name
 	deployment.NodeMapping = needMergeDeployment.NodeMapping
 	deployment.ClusterDefinition = needMergeDeployment.ClusterDefinition
-	deployment.KubernetesDeployment = needMergeDeployment.KubernetesDeployment
+	deployment.KubernetesDeployment.Kubernetes = needMergeDeployment.KubernetesDeployment.Kubernetes
 
 	return deployment, nil
 }
