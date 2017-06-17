@@ -605,13 +605,13 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
 	scheduler := deploymentInfo.Deployer.GetScheduler()
 	if scheduler != nil {
 		scheduler.Stop()
 	}
 	deploymentInfo.State = DELETING
+	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
@@ -974,10 +974,22 @@ func (server *Server) NewShutDownScheduler(deployer clustermanagers.Deployer,
 
 	scheduler := job.NewScheduler(startTime, func() {
 		go func() {
+			server.mutex.Lock()
+			if deploymentInfo.State == DELETING {
+				server.mutex.Unlock()
+				glog.Infof("Skip deleting deployment %s on schedule as it's currently being deleted",
+					deploymentInfo.Deployment.Name)
+				return
+			}
+
+			deploymentInfo.State = DELETING
+			server.mutex.Unlock()
+
 			defer deployer.GetLog().LogFile.Close()
 
 			if err := deployer.DeleteDeployment(); err != nil {
 				deploymentInfo.State = FAILED
+				glog.Infof("Deployment %s failed to delete: %s", deploymentInfo.Deployment.Name, err.Error())
 			} else {
 				deploymentInfo.State = DELETED
 			}
