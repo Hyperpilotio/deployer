@@ -494,7 +494,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 	templateId := c.Param("templateId")
 	if templateId != "" {
-		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, &deployment)
+		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, deployment)
 		if mergeErr != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -502,7 +502,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			})
 			return
 		}
-		deployment = *mergeDeployment
+		deployment = mergeDeployment
 	}
 
 	server.mutex.Lock()
@@ -826,11 +826,20 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		return nil, fmt.Errorf("Unable to load %s deployment manifest for deployment", templateId)
 	}
 
-	deployment.UserId = needMergeDeployment.UserId
-	deployment.Name = needMergeDeployment.Name
-	deployment.NodeMapping = needMergeDeployment.NodeMapping
-	deployment.ClusterDefinition = needMergeDeployment.ClusterDefinition
-	deployment.KubernetesDeployment.Kubernetes = needMergeDeployment.KubernetesDeployment.Kubernetes
+	if needMergeDeployment.UserId != "" {
+		deployment.UserId = needMergeDeployment.UserId
+	}
+
+	if needMergeDeployment.Name != "" {
+		deployment.Name = needMergeDeployment.Name
+	}
+
+	for _, nodeMapping := range needMergeDeployment.NodeMapping {
+		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
+	}
+	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
+		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+	}
 
 	return deployment, nil
 }
