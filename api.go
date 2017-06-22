@@ -249,6 +249,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
+		daemonsGroup.GET("/:deployment/tasks", server.getDeploymentTasks)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 	}
@@ -705,6 +706,44 @@ func (server *Server) getDeploymentState(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, GetStateString(deploymentInfo.State))
+}
+
+func (server *Server) getDeploymentTasks(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  deploymentName + " not found.",
+		})
+		return
+	}
+
+	if deploymentInfo.GetDeploymentType() != "K8S" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unsupported deployment type",
+		})
+		return
+	}
+
+	nodeTasks, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetDeploymentTasks()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to get deployment tasks: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  nodeTasks,
+	})
 }
 
 func (server *Server) getServiceUrl(c *gin.Context) {

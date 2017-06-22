@@ -1599,6 +1599,36 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 	return "", errors.New("Service not found in endpoints")
 }
 
+func (k8sDeployer *K8SDeployer) GetDeploymentTasks() ([]NodeTask, error) {
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
+	}
+
+	nodes := k8sClient.CoreV1().Nodes()
+	nodeLists, nodeError := nodes.List(metav1.ListOptions{})
+	if nodeError != nil {
+		return nil, fmt.Errorf("Unable to list nodes for get cluster: %s", nodeError.Error())
+	}
+
+	nodeInfos := map[string]string{}
+	for _, node := range nodeLists.Items {
+		nodeInfos[node.Labels["hyperpilot/node-id"]] = node.Name
+	}
+
+	nodeTasks := []NodeTask{}
+	for _, mapping := range k8sDeployer.Deployment.NodeMapping {
+		nodeTask := NodeTask{
+			Node:     strconv.Itoa(mapping.Id),
+			HostName: nodeInfos[strconv.Itoa(mapping.Id)],
+			Task:     mapping.Task,
+		}
+		nodeTasks = append(nodeTasks, nodeTask)
+	}
+
+	return nodeTasks, nil
+}
+
 func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 	return &StoreInfo{
 		BastionIp: k8sDeployer.BastionIp,
