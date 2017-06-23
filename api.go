@@ -250,9 +250,9 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 		daemonsGroup.GET("/:deployment/tasks", server.getDeploymentTasks)
-		daemonsGroup.GET("/:deployment/host", server.getDeploymentHost)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
+		daemonsGroup.GET("/:deployment/services/:service/host", server.getDeploymentHost)
 	}
 
 	templateGroup := router.Group("/v1/templates")
@@ -777,6 +777,7 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 
 func (server *Server) getDeploymentHost(c *gin.Context) {
 	deploymentName := c.Param("deployment")
+	serviceName := c.Param("service")
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
@@ -798,7 +799,7 @@ func (server *Server) getDeploymentHost(c *gin.Context) {
 		return
 	}
 
-	deploymentHost, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetDeploymentHost(deploymentName)
+	deploymentHost, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetDeploymentHost(serviceName)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,

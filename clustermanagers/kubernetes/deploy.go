@@ -1599,7 +1599,7 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 	return "", errors.New("Service not found in endpoints")
 }
 
-func (k8sDeployer *K8SDeployer) GetDeploymentHost(deploymentName string) (string, error) {
+func (k8sDeployer *K8SDeployer) GetDeploymentHost(serviceName string) (string, error) {
 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
 		return "", errors.New("Unable to connect to Kubernetes during get service hosts: " + err.Error())
@@ -1612,14 +1612,14 @@ func (k8sDeployer *K8SDeployer) GetDeploymentHost(deploymentName string) (string
 
 	nodeId := ""
 	for _, deployment := range deployments.Items {
-		if deployment.ObjectMeta.Name == deploymentName {
+		if deployment.ObjectMeta.Name == serviceName {
 			nodeId = deployment.Spec.Template.Spec.NodeSelector["hyperpilot/node-id"]
 			break
 		}
 	}
 
 	if nodeId == "" {
-		return "", fmt.Errorf("Unable to find node id of %s deployment:", deploymentName)
+		return "", fmt.Errorf("Unable to find node id of %s deployment:", serviceName)
 	}
 
 	nodeInfos := map[string]string{}
