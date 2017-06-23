@@ -52,3 +52,9 @@ type ClusterInfo struct {
 	BastionIp  string
 	MasterIp   string
 }
+
+type NodeTask struct {
+	Node     string `json:"node"`
+	HostName string `json:"hostName"`
+	Task     string `json:"task"`
+}

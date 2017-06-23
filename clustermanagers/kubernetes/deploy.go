@@ -1599,6 +1599,89 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 	return "", errors.New("Service not found in endpoints")
 }
 
+func (k8sDeployer *K8SDeployer) GetDeploymentHost(serviceName string) (string, error) {
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+	if err != nil {
+		return "", errors.New("Unable to connect to Kubernetes during get service hosts: " + err.Error())
+	}
+
+	deployments, err := k8sClient.Extensions().Deployments("").List(metav1.ListOptions{})
+	if err != nil {
+		return "", errors.New("Unable to list deployments in the cluster: " + err.Error())
+	}
+
+	nodeId := ""
+	for _, deployment := range deployments.Items {
+		if deployment.ObjectMeta.Name == serviceName {
+			nodeId = deployment.Spec.Template.Spec.NodeSelector["hyperpilot/node-id"]
+			break
+		}
+	}
+
+	if nodeId == "" {
+		return "", fmt.Errorf("Unable to find node id of %s deployment:", serviceName)
+	}
+
+	nodeInfos := map[string]string{}
+	for id, nodeInfo := range k8sDeployer.AWSCluster.NodeInfos {
+		nodeInfos[strconv.Itoa(id)] = aws.StringValue(nodeInfo.Instance.PrivateDnsName)
+	}
+
+	nodeName := ""
+	if privateDnsName, ok := nodeInfos[nodeId]; ok {
+		nodeName = privateDnsName
+	} else {
+		nodes, nodeError := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+		if nodeError != nil {
+			return "", fmt.Errorf("Unable to list nodes for get cluster: %s", nodeError.Error())
+		}
+
+		for _, node := range nodes.Items {
+			if node.Labels["hyperpilot/node-id"] == nodeId {
+				nodeName = node.Name
+				break
+			}
+		}
+	}
+
+	return nodeName, nil
+}
+
+func (k8sDeployer *K8SDeployer) GetDeploymentTasks() ([]NodeTask, error) {
+	nodeInfos := map[string]string{}
+	for id, nodeInfo := range k8sDeployer.AWSCluster.NodeInfos {
+		nodeInfos[strconv.Itoa(id)] = aws.StringValue(nodeInfo.Instance.PrivateDnsName)
+	}
+
+	if len(nodeInfos) == 0 {
+		k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+		if err != nil {
+			return nil, errors.New("Unable to connect to Kubernetes during get deployment tasks: " + err.Error())
+		}
+
+		nodes, nodeError := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+		if nodeError != nil {
+			return nil, fmt.Errorf("Unable to list nodes for get cluster: %s", nodeError.Error())
+		}
+
+		for _, node := range nodes.Items {
+			nodeInfos[node.Labels["hyperpilot/node-id"]] = node.Name
+		}
+	}
+
+	nodeTasks := []NodeTask{}
+	for _, mapping := range k8sDeployer.Deployment.NodeMapping {
+		nodeTask := NodeTask{
+			Node:     strconv.Itoa(mapping.Id),
+			HostName: nodeInfos[strconv.Itoa(mapping.Id)],
+			Task:     mapping.Task,
+		}
+		nodeTasks = append(nodeTasks, nodeTask)
+	}
+
+	return nodeTasks, nil
+}
+
 func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 	return &StoreInfo{
 		BastionIp: k8sDeployer.BastionIp,
