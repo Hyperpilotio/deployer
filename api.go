@@ -250,6 +250,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 		daemonsGroup.GET("/:deployment/tasks", server.getDeploymentTasks)
+		daemonsGroup.GET("/:deployment/host", server.getDeploymentHost)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 	}
@@ -772,6 +773,41 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, serviceUrl)
+}
+
+func (server *Server) getDeploymentHost(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find deployment",
+		})
+		return
+	}
+
+	if deploymentInfo.GetDeploymentType() != "K8S" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unsupported deployment type",
+		})
+		return
+	}
+
+	deploymentHost, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetDeploymentHost(deploymentName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to get deployment host domain name: " + err.Error(),
+		})
+		return
+	}
+
+	c.String(http.StatusOK, deploymentHost)
 }
 
 func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) error {
