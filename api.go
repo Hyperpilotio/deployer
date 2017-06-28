@@ -244,6 +244,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment", server.getDeployment)
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
+		daemonsGroup.DELETE("/:deployment/skipDeleteCluster", server.deleteKubernetesObjects)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
 
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
@@ -258,6 +259,7 @@ func (server *Server) StartServer() error {
 	{
 		templateGroup.POST("/:templateId", server.storeTemplateFile)
 		templateGroup.POST("/:templateId/deployments", server.createDeployment)
+		templateGroup.PUT("/:templateId/deployments/:deployment/skipDeployCluster", server.deployKubernetesObjects)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -635,6 +637,123 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
 		"data":  "Start to delete deployment " + deploymentName + "......",
+	})
+}
+
+func (server *Server) deleteKubernetesObjects(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  deploymentName + " not found.",
+		})
+		return
+	}
+
+	if deploymentInfo.GetDeploymentType() != "K8S" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unsupported deployment type",
+		})
+		return
+	}
+
+	if deploymentInfo.State != AVAILABLE {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  deploymentName + " is not available to delete",
+		})
+		return
+	}
+
+	go func() {
+		log := deploymentInfo.Deployer.GetLog()
+		if err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).DeleteKubernetesObjects(); err != nil {
+			log.Logger.Errorf("Unable to delete %s kubernetes objects", deploymentName)
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  fmt.Sprintf("Start to delete %s kubernetes objects", deploymentName),
+	})
+}
+
+func (server *Server) deployKubernetesObjects(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	// TODO Implement function to update deployment
+	deployment := &apis.Deployment{
+		UserId: c.Param("userId"),
+	}
+
+	if err := c.BindJSON(deployment); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error deserializing deployment: " + err.Error(),
+		})
+		return
+	}
+
+	templateId := c.Param("templateId")
+	if templateId != "" {
+		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, deployment)
+		if mergeErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Error merge template deployment: " + mergeErr.Error(),
+			})
+			return
+		}
+		deployment = mergeDeployment
+	}
+
+	server.mutex.Lock()
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Deployment not found",
+		})
+		return
+	}
+
+	if deploymentInfo.State != AVAILABLE {
+		server.mutex.Unlock()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Deployment is not available",
+		})
+		return
+	}
+	server.mutex.Unlock()
+
+	// Update deployment
+	deployment.Name = deploymentName
+	deploymentInfo.Deployment = deployment
+	deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
+	deploymentInfo.State = UPDATING
+
+	go func() {
+		log := deploymentInfo.Deployer.GetLog()
+		if err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).DeployKubernetesObjects(); err != nil {
+			log.Logger.Errorf("Unable to deploy %s kubernetes objects: %s", deploymentName, err.Error())
+			deploymentInfo.State = FAILED
+		} else {
+			log.Logger.Infof("Update %s deploymkubernetes objectsent successfully!", deploymentName)
+			deploymentInfo.State = AVAILABLE
+		}
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"error": false,
+		"data":  fmt.Sprintf("Start to deploy %s kubernetes objects", deploymentName),
 	})
 }
 

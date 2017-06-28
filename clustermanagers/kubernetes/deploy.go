@@ -131,6 +131,100 @@ func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	return nil
 }
 
+// DeleteKubernetesObjects clean up the kubernetes objects from deployment.
+func (k8sDeployer *K8SDeployer) DeleteKubernetesObjects() error {
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
+	deployment := k8sDeployer.Deployment
+	stackName := awsCluster.StackName()
+	log := k8sDeployer.DeploymentLog.Logger
+
+	if err := deleteK8S(getAllDeployedNamespaces(deployment), k8sDeployer.KubeConfig, log); err != nil {
+		return errors.New("Unable to delete k8s objects: " + err.Error())
+	}
+
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
+	if sessionErr != nil {
+		return errors.New("Unable to create aws session: " + sessionErr.Error())
+	}
+
+	elbSvc := elb.New(sess)
+	ec2Svc := ec2.New(sess)
+
+	if err := deleteLoadBalancers(elbSvc, true, stackName, log); err != nil {
+		return errors.New("Unable to delete load balancers: " + err.Error())
+	}
+
+	if err := deleteElbSecurityGroup(ec2Svc, stackName, log); err != nil {
+		return errors.New("Unable to delete elb securityGroups: " + err.Error())
+	}
+
+	return nil
+}
+
+func checkKubernetesObjectsExist(namespaces []string, k8sClient *k8s.Clientset) error {
+	for _, namespace := range namespaces {
+		if daemonsets, err := k8sClient.Extensions().DaemonSets(namespace).List(metav1.ListOptions{}); err == nil {
+			if len(daemonsets.Items) > 0 {
+				return fmt.Errorf("Find daemonsets in namespace '%s'", namespace)
+			}
+		} else {
+			return fmt.Errorf("Unable to list daemonsets in namespace '%s': %s", namespace, err.Error())
+		}
+
+		if deployments, err := k8sClient.Extensions().Deployments(namespace).List(metav1.ListOptions{}); err == nil {
+			if len(deployments.Items) > 0 {
+				return fmt.Errorf("Find deployments in namespace '%s'", namespace)
+			}
+		} else {
+			return fmt.Errorf("Unable to list deployments in namespace '%s': %s", namespace, err.Error())
+		}
+
+		if replicaSets, err := k8sClient.Extensions().ReplicaSets(namespace).List(metav1.ListOptions{}); err == nil {
+			if len(replicaSets.Items) > 0 {
+				return fmt.Errorf("Find replica sets in namespace '%s'", namespace)
+			}
+		} else {
+			return fmt.Errorf("Unable to list replica sets in namespace '%s': %s", namespace, err.Error())
+		}
+
+		if services, err := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{}); err == nil {
+			if len(services.Items) > 0 {
+				return fmt.Errorf("Find services in namespace '%s'", namespace)
+			}
+		} else {
+			return fmt.Errorf("Unable to list services in namespace '%s': %s", namespace, err.Error())
+		}
+
+		if pods, err := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{}); err == nil {
+			if len(pods.Items) > 0 {
+				return fmt.Errorf("Find pods in namespace '%s'", namespace)
+			}
+		} else {
+			return fmt.Errorf("Unable to list pods in namespace '%s': %s", namespace, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func (k8sDeployer *K8SDeployer) DeployKubernetesObjects() error {
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
+	}
+
+	if err := checkKubernetesObjectsExist(getAllDeployedNamespaces(k8sDeployer.Deployment), k8sClient); err != nil {
+		return errors.New("Unable to deploy k8s objects in check kubernetes objects is exist: " + err.Error())
+	}
+
+	if err := deployKubernetesObjects(k8sDeployer, k8sClient, true); err != nil {
+		return errors.New("Unable to deploy k8s objects: " + err.Error())
+	}
+
+	return nil
+}
+
 func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
