@@ -12,6 +12,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+type ServiceMapping struct {
+	NodeId    int
+	PublicUrl string
+}
+
 type K8SDeployer struct {
 	Config     *viper.Viper
 	AWSCluster *aws.AWSCluster
@@ -23,15 +28,15 @@ type K8SDeployer struct {
 	BastionIp      string
 	MasterIp       string
 	KubeConfigPath string
-	Endpoints      map[string]string
+	Services       map[string]ServiceMapping
 	KubeConfig     *rest.Config
 }
 
 type CreateDeploymentResponse struct {
-	Name      string            `json:"name"`
-	Endpoints map[string]string `json:"endpoints"`
-	BastionIp string            `json:"bastionIp"`
-	MasterIp  string            `json:"masterIp"`
+	Name      string                    `json:"name"`
+	Services  map[string]ServiceMapping `json:"services"`
+	BastionIp string                    `json:"bastionIp"`
+	MasterIp  string                    `json:"masterIp"`
 }
 
 type DeploymentLoadBalancers struct {
