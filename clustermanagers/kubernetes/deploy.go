@@ -656,7 +656,7 @@ func deleteNetworkInterfaces(ec2Svc *ec2.EC2, securityGroupNames []*string, log 
 		}
 	}
 
-	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(30)*time.Second, log); err != nil {
+	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(60)*time.Second, log); err != nil {
 		return fmt.Errorf("Unable to wait until network interface is available: %s\n", err.Error())
 	}
 
