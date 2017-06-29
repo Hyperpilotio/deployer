@@ -27,6 +27,7 @@ type Deployer interface {
 	GetLog() *log.DeploymentLog
 	GetScheduler() *job.Scheduler
 	GetServiceUrl(serviceName string) (string, error)
+	GetServiceMappings() (map[string]interface{}, error)
 }
 
 func NewDeployer(

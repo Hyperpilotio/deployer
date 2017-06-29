@@ -53,6 +53,14 @@ type KubernetesDeployment struct {
 	SkipDeleteOnFailure bool             `form:"skipdDeleteOnFailure" json:"skipDeleteOnFailure"`
 }
 
+type NodeMappings []NodeMapping
+
+func (d NodeMappings) Len() int { return len(d) }
+func (d NodeMappings) Less(i, j int) bool {
+	return d[i].Id < d[j].Id
+}
+func (d NodeMappings) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
+
 type Deployment struct {
 	UserId string `form:"userId" json:"userId" binding:"required"`
 	Name   string `form:"name" json:"name" binding:"required"`
@@ -63,7 +71,7 @@ type Deployment struct {
 	} `form:"files" json:"files"`
 	AllowedPorts      []int             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`
-	NodeMapping       []NodeMapping     `form:"nodeMapping" json:"nodeMapping" binding:"required"`
+	NodeMapping       NodeMappings      `form:"nodeMapping" json:"nodeMapping" binding:"required"`
 	IamRole           `form:"iamRole" json:"iamRole" binding:"required"`
 
 	*ECSDeployment        `form:"ecs" json:"ecs,omitempty"`

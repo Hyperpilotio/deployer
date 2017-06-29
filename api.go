@@ -251,6 +251,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
+		daemonsGroup.GET("/:deployment/services", server.getServicesMapping)
 	}
 
 	templateGroup := router.Group("/v1/templates")
@@ -733,6 +734,36 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, serviceUrl)
+}
+
+func (server *Server) getServices(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find deployment: " + deploymentName,
+		})
+		return
+	}
+
+	services, err := deploymentInfo.Deployer.GetServiceMappings()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to get service mappings: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  services,
+	})
 }
 
 func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) error {
