@@ -164,44 +164,12 @@ func (k8sDeployer *K8SDeployer) DeleteKubernetesObjects() error {
 
 func checkKubernetesObjectsExist(namespaces []string, k8sClient *k8s.Clientset) error {
 	for _, namespace := range namespaces {
-		if daemonsets, err := k8sClient.Extensions().DaemonSets(namespace).List(metav1.ListOptions{}); err == nil {
-			if len(daemonsets.Items) > 0 {
-				return fmt.Errorf("Find daemonsets in namespace '%s'", namespace)
-			}
-		} else {
-			return fmt.Errorf("Unable to list daemonsets in namespace '%s': %s", namespace, err.Error())
-		}
-
 		if deployments, err := k8sClient.Extensions().Deployments(namespace).List(metav1.ListOptions{}); err == nil {
 			if len(deployments.Items) > 0 {
 				return fmt.Errorf("Find deployments in namespace '%s'", namespace)
 			}
 		} else {
 			return fmt.Errorf("Unable to list deployments in namespace '%s': %s", namespace, err.Error())
-		}
-
-		if replicaSets, err := k8sClient.Extensions().ReplicaSets(namespace).List(metav1.ListOptions{}); err == nil {
-			if len(replicaSets.Items) > 0 {
-				return fmt.Errorf("Find replica sets in namespace '%s'", namespace)
-			}
-		} else {
-			return fmt.Errorf("Unable to list replica sets in namespace '%s': %s", namespace, err.Error())
-		}
-
-		if services, err := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{}); err == nil {
-			if len(services.Items) > 0 {
-				return fmt.Errorf("Find services in namespace '%s'", namespace)
-			}
-		} else {
-			return fmt.Errorf("Unable to list services in namespace '%s': %s", namespace, err.Error())
-		}
-
-		if pods, err := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{}); err == nil {
-			if len(pods.Items) > 0 {
-				return fmt.Errorf("Find pods in namespace '%s'", namespace)
-			}
-		} else {
-			return fmt.Errorf("Unable to list pods in namespace '%s': %s", namespace, err.Error())
 		}
 	}
 
