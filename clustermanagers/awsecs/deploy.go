@@ -1388,6 +1388,10 @@ func GetClusterInfo(awsProfile *hpaws.AWSProfile, awsCluster *hpaws.AWSCluster) 
 	return clusterInfo, nil
 }
 
+func (ecsDeployer *ECSDeployer) GetServiceMappings() (map[string]interface{}, error) {
+	return nil, errors.New("Unimplemented")
+}
+
 func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error) {
 	nodePort := ""
 	taskFamilyName := ""

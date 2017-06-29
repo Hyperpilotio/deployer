@@ -251,7 +251,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
-		daemonsGroup.GET("/:deployment/services", server.getServicesMapping)
+		daemonsGroup.GET("/:deployment/services", server.getServices)
 	}
 
 	templateGroup := router.Group("/v1/templates")
