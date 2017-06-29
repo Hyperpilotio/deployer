@@ -14,6 +14,7 @@ import (
 
 type ServiceMapping struct {
 	NodeId    int
+	NodeName  string
 	PublicUrl string
 }
 
