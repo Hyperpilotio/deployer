@@ -50,6 +50,7 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 		AWSCluster:    awsCluster,
 		Deployment:    deployment,
 		DeploymentLog: log,
+		Services:      make(map[string]ServiceMapping),
 	}
 
 	return deployer, nil
@@ -275,25 +276,25 @@ func deployCluster(k8sDeployer *K8SDeployer, uploadedFiles map[string]string) er
 	return nil
 }
 
-func (k8sDeployer *K8sDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+func (k8sDeployer *K8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
 	namespaces, namespacesErr := getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := createSecrets(k8sClient, namespaces, k8sDeployer.Deployment); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := k8sDeployer.deployServices(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			k8sDeployer.deleteDeploymentOnFailure()
+			deleteDeploymentOnFailure(k8sDeployer)
 		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -993,7 +994,7 @@ func deleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) deleteDeploymentOnFailure() {
+func deleteDeploymentOnFailure(k8sDeployer *K8SDeployer) {
 	log := k8sDeployer.DeploymentLog.Logger
 	if k8sDeployer.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
 		log.Warning("Skipping delete deployment on failure")
@@ -1003,7 +1004,7 @@ func (k8sDeployer *K8SDeployer) deleteDeploymentOnFailure() {
 	deleteDeployment(k8sDeployer)
 }
 
-func (k8sDeployer *K8SDeployer) deleteDeployment() {
+func deleteDeployment(k8sDeployer *K8SDeployer) {
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
 	deployment := k8sDeployer.Deployment
@@ -1279,7 +1280,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 		}
 
 		// Public Url will be tagged later in recordPublicEndpoint post deployment
-		k8sDeployer[family] = ServiceMapping{
+		k8sDeployer.Services[family] = ServiceMapping{
 			NodeId: mapping.Id,
 		}
 
@@ -1376,7 +1377,16 @@ func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) 
 						if len(service.Status.LoadBalancer.Ingress) > 0 {
 							hostname := service.Status.LoadBalancer.Ingress[0].Hostname
 							port := service.Spec.Ports[0].Port
-							k8sDeployer.Services[serviceName].PublicUrl = hostname + ":" + strconv.FormatInt(int64(port), 10)
+
+							serviceMapping := ServiceMapping{
+								PublicUrl: hostname + ":" + strconv.FormatInt(int64(port), 10),
+							}
+
+							familyName := serviceName[:strings.Index(serviceName, "-public")]
+							if mapping, ok := k8sDeployer.Services[familyName]; ok {
+								serviceMapping.NodeId = mapping.NodeId
+							}
+							k8sDeployer.Services[familyName] = serviceMapping
 						} else {
 							allElbsTagged = false
 							break
@@ -1581,29 +1591,63 @@ func (k8sDeployer *K8SDeployer) GetClusterInfo() (*ClusterInfo, error) {
 	return clusterInfo, nil
 }
 
-func (k8sDeployer *K8SDeployer) GetServices() (map[string]interface{}, error) {
+func (k8sDeployer *K8SDeployer) GetServiceMappings() (map[string]interface{}, error) {
+	nodeNameInfos := map[string]string{}
+	if len(k8sDeployer.AWSCluster.NodeInfos) > 0 {
+		for id, nodeInfo := range k8sDeployer.AWSCluster.NodeInfos {
+			nodeNameInfos[strconv.Itoa(id)] = aws.StringValue(nodeInfo.Instance.PrivateDnsName)
+		}
+	} else {
+		k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+		if err != nil {
+			return nil, errors.New("Unable to connect to Kubernetes: " + err.Error())
+		}
 
+		nodes, nodeError := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+		if nodeError != nil {
+			return nil, fmt.Errorf("Unable to list nodes: %s", nodeError.Error())
+		}
+
+		for _, node := range nodes.Items {
+			nodeNameInfos[node.Labels["hyperpilot/node-id"]] = node.Name
+		}
+	}
+
+	serviceMappings := make(map[string]interface{})
+	for serviceName, serviceMapping := range k8sDeployer.Services {
+		if serviceMapping.NodeId == 0 {
+			serviceNodeId, err := k8sDeployer.findNodeIdFromServiceName(serviceName)
+			if err != nil {
+				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
+			}
+			serviceMapping.NodeId = serviceNodeId
+		}
+		serviceMapping.NodeName = nodeNameInfos[strconv.Itoa(serviceMapping.NodeId)]
+		serviceMappings[serviceName] = serviceMapping
+	}
+
+	return serviceMappings, nil
 }
 
 // findNodeIdFromServiceName finds the node id that should be running this service
-func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(string serviceName) (int, error) {
+func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(serviceName string) (int, error) {
 	// if a service name contains a number (e.g: benchmark-agent-2), we assume
 	// it's the second benchmark agent from the mapping. Since we should be sorting
 	// the node ids when we deploy them, we should always assign the same service name
 	// for the same app running on the same node.
 	parts := strings.Split(serviceName, "-")
 	count := 1
-	if parts > 0 {
-		if nth, err := strconv.Atoi(parts[len(parts)-1]); err != nil {
+	realServiceName := serviceName
+	if len(parts) > 0 {
+		if nth, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
 			count = nth
+			realServiceName = strings.Join(parts[:len(parts)-1], "-")
 		}
-		parts = parts[len(parts)-1]
-		serviceName = strings.Join(parts, "-")
 	}
 	sort.Sort(k8sDeployer.Deployment.NodeMapping)
 	current := 0
 	for _, mapping := range k8sDeployer.Deployment.NodeMapping {
-		if mapping.Task == serviceName {
+		if mapping.Task == realServiceName {
 			current += 1
 			if current == count {
 				return mapping.Id, nil
@@ -1616,7 +1660,7 @@ func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(string serviceName) (i
 
 func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 	if info, ok := k8sDeployer.Services[serviceName]; ok {
-		return endpoint.PublicUrl, nil
+		return info.PublicUrl, nil
 	}
 
 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
