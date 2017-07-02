@@ -13,9 +13,9 @@ import (
 )
 
 type ServiceMapping struct {
-	NodeId    int
-	NodeName  string
-	PublicUrl string
+	NodeId    int    `json:"nodeId"`
+	NodeName  string `json:"nodeName"`
+	PublicUrl string `json:"publicUrl"`
 }
 
 type K8SDeployer struct {
