@@ -244,8 +244,9 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment", server.getDeployment)
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
-		daemonsGroup.DELETE("/:deployment/skipDeleteCluster", server.deleteKubernetesObjects)
+		daemonsGroup.DELETE("/:deployment/reset", server.resetDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
+		daemonsGroup.PUT("/:deployment/deploy", server.deployDeployment)
 
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
@@ -259,7 +260,7 @@ func (server *Server) StartServer() error {
 	{
 		templateGroup.POST("/:templateId", server.storeTemplateFile)
 		templateGroup.POST("/:templateId/deployments", server.createDeployment)
-		templateGroup.PUT("/:templateId/deployments/:deployment/skipDeployCluster", server.deployKubernetesObjects)
+		templateGroup.PUT("/:templateId/deployments/:deployment/deploy", server.deployDeployment)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -640,7 +641,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	})
 }
 
-func (server *Server) deleteKubernetesObjects(c *gin.Context) {
+func (server *Server) resetDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
 	server.mutex.Lock()
@@ -655,36 +656,28 @@ func (server *Server) deleteKubernetesObjects(c *gin.Context) {
 		return
 	}
 
-	if deploymentInfo.GetDeploymentType() != "K8S" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unsupported deployment type",
-		})
-		return
-	}
-
 	if deploymentInfo.State != AVAILABLE {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  deploymentName + " is not available to delete",
+			"data":  deploymentName + " is not available to reset",
 		})
 		return
 	}
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
-		if err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).DeleteKubernetesObjects(); err != nil {
-			log.Logger.Errorf("Unable to delete %s kubernetes objects", deploymentName)
+		if err := deploymentInfo.Deployer.ResetDeployment(); err != nil {
+			log.Logger.Errorf("Unable to reset %s deployment tasks", deploymentName)
 		}
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
-		"data":  fmt.Sprintf("Start to delete %s kubernetes objects", deploymentName),
+		"data":  fmt.Sprintf("Start to reset %s deployment tasks", deploymentName),
 	})
 }
 
-func (server *Server) deployKubernetesObjects(c *gin.Context) {
+func (server *Server) deployDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
 
 	// TODO Implement function to update deployment
@@ -742,18 +735,18 @@ func (server *Server) deployKubernetesObjects(c *gin.Context) {
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
-		if err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).DeployKubernetesObjects(); err != nil {
-			log.Logger.Errorf("Unable to deploy %s kubernetes objects: %s", deploymentName, err.Error())
+		if err := deploymentInfo.Deployer.DeployDeployment(); err != nil {
+			log.Logger.Errorf("Unable to deploy %s deployment tasks: %s", deploymentName, err.Error())
 			deploymentInfo.State = FAILED
 		} else {
-			log.Logger.Infof("Update %s deploymkubernetes objectsent successfully!", deploymentName)
+			log.Logger.Infof("Deploy %s deployment tasks successfully!", deploymentName)
 			deploymentInfo.State = AVAILABLE
 		}
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
-		"data":  fmt.Sprintf("Start to deploy %s kubernetes objects", deploymentName),
+		"data":  fmt.Sprintf("Start to deploy %s deployment tasks", deploymentName),
 	})
 }
 

@@ -131,8 +131,8 @@ func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	return nil
 }
 
-// DeleteKubernetesObjects clean up the kubernetes objects from deployment.
-func (k8sDeployer *K8SDeployer) DeleteKubernetesObjects() error {
+// ResetDeployment clean up the kubernetes objects from deployment.
+func (k8sDeployer *K8SDeployer) ResetDeployment() error {
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
 	deployment := k8sDeployer.Deployment
@@ -176,7 +176,7 @@ func checkKubernetesObjectsExist(namespaces []string, k8sClient *k8s.Clientset) 
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) DeployKubernetesObjects() error {
+func (k8sDeployer *K8SDeployer) DeployDeployment() error {
 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes: " + err.Error())
@@ -186,7 +186,7 @@ func (k8sDeployer *K8SDeployer) DeployKubernetesObjects() error {
 		return errors.New("Unable to deploy k8s objects in check kubernetes objects is exist: " + err.Error())
 	}
 
-	if err := deployKubernetesObjects(k8sDeployer, k8sClient, true); err != nil {
+	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
 
