@@ -20,6 +20,8 @@ type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) (interface{}, error)
 	UpdateDeployment() error
 	DeleteDeployment() error
+	ResetDeployment() error
+	DeployDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
 	GetStoreInfo() interface{}
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster

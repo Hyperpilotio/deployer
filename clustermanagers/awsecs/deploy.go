@@ -1432,3 +1432,11 @@ func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
 }
+
+func (ecsDeployer *ECSDeployer) ResetDeployment() error {
+	return errors.New("Unimplemented")
+}
+
+func (ecsDeployer *ECSDeployer) DeployDeployment() error {
+	return errors.New("Unimplemented")
+}
