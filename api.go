@@ -582,8 +582,9 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
-		"error": false,
-		"data":  "Creating deployment " + deployment.Name + "......",
+		"error":        false,
+		"data":         "Creating deployment " + deployment.Name + "......",
+		"deploymentId": deployment.Name,
 	})
 }
 
