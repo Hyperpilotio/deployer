@@ -5,18 +5,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hyperpilotio/blobstore"
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
-	"github.com/hyperpilotio/deployer/store"
+
 	"github.com/magiconair/properties/assert"
 	"github.com/spf13/viper"
 )
 
 var config *viper.Viper
-var deploymentStore store.Store
-var profileStore store.Store
+var deploymentStore blobstore.BlobStore
+var profileStore blobstore.BlobStore
 var k8sDeployer *kubernetes.K8SDeployer
 
 const (
@@ -32,8 +33,8 @@ func init() {
 	config.SetConfigFile("./documents/dev.config")
 	config.ReadInConfig()
 
-	deploymentStore, _ = store.NewStore("Deployments", config)
-	profileStore, _ = store.NewStore("AWSProfiles", config)
+	deploymentStore, _ = blobstore.NewBlobStore("Deployments", config)
+	profileStore, _ = blobstore.NewBlobStore("AWSProfiles", config)
 
 	kubernetesDeployment := &apis.Deployment{
 		UserId:               TEST_USER_ID,
