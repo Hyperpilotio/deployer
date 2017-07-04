@@ -125,41 +125,14 @@ func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) ResetTemplateDeployment() error {
-	awsCluster := k8sDeployer.AWSCluster
-	awsProfile := awsCluster.AWSProfile
-	deployment := k8sDeployer.Deployment
-	stackName := awsCluster.StackName()
-	log := k8sDeployer.DeploymentLog.Logger
-
-	log.Info("Updating kubernetes deployment")
+func (k8sDeployer *K8SDeployer) DeployExtensions() error {
 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
-		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
-	}
-
-	if err := deleteK8S(getAllDeployedNamespaces(deployment), k8sDeployer.KubeConfig, log); err != nil {
-		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
-	}
-
-	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
-	if sessionErr != nil {
-		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
-	}
-
-	elbSvc := elb.New(sess)
-	ec2Svc := ec2.New(sess)
-
-	if err := deleteLoadBalancers(elbSvc, true, stackName, log); err != nil {
-		log.Warningf("Unable to delete load balancers: " + err.Error())
-	}
-
-	if err := deleteElbSecurityGroup(ec2Svc, stackName, log); err != nil {
-		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
 	}
 
 	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
-		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
+		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
 
 	return nil
@@ -168,20 +141,6 @@ func (k8sDeployer *K8SDeployer) ResetTemplateDeployment() error {
 // DeleteDeployment clean up the cluster from kubenetes.
 func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	deleteDeployment(k8sDeployer)
-	return nil
-}
-
-func checkKubernetesObjectsExist(namespaces []string, k8sClient *k8s.Clientset) error {
-	for _, namespace := range namespaces {
-		if deployments, err := k8sClient.Extensions().Deployments(namespace).List(metav1.ListOptions{}); err == nil {
-			if len(deployments.Items) > 0 {
-				return fmt.Errorf("Find deployments in namespace '%s'", namespace)
-			}
-		} else {
-			return fmt.Errorf("Unable to list deployments in namespace '%s': %s", namespace, err.Error())
-		}
-	}
-
 	return nil
 }
 

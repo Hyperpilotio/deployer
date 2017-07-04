@@ -133,7 +133,7 @@ type Server struct {
 	UploadedFiles map[string]string
 
 	// Maps template id to templates
-	Templates map[string]*Deployment
+	Templates map[string]*apis.Deployment
 
 	mutex sync.Mutex
 }
@@ -144,7 +144,7 @@ func NewServer(config *viper.Viper) *Server {
 		Config:           config,
 		DeployedClusters: make(map[string]*DeploymentInfo),
 		UploadedFiles:    make(map[string]string),
-		Templates:        make(map[string]*Deployment),
+		Templates:        make(map[string]*apis.Deployment),
 	}
 }
 
@@ -159,7 +159,7 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 		Name:           deploymentInfo.Deployment.Name,
 		UserId:         deploymentInfo.Deployment.UserId,
 		Region:         deploymentInfo.Deployment.Region,
-		TemplateId:     deploymentInfo.Deployment.TemplateId,
+		TemplateId:     deploymentInfo.TemplateId,
 		Deployment:     string(b),
 		Status:         GetStateString(deploymentInfo.State),
 		Created:        deploymentInfo.Created.Format(time.RFC822),
@@ -251,9 +251,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment", server.getDeployment)
 		daemonsGroup.POST("", server.createDeployment)
 		daemonsGroup.DELETE("/:deployment", server.deleteDeployment)
-		daemonsGroup.DELETE("/:deployment/reset", server.resetDeployment)
 		daemonsGroup.PUT("/:deployment", server.updateDeployment)
-		daemonsGroup.PUT("/:deployment/deploy", server.deployDeployment)
 
 		daemonsGroup.GET("/:deployment/ssh_key", server.getPemFile)
 		daemonsGroup.GET("/:deployment/kubeconfig", server.getKubeConfigFile)
@@ -267,7 +265,8 @@ func (server *Server) StartServer() error {
 	{
 		templateGroup.POST("/:templateId", server.storeTemplateFile)
 		templateGroup.POST("/:templateId/deployments", server.createDeployment)
-		templateGroup.PUT("/:templateId/deployments/:deployment/deploy", server.deployDeployment)
+		templateGroup.PUT("/:templateId/deployments/:deployment/reset", server.resetTemplateDeployment)
+		templateGroup.PUT("/:templateId/deployments/:deployment/deploy", server.deployExtensions)
 	}
 
 	filesGroup := router.Group("/v1/files")
@@ -650,50 +649,77 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	})
 }
 
-func (server *Server) resetDeployment(c *gin.Context) {
+func (server *Server) resetTemplateDeployment(c *gin.Context) {
 	deploymentName := c.Param("deployment")
+	templateId := c.Param("templateId")
 
 	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
 	deploymentInfo, ok := server.DeployedClusters[deploymentName]
 	if !ok {
+		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  deploymentName + " not found.",
+			"data":  "Deployment not found",
 		})
 		return
 	}
 
 	if deploymentInfo.State != AVAILABLE {
+		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  deploymentName + " is not available to reset",
+			"data":  "Deployment is not available",
 		})
 		return
 	}
 
+	deployment, ok := server.Templates[templateId]
+	if !ok {
+		server.mutex.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Template not found",
+		})
+		return
+	}
+	server.mutex.Unlock()
+
+	// Update deployment
+	deployment.UserId = deploymentInfo.Deployment.UserId
+	deployment.Name = deploymentName
+	deploymentInfo.Deployment = deployment
+	switch deploymentInfo.GetDeploymentType() {
+	case "ECS":
+		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
+	case "K8S":
+		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
+	}
+	deploymentInfo.State = UPDATING
+
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
-		if err := deploymentInfo.Deployer.ResetDeployment(); err != nil {
-			log.Logger.Errorf("Unable to reset %s deployment tasks", deploymentName)
+
+		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
+			log.Logger.Error("Unable to reset template deployment")
+			deploymentInfo.State = FAILED
+		} else {
+			log.Logger.Infof("Reset template deployment successfully!")
+			deploymentInfo.State = AVAILABLE
 		}
+		server.storeDeploymentStatus(deploymentInfo)
 	}()
 
-	c.JSON(http.StatusAccepted, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  fmt.Sprintf("Start to reset %s deployment tasks", deploymentName),
+		"data":  "Start to reset template deployment " + deploymentName + "......",
 	})
 }
 
-func (server *Server) deployDeployment(c *gin.Context) {
+func (server *Server) deployExtensions(c *gin.Context) {
 	deploymentName := c.Param("deployment")
+	templateId := c.Param("templateId")
 
-	// TODO Implement function to update deployment
-	deployment := &apis.Deployment{
-		UserId: c.Param("userId"),
-	}
-
+	deployment := &apis.Deployment{}
 	if err := c.BindJSON(deployment); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -702,17 +728,12 @@ func (server *Server) deployDeployment(c *gin.Context) {
 		return
 	}
 
-	templateId := c.Param("templateId")
-	if templateId != "" {
-		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, deployment)
-		if mergeErr != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Error merge template deployment: " + mergeErr.Error(),
-			})
-			return
-		}
-		deployment = mergeDeployment
+	if templateId == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  templateId + " not found.",
+		})
+		return
 	}
 
 	server.mutex.Lock()
@@ -739,23 +760,44 @@ func (server *Server) deployDeployment(c *gin.Context) {
 	// Update deployment
 	deployment.Name = deploymentName
 	deploymentInfo.Deployment = deployment
-	deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
+	switch deploymentInfo.GetDeploymentType() {
+	case "ECS":
+		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
+	case "K8S":
+		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
+	}
 	deploymentInfo.State = UPDATING
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
-		if err := deploymentInfo.Deployer.DeployDeployment(); err != nil {
-			log.Logger.Errorf("Unable to deploy %s deployment tasks: %s", deploymentName, err.Error())
+
+		if err := deploymentInfo.Deployer.DeployExtensions(); err != nil {
+			log.Logger.Error("Unable to deploy extensions deployment")
 			deploymentInfo.State = FAILED
 		} else {
-			log.Logger.Infof("Deploy %s deployment tasks successfully!", deploymentName)
+			log.Logger.Infof("Deploy extensions deployment successfully!")
 			deploymentInfo.State = AVAILABLE
 		}
+
+		newDeployment, err := server.mergeNewDeployment(templateId, deployment)
+		if err != nil {
+			log.Logger.Error("Unable merge new deployment")
+		} else {
+			deploymentInfo.Deployment = newDeployment
+			switch deploymentInfo.GetDeploymentType() {
+			case "ECS":
+				deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = newDeployment
+			case "K8S":
+				deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = newDeployment
+			}
+		}
+
+		server.storeDeploymentStatus(deploymentInfo)
 	}()
 
-	c.JSON(http.StatusAccepted, gin.H{
+	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  fmt.Sprintf("Start to deploy %s deployment tasks", deploymentName),
+		"data":  "Start to reset template deployment " + deploymentName + "......",
 	})
 }
 
@@ -944,6 +986,10 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 		return
 	}
 
+	server.mutex.Lock()
+	server.Templates[templateId] = deployment
+	server.mutex.Unlock()
+
 	c.JSON(http.StatusAccepted, gin.H{
 		"error": false,
 		"data":  "",
@@ -951,24 +997,12 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 }
 
 func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment *apis.Deployment) (*apis.Deployment, error) {
-	findTemplate := false
-	templateDeployment := &TemplateDeployment{}
-	for _, template := range templates.([]interface{}) {
-		if template.(*TemplateDeployment).TemplateId == templateId {
-			templateDeployment = template.(*TemplateDeployment)
-			findTemplate = true
-			break
-		}
-	}
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 
-	if !findTemplate {
+	deployment, ok := server.Templates[templateId]
+	if !ok {
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
-	}
-
-	deployment := &apis.Deployment{}
-	unmarshalErr := json.Unmarshal([]byte(templateDeployment.Deployment), deployment)
-	if unmarshalErr != nil {
-		return nil, fmt.Errorf("Unable to load %s deployment manifest for deployment", templateId)
 	}
 
 	if needMergeDeployment.UserId != "" {
@@ -1017,11 +1051,19 @@ func (server *Server) reloadClusterState() error {
 		return &TemplateDeployment{}
 	})
 	if templateErr != nil {
-		return nil, fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
+		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
 	}
 
-	for _, template := range templates {
-		server.Templates[template.TemplateId] = template.Deployment
+	for _, template := range templates.([]interface{}) {
+		templateId := template.(*TemplateDeployment)
+		deploymentJSON := template.(*TemplateDeployment).Deployment
+
+		deployment := &apis.Deployment{}
+		if err := json.Unmarshal([]byte(deploymentJSON), deployment); err != nil {
+			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateId)
+			continue
+		}
+		server.Templates[template.(*TemplateDeployment).TemplateId] = deployment
 	}
 
 	shutdownTime := server.Config.GetString("shutDownTime")
