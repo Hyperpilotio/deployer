@@ -797,7 +797,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "Start to reset template deployment " + deploymentName + "......",
+		"data":  "Start to deploy extensions deployment " + deploymentName + "......",
 	})
 }
 
