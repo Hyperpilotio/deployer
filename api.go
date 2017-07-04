@@ -65,7 +65,7 @@ type StoreDeployment struct {
 	ClusterManager interface{}
 }
 
-type TemplateDeployment struct {
+type StoreTemplateDeployment struct {
 	TemplateId string
 	Deployment string
 }
@@ -973,7 +973,7 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 	}
 
 	templateId := c.Param("templateId")
-	templateDeployment := &TemplateDeployment{
+	templateDeployment := &StoreTemplateDeployment{
 		TemplateId: templateId,
 		Deployment: string(b),
 	}
@@ -1048,22 +1048,22 @@ func (server *Server) reloadClusterState() error {
 	}
 
 	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
-		return &TemplateDeployment{}
+		return &StoreTemplateDeployment{}
 	})
 	if templateErr != nil {
 		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
 	}
 
 	for _, template := range templates.([]interface{}) {
-		templateId := template.(*TemplateDeployment)
-		deploymentJSON := template.(*TemplateDeployment).Deployment
+		templateId := template.(*StoreTemplateDeployment)
+		deploymentJSON := template.(*StoreTemplateDeployment).Deployment
 
 		deployment := &apis.Deployment{}
 		if err := json.Unmarshal([]byte(deploymentJSON), deployment); err != nil {
 			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateId)
 			continue
 		}
-		server.Templates[template.(*TemplateDeployment).TemplateId] = deployment
+		server.Templates[template.(*StoreTemplateDeployment).TemplateId] = deployment
 	}
 
 	shutdownTime := server.Config.GetString("shutDownTime")
