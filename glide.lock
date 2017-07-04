@@ -98,7 +98,7 @@ imports:
 - name: github.com/howeyc/gopass
   version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
 - name: github.com/hyperpilotio/blobstore
-  version: 4a678bbfc5456e879cb044fb71222c8f08a51418
+  version: 2d9f571d349328c90844d537818adeafa29f53d4
 - name: github.com/imdario/mergo
   version: 6633656539c1639d9d78127b7d47c622b5d7b6dc
 - name: github.com/jmespath/go-jmespath
