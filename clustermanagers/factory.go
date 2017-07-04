@@ -19,7 +19,6 @@ import (
 type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) (interface{}, error)
 	UpdateDeployment() error
-	ResetTemplateDeployment() error
 	DeployExtensions() error
 	DeleteDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
