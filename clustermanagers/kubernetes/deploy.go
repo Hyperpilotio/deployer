@@ -125,40 +125,49 @@ func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
 	return nil
 }
 
-// DeleteDeployment clean up the cluster from kubenetes.
-func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
-	deleteDeployment(k8sDeployer)
-	return nil
-}
-
-// ResetDeployment clean up the kubernetes objects from deployment.
-func (k8sDeployer *K8SDeployer) ResetDeployment() error {
+func (k8sDeployer *K8SDeployer) ResetTemplateDeployment() error {
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
 	deployment := k8sDeployer.Deployment
 	stackName := awsCluster.StackName()
 	log := k8sDeployer.DeploymentLog.Logger
 
+	log.Info("Updating kubernetes deployment")
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
 	if err := deleteK8S(getAllDeployedNamespaces(deployment), k8sDeployer.KubeConfig, log); err != nil {
-		return errors.New("Unable to delete k8s objects: " + err.Error())
+		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
 	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
 	if sessionErr != nil {
-		return errors.New("Unable to create aws session: " + sessionErr.Error())
+		return errors.New("Unable to create aws session for delete: " + sessionErr.Error())
 	}
 
 	elbSvc := elb.New(sess)
 	ec2Svc := ec2.New(sess)
 
 	if err := deleteLoadBalancers(elbSvc, true, stackName, log); err != nil {
-		return errors.New("Unable to delete load balancers: " + err.Error())
+		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
 	if err := deleteElbSecurityGroup(ec2Svc, stackName, log); err != nil {
-		return errors.New("Unable to delete elb securityGroups: " + err.Error())
+		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
+	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
+		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
+	}
+
+	return nil
+}
+
+// DeleteDeployment clean up the cluster from kubenetes.
+func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
+	deleteDeployment(k8sDeployer)
 	return nil
 }
 
@@ -171,23 +180,6 @@ func checkKubernetesObjectsExist(namespaces []string, k8sClient *k8s.Clientset) 
 		} else {
 			return fmt.Errorf("Unable to list deployments in namespace '%s': %s", namespace, err.Error())
 		}
-	}
-
-	return nil
-}
-
-func (k8sDeployer *K8SDeployer) DeployDeployment() error {
-	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
-	if err != nil {
-		return errors.New("Unable to connect to kubernetes: " + err.Error())
-	}
-
-	if err := checkKubernetesObjectsExist(getAllDeployedNamespaces(k8sDeployer.Deployment), k8sClient); err != nil {
-		return errors.New("Unable to deploy k8s objects in check kubernetes objects is exist: " + err.Error())
-	}
-
-	if err := k8sDeployer.deployKubernetesObjects(k8sClient, true); err != nil {
-		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
 
 	return nil

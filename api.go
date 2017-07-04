@@ -16,13 +16,13 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
+	"github.com/hyperpilotio/blobstore"
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/store"
 	"github.com/spf13/viper"
 
 	"net/http"
@@ -44,10 +44,10 @@ const (
 type DeploymentInfo struct {
 	Deployer   clustermanagers.Deployer
 	Deployment *apis.Deployment
-
-	Created  time.Time
-	ShutDown time.Time
-	State    DeploymentState
+	TemplateId string
+	Created    time.Time
+	ShutDown   time.Time
+	State      DeploymentState
 }
 
 // This defines what's being persisted in store
@@ -60,6 +60,7 @@ type StoreDeployment struct {
 	KeyMaterial string
 	UserId      string
 	Deployment  string
+	TemplateId  string
 	// Stores cluster manager specific stored information
 	ClusterManager interface{}
 }
@@ -118,9 +119,9 @@ func ParseStateString(state string) DeploymentState {
 // Server store the stats / data of every deployment
 type Server struct {
 	Config          *viper.Viper
-	DeploymentStore store.Store
-	ProfileStore    store.Store
-	TemplateStore   store.Store
+	DeploymentStore blobstore.BlobStore
+	ProfileStore    blobstore.BlobStore
+	TemplateStore   blobstore.BlobStore
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -130,7 +131,11 @@ type Server struct {
 
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
-	mutex         sync.Mutex
+
+	// Maps template id to templates
+	Templates map[string]*Deployment
+
+	mutex sync.Mutex
 }
 
 // NewServer return an instance of Server struct.
@@ -139,6 +144,7 @@ func NewServer(config *viper.Viper) *Server {
 		Config:           config,
 		DeployedClusters: make(map[string]*DeploymentInfo),
 		UploadedFiles:    make(map[string]string),
+		Templates:        make(map[string]*Deployment),
 	}
 }
 
@@ -153,6 +159,7 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 		Name:           deploymentInfo.Deployment.Name,
 		UserId:         deploymentInfo.Deployment.UserId,
 		Region:         deploymentInfo.Deployment.Region,
+		TemplateId:     deploymentInfo.Deployment.TemplateId,
 		Deployment:     string(b),
 		Status:         GetStateString(deploymentInfo.State),
 		Created:        deploymentInfo.Created.Format(time.RFC822),
@@ -180,19 +187,19 @@ func (server *Server) StartServer() error {
 		}
 	}
 
-	if deploymentStore, err := store.NewStore("Deployments", server.Config); err != nil {
+	if deploymentStore, err := blobstore.NewBlobStore("Deployments", server.Config); err != nil {
 		return errors.New("Unable to create deployments store: " + err.Error())
 	} else {
 		server.DeploymentStore = deploymentStore
 	}
 
-	if profileStore, err := store.NewStore("AWSProfiles", server.Config); err != nil {
+	if profileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
 		return errors.New("Unable to create awsProfiles store: " + err.Error())
 	} else {
 		server.ProfileStore = profileStore
 	}
 
-	if templateStore, err := store.NewStore("Templates", server.Config); err != nil {
+	if templateStore, err := blobstore.NewBlobStore("Templates", server.Config); err != nil {
 		return errors.New("Unable to create templates store: " + err.Error())
 	} else {
 		server.TemplateStore = templateStore
@@ -522,6 +529,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	deploymentInfo := &DeploymentInfo{
+		TemplateId: templateId,
 		Deployment: deployment,
 		Created:    time.Now(),
 		State:      CREATING,
@@ -943,13 +951,6 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 }
 
 func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment *apis.Deployment) (*apis.Deployment, error) {
-	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
-		return &TemplateDeployment{}
-	})
-	if templateErr != nil {
-		return nil, fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
-	}
-
 	findTemplate := false
 	templateDeployment := &TemplateDeployment{}
 	for _, template := range templates.([]interface{}) {
@@ -1010,6 +1011,17 @@ func (server *Server) reloadClusterState() error {
 	})
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	}
+
+	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
+		return &TemplateDeployment{}
+	})
+	if templateErr != nil {
+		return nil, fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
+	}
+
+	for _, template := range templates {
+		server.Templates[template.TemplateId] = template.Deployment
 	}
 
 	shutdownTime := server.Config.GetString("shutDownTime")
