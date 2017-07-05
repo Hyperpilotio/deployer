@@ -1433,6 +1433,8 @@ func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
 }
 
-func (ecsDeployer *ECSDeployer) DeployExtensions() error {
+func (ecsDeployer *ECSDeployer) DeployExtensions(
+	extensions *apis.Deployment,
+	newDeployment *apis.Deployment) error {
 	return errors.New("Unimplemented")
 }

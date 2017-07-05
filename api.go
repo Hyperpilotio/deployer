@@ -731,7 +731,16 @@ func (server *Server) deployExtensions(c *gin.Context) {
 	if templateId == "" {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  templateId + " not found.",
+			"data":  "Empty template passed",
+		})
+		return
+	}
+
+	newDeployment, err := server.mergeNewDeployment(templateId, deployment)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to merge new deployment: " + err.Error(),
 		})
 		return
 	}
@@ -747,7 +756,8 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		return
 	}
 
-	if deploymentInfo.State != AVAILABLE {
+	// We allow failed deployment to retry for extensions
+	if deploymentInfo.State != AVAILABLE || deploymentInfo.State != FAILED {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -755,41 +765,20 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
-	// Update deployment
-	deployment.Name = deploymentName
-	deploymentInfo.Deployment = deployment
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
-	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
-	}
 	deploymentInfo.State = UPDATING
+	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
 
-		if err := deploymentInfo.Deployer.DeployExtensions(); err != nil {
+		if err := deploymentInfo.Deployer.DeployExtensions(deployment, newDeployment); err != nil {
 			log.Logger.Error("Unable to deploy extensions deployment: " + err.Error())
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Deploy extensions deployment successfully!")
-			deploymentInfo.State = AVAILABLE
-		}
-
-		newDeployment, err := server.mergeNewDeployment(templateId, deployment)
-		if err != nil {
-			log.Logger.Error("Unable merge new deployment")
-		} else {
 			deploymentInfo.Deployment = newDeployment
-			switch deploymentInfo.GetDeploymentType() {
-			case "ECS":
-				deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = newDeployment
-			case "K8S":
-				deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = newDeployment
-			}
+			deploymentInfo.State = AVAILABLE
 		}
 
 		server.storeDeploymentStatus(deploymentInfo)

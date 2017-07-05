@@ -19,7 +19,7 @@ import (
 type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) (interface{}, error)
 	UpdateDeployment() error
-	DeployExtensions() error
+	DeployExtensions(extensions *apis.Deployment, mergedDeployment *apis.Deployment) error
 	DeleteDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
 	GetStoreInfo() interface{}
