@@ -772,7 +772,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		log := deploymentInfo.Deployer.GetLog()
 
 		if err := deploymentInfo.Deployer.DeployExtensions(); err != nil {
-			log.Logger.Error("Unable to deploy extensions deployment")
+			log.Logger.Error("Unable to deploy extensions deployment: " + err.Error())
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Deploy extensions deployment successfully!")
