@@ -9,12 +9,14 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecs"
 )
 
+type ClusterNode struct {
+	Id           int    `form:"id" json:"id" binding:"required"`
+	InstanceType string `form:"instanceType" json:"instanceType" binding:"required"`
+}
+
 // ClusterDefinition storing the information of a cluster
 type ClusterDefinition struct {
-	Nodes []struct {
-		Id           int    `form:"id" json:"id" binding:"required"`
-		InstanceType string `form:"instanceType" json:"instanceType" binding:"required"`
-	} `form:"nodes" json:"nodes" binding:"required"`
+	Nodes []ClusterNode `form:"nodes" json:"nodes" binding:"required"`
 }
 
 type NodeMapping struct {

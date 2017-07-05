@@ -42,12 +42,12 @@ const (
 
 // Per deployment tracking struct for the server
 type DeploymentInfo struct {
-	Deployer   clustermanagers.Deployer
-	Deployment *apis.Deployment
-	TemplateId string
-	Created    time.Time
-	ShutDown   time.Time
-	State      DeploymentState
+	Deployer   clustermanagers.Deployer `json:"-"`
+	Deployment *apis.Deployment         `json:"Deployment"`
+	TemplateId string                   `json:"TemplateId"`
+	Created    time.Time                `json:"Created"`
+	ShutDown   time.Time                `json:"ShutDown"`
+	State      DeploymentState          `json:"State"`
 }
 
 // This defines what's being persisted in store
@@ -475,6 +475,8 @@ func (server *Server) getAllDeployments(c *gin.Context) {
 }
 
 func (server *Server) getDeployment(c *gin.Context) {
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
 	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
 		c.JSON(http.StatusOK, gin.H{
 			"error": false,
