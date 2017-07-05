@@ -435,28 +435,25 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
-	// Update deployment
 	deployment.Name = deploymentName
-	deploymentInfo.Deployment = deployment
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
-	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
-	}
 	deploymentInfo.State = UPDATING
+	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(deployment); err != nil {
 			log.Logger.Error("Unable to update deployment")
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Update deployment successfully!")
+			deploymentInfo.Deployment = deployment
 			deploymentInfo.State = AVAILABLE
+		}
+
+		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 		server.storeDeploymentStatus(deploymentInfo)
 	}()
@@ -475,17 +472,24 @@ func (server *Server) getAllDeployments(c *gin.Context) {
 }
 
 func (server *Server) getDeployment(c *gin.Context) {
-	if data, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  data,
-		})
-	} else {
+	deploymentName := c.Param("deployment")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  c.Param("deployment") + " not found.",
+			"data":  deploymentName + " not found",
 		})
+		return
 	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  deploymentInfo.Deployment,
+	})
 }
 
 func (server *Server) createDeployment(c *gin.Context) {
@@ -682,29 +686,26 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
-	// Update deployment
 	deployment.UserId = deploymentInfo.Deployment.UserId
 	deployment.Name = deploymentName
-	deploymentInfo.Deployment = deployment
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
-	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
-	}
 	deploymentInfo.State = UPDATING
+	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(deployment); err != nil {
 			log.Logger.Error("Unable to reset template deployment")
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Reset template deployment successfully!")
+			deploymentInfo.Deployment = deployment
 			deploymentInfo.State = AVAILABLE
+		}
+
+		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 		server.storeDeploymentStatus(deploymentInfo)
 	}()
@@ -721,6 +722,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 
 	deployment := &apis.Deployment{}
 	if err := c.BindJSON(deployment); err != nil {
+		fmt.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Error deserializing deployment: " + err.Error(),
@@ -738,6 +740,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 
 	newDeployment, err := server.mergeNewDeployment(templateId, deployment)
 	if err != nil {
+		fmt.Println(err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Unable to merge new deployment: " + err.Error(),
@@ -757,11 +760,12 @@ func (server *Server) deployExtensions(c *gin.Context) {
 	}
 
 	// We allow failed deployment to retry for extensions
-	if deploymentInfo.State != AVAILABLE || deploymentInfo.State != FAILED {
+	switch deploymentInfo.State {
+	case CREATING, UPDATING, DELETING, DELETED:
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Deployment is not available",
+			"data":  "Deployment state is not to deploy extensions deployment",
 		})
 		return
 	}
@@ -781,6 +785,9 @@ func (server *Server) deployExtensions(c *gin.Context) {
 			deploymentInfo.State = AVAILABLE
 		}
 
+		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
+		}
 		server.storeDeploymentStatus(deploymentInfo)
 	}()
 
