@@ -153,7 +153,7 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	return nil, nil
 }
 
-func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
+func (ecsDeployer *ECSDeployer) UpdateDeployment(updateDeployment *apis.Deployment) error {
 	// TODO Implement EC2 UpdateDeployment
 	return nil
 }

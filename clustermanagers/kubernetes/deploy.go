@@ -85,10 +85,10 @@ func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
+func (k8sDeployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error {
+	k8sDeployer.Deployment = deployment
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
-	deployment := k8sDeployer.Deployment
 	stackName := awsCluster.StackName()
 	log := k8sDeployer.DeploymentLog.Logger
 
@@ -1376,6 +1376,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	deployment := k8sDeployer.Deployment
 	log := k8sDeployer.DeploymentLog.Logger
+	k8sDeployer.Services = map[string]ServiceMapping{}
 
 	allNamespaces := getAllDeployedNamespaces(deployment)
 	c := make(chan bool, 1)
