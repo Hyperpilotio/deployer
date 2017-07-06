@@ -22,7 +22,7 @@ type K8SDeployer struct {
 	Config     *viper.Viper
 	AWSCluster *aws.AWSCluster
 
-	DeploymentLog *log.DeploymentLog
+	DeploymentLog *log.FileLog
 	Deployment    *apis.Deployment
 	Scheduler     *job.Scheduler
 

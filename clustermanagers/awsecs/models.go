@@ -15,7 +15,7 @@ type ECSDeployer struct {
 	AWSCluster *aws.AWSCluster
 
 	Deployment    *apis.Deployment
-	DeploymentLog *log.DeploymentLog
+	DeploymentLog *log.FileLog
 	Scheduler     *job.Scheduler
 }
 

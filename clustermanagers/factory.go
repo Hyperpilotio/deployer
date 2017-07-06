@@ -25,7 +25,7 @@ type Deployer interface {
 	GetStoreInfo() interface{}
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
 	GetAWSCluster() *aws.AWSCluster
-	GetLog() *log.DeploymentLog
+	GetLog() *log.FileLog
 	GetScheduler() *job.Scheduler
 	SetScheduler(sheduler *job.Scheduler)
 	GetServiceUrl(serviceName string) (string, error)

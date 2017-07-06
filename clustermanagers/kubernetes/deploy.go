@@ -39,7 +39,7 @@ var publicPortType = 1
 
 // NewDeployer return the K8S of Deployer
 func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*K8SDeployer, error) {
-	log, err := log.NewLogger(config, deployment.Name)
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
@@ -56,7 +56,7 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 	return deployer, nil
 }
 
-func (k8sDeployer *K8SDeployer) GetLog() *log.DeploymentLog {
+func (k8sDeployer *K8SDeployer) GetLog() *log.FileLog {
 	return k8sDeployer.DeploymentLog
 }
 

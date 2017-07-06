@@ -430,7 +430,8 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Deployment is not available",
+			"data": "Deployment is not available, current state: " +
+				GetStateString(deploymentInfo.State),
 		})
 		return
 	}
@@ -616,7 +617,8 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  deploymentName + " is not available to delete",
+			"data": "Deployment is not available, current state: " +
+				GetStateString(deploymentInfo.State),
 		})
 		return
 	}
@@ -671,7 +673,8 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Deployment is not available",
+			"data": "Deployment is not available, currnet state: " +
+				GetStateString(deploymentInfo.State),
 		})
 		return
 	}
@@ -767,7 +770,8 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Deployment state is not to deploy extensions deployment, state: " + GetStateString(deploymentInfo.State),
+			"data": "Deployment state is not to deploy extensions deployment, state: " +
+				GetStateString(deploymentInfo.State),
 		})
 		return
 	}
@@ -1017,9 +1021,24 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		deployment.Name = needMergeDeployment.Name
 	}
 
+	existingMapping := deployment.NodeMapping
+	deployment.NodeMapping = make([]apis.NodeMapping, 0)
+
+	for _, nodeMapping := range existingMapping {
+		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
+	}
+
 	for _, nodeMapping := range needMergeDeployment.NodeMapping {
 		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
 	}
+
+	existingKubernetesDeployment := deployment.KubernetesDeployment.Kubernetes
+	deployment.KubernetesDeployment.Kubernetes = make([]apis.KubernetesTask, 0)
+
+	for _, task := range existingKubernetesDeployment {
+		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+	}
+
 	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
 		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
 	}
