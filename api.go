@@ -458,7 +458,7 @@ func (server *Server) updateDeployment(c *gin.Context) {
 			log.Logger.Infof("Update deployment successfully!")
 			deploymentInfo.State = AVAILABLE
 		}
-		server.storeDeploymentStatus(deploymentInfo)
+		server.storeDeployment(deploymentInfo)
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -587,7 +587,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			server.mutex.Unlock()
 		}
 
-		server.storeDeploymentStatus(deploymentInfo)
+		server.storeDeployment(deploymentInfo)
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -638,7 +638,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			log.Logger.Infof("Delete deployment successfully!")
 			deploymentInfo.State = DELETED
 		}
-		server.storeDeploymentStatus(deploymentInfo)
+		server.storeDeployment(deploymentInfo)
 
 		server.mutex.Lock()
 		delete(server.DeployedClusters, deploymentName)
@@ -710,7 +710,7 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 			log.Logger.Infof("Reset template deployment successfully!")
 			deploymentInfo.State = AVAILABLE
 		}
-		server.storeDeploymentStatus(deploymentInfo)
+		server.storeDeployment(deploymentInfo)
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -788,7 +788,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 			deploymentInfo.State = AVAILABLE
 		}
 
-		server.storeDeploymentStatus(deploymentInfo)
+		server.storeDeployment(deploymentInfo)
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -925,15 +925,17 @@ func (server *Server) getServices(c *gin.Context) {
 	})
 }
 
-func (server *Server) storeDeploymentStatus(deploymentInfo *DeploymentInfo) error {
+func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
 
 	switch deploymentInfo.State {
 	case DELETED:
+		glog.Infof("Deleting deployment from store: " + deploymentName)
 		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
 			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 	default:
+		glog.Infof("Storing deployment: " + deploymentName)
 		deployment, err := deploymentInfo.NewStoreDeployment()
 		if err != nil {
 			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
@@ -1073,7 +1075,9 @@ func (server *Server) reloadClusterState() error {
 
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
+		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+			// TODO: Remove failed stored deployments
 			continue
 		}
 
@@ -1106,6 +1110,7 @@ func (server *Server) reloadClusterState() error {
 		deploymentInfo := &DeploymentInfo{
 			Deployer:   deployer,
 			Deployment: deployment,
+			TemplateId: storeDeployment.TemplateId,
 			Created:    time.Now(),
 			State:      ParseStateString(storeDeployment.Status),
 		}
@@ -1140,7 +1145,7 @@ func (server *Server) reloadClusterState() error {
 
 			if deploymentInfo.State == AVAILABLE {
 				if err := server.NewShutDownScheduler(deployer, deploymentInfo, newScheduleRunTime); err != nil {
-					glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+					glog.Warningf("Unable to create auto shutdown scheduler for %s: %s", deployment.Name, err.Error())
 				}
 			}
 		}
@@ -1149,21 +1154,21 @@ func (server *Server) reloadClusterState() error {
 	return nil
 }
 
-func (server *Server) NewShutDownScheduler(deployer clustermanagers.Deployer,
-	deploymentInfo *DeploymentInfo, custScheduleRunTime string) error {
+func (server *Server) NewShutDownScheduler(
+	deployer clustermanagers.Deployer,
+	deploymentInfo *DeploymentInfo,
+	custScheduleRunTime string) error {
 	if deployer.GetScheduler() != nil {
 		deployer.GetScheduler().Stop()
 	}
 
-	scheduleRunTime := ""
-	if deploymentInfo.Deployment.ShutDownTime != "" {
-		scheduleRunTime = deploymentInfo.Deployment.ShutDownTime
-	} else {
-		scheduleRunTime = server.Config.GetString("shutDownTime")
-	}
-
-	if custScheduleRunTime != "" {
-		scheduleRunTime = custScheduleRunTime
+	scheduleRunTime := custScheduleRunTime
+	if scheduleRunTime == "" {
+		if deploymentInfo.Deployment.ShutDownTime != "" {
+			scheduleRunTime = deploymentInfo.Deployment.ShutDownTime
+		} else {
+			scheduleRunTime = server.Config.GetString("shutDownTime")
+		}
 	}
 
 	startTime, err := time.ParseDuration(scheduleRunTime)
@@ -1196,7 +1201,7 @@ func (server *Server) NewShutDownScheduler(deployer clustermanagers.Deployer,
 			} else {
 				deploymentInfo.State = DELETED
 			}
-			server.storeDeploymentStatus(deploymentInfo)
+			server.storeDeployment(deploymentInfo)
 
 			server.mutex.Lock()
 			delete(server.DeployedClusters, deploymentInfo.Deployment.Name)
