@@ -698,8 +698,10 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 	}
 	deploymentInfo.State = UPDATING
 
+	log := deploymentInfo.Deployer.GetLog()
+
 	go func() {
-		log := deploymentInfo.Deployer.GetLog()
+		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, deployment)
 
 		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
 			log.Logger.Error("Unable to reset template deployment")
@@ -713,7 +715,7 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "Start to reset template deployment " + deploymentName + "......",
+		"data":  "Starting to reset template deployment " + deploymentName + "......",
 	})
 }
 
@@ -773,6 +775,9 @@ func (server *Server) deployExtensions(c *gin.Context) {
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
+
+		log.Logger.Infof("Deplyoing extensions: %+v", deployment)
+		log.Logger.Infof("New merged deployment manifest: %+v", newDeployment)
 
 		if err := deploymentInfo.Deployer.DeployExtensions(deployment, newDeployment); err != nil {
 			log.Logger.Error("Unable to deploy extensions deployment: " + err.Error())
