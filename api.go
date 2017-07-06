@@ -20,7 +20,6 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
-	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/spf13/viper"
@@ -1008,22 +1007,23 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
 	}
 
+	newDeployment := *deployment
 	if needMergeDeployment.UserId != "" {
-		deployment.UserId = needMergeDeployment.UserId
+		newDeployment.UserId = needMergeDeployment.UserId
 	}
 
 	if needMergeDeployment.Name != "" {
-		deployment.Name = needMergeDeployment.Name
+		newDeployment.Name = needMergeDeployment.Name
 	}
 
 	for _, nodeMapping := range needMergeDeployment.NodeMapping {
-		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
+		newDeployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
 	}
 	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
-		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+		newDeployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
 	}
 
-	return deployment, nil
+	return &newDeployment, nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
@@ -1214,12 +1214,7 @@ func (server *Server) NewShutDownScheduler(
 		}()
 	})
 
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deployer.(*awsecs.ECSDeployer).Scheduler = scheduler
-	case "K8S":
-		deployer.(*kubernetes.K8SDeployer).Scheduler = scheduler
-	}
+	deployer.SetScheduler(scheduler)
 
 	return nil
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 )
@@ -27,6 +27,7 @@ type Deployer interface {
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.DeploymentLog
 	GetScheduler() *job.Scheduler
+	SetScheduler(sheduler *job.Scheduler)
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceMappings() (map[string]interface{}, error)
 }

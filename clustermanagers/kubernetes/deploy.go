@@ -16,7 +16,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
@@ -62,6 +62,10 @@ func (k8sDeployer *K8SDeployer) GetLog() *log.DeploymentLog {
 
 func (k8sDeployer *K8SDeployer) GetScheduler() *job.Scheduler {
 	return k8sDeployer.Scheduler
+}
+
+func (k8sDeployer *K8SDeployer) SetScheduler(sheduler *job.Scheduler) {
+	k8sDeployer.Scheduler = sheduler
 }
 
 func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {

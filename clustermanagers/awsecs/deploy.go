@@ -19,7 +19,7 @@ import (
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 )
@@ -97,6 +97,10 @@ func (ecsDeployer *ECSDeployer) GetLog() *log.DeploymentLog {
 
 func (ecsDeployer *ECSDeployer) GetScheduler() *job.Scheduler {
 	return ecsDeployer.Scheduler
+}
+
+func (ecsDeployer *ECSDeployer) SetScheduler(sheduler *job.Scheduler) {
+	ecsDeployer.Scheduler = sheduler
 }
 
 // CreateDeployment start a deployment
