@@ -689,23 +689,23 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		return
 	}
 
-	deployment := *templateDeployment
-	deployment.UserId = deploymentInfo.Deployment.UserId
-	deployment.Name = deploymentName
+	copyDeployment := *templateDeployment
+	copyDeployment.UserId = deploymentInfo.Deployment.UserId
+	copyDeployment.Name = deploymentName
 	deploymentInfo.State = UPDATING
 	server.mutex.Unlock()
 
 	log := deploymentInfo.Deployer.GetLog()
 
 	go func() {
-		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, deployment)
+		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, copyDeployment)
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(&deployment); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(&copyDeployment); err != nil {
 			log.Logger.Error("Unable to reset template deployment")
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Reset template deployment successfully!")
-			deploymentInfo.Deployment = &deployment
+			deploymentInfo.Deployment = &copyDeployment
 			deploymentInfo.State = AVAILABLE
 		}
 
@@ -1012,38 +1012,41 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
 	}
 
-	deployment := *templateDeployment
+	copyDeployment := *templateDeployment
 	if needMergeDeployment.UserId != "" {
-		deployment.UserId = needMergeDeployment.UserId
+		copyDeployment.UserId = needMergeDeployment.UserId
 	}
 
 	if needMergeDeployment.Name != "" {
-		deployment.Name = needMergeDeployment.Name
+		copyDeployment.Name = needMergeDeployment.Name
 	}
 
-	existingMapping := deployment.NodeMapping
-	deployment.NodeMapping = make([]apis.NodeMapping, 0)
+	existingMapping := copyDeployment.NodeMapping
+	copyDeployment.NodeMapping = make([]apis.NodeMapping, 0)
 
 	for _, nodeMapping := range existingMapping {
-		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
+		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
 	for _, nodeMapping := range needMergeDeployment.NodeMapping {
-		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
+		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
-	existingKubernetesDeployment := deployment.KubernetesDeployment.Kubernetes
-	deployment.KubernetesDeployment.Kubernetes = make([]apis.KubernetesTask, 0)
+	copyKubernetesDeployment := *copyDeployment.KubernetesDeployment
+	copyDeployment.KubernetesDeployment = &copyKubernetesDeployment
+
+	existingKubernetesDeployment := copyDeployment.KubernetesDeployment.Kubernetes
+	copyDeployment.KubernetesDeployment.Kubernetes = make([]apis.KubernetesTask, 0)
 
 	for _, task := range existingKubernetesDeployment {
-		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
 	}
 
 	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
-		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
 	}
 
-	return &deployment, nil
+	return &copyDeployment, nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
