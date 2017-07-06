@@ -761,11 +761,11 @@ func (server *Server) deployExtensions(c *gin.Context) {
 	}
 
 	// We allow failed deployment to retry for extensions
-	if deploymentInfo.State != AVAILABLE || deploymentInfo.State != FAILED {
+	if deploymentInfo.State != AVAILABLE && deploymentInfo.State != FAILED {
 		server.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Deployment is not available",
+			"data":  "Deployment is not available, state: " + GetStateString(deploymentInfo.State),
 		})
 		return
 	}
