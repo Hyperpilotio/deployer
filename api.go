@@ -455,7 +455,10 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
 			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
-		server.storeDeployment(deploymentInfo)
+
+		if err := server.storeDeployment(deploymentInfo); err != nil {
+			glog.Warningf("Unable to store deployment %s: %s", deploymentInfo.Deployment.Name, err.Error())
+		}
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -589,7 +592,9 @@ func (server *Server) createDeployment(c *gin.Context) {
 			server.mutex.Unlock()
 		}
 
-		server.storeDeployment(deploymentInfo)
+		if err := server.storeDeployment(deploymentInfo); err != nil {
+			glog.Warningf("Unable to store deployment %s: %s", deploymentInfo.Deployment.Name, err.Error())
+		}
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -641,7 +646,10 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 			log.Logger.Infof("Delete deployment successfully!")
 			deploymentInfo.State = DELETED
 		}
-		server.storeDeployment(deploymentInfo)
+
+		if err := server.storeDeployment(deploymentInfo); err != nil {
+			glog.Warningf("Unable to store deployment %s: %s", deploymentInfo.Deployment.Name, err.Error())
+		}
 
 		server.mutex.Lock()
 		delete(server.DeployedClusters, deploymentName)
@@ -797,7 +805,10 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
 			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
-		server.storeDeployment(deploymentInfo)
+
+		if err := server.storeDeployment(deploymentInfo); err != nil {
+			glog.Warningf("Unable to store deployment %s: %s", deploymentInfo.Deployment.Name, err.Error())
+		}
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -944,12 +955,12 @@ func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 	default:
-		glog.Infof("Storing deployment: " + deploymentName)
 		deployment, err := deploymentInfo.NewStoreDeployment()
 		if err != nil {
 			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
 		}
 
+		glog.Infof("Storing deployment: " + deploymentName)
 		if err := server.DeploymentStore.Store(deploymentName, deployment); err != nil {
 			return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 		}
@@ -1051,6 +1062,8 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 
 // reloadClusterState reload cluster state when deployer restart
 func (server *Server) reloadClusterState() error {
+	glog.Infof("Reloading cluster state...")
+
 	profiles, profileErr := server.ProfileStore.LoadAll(func() interface{} {
 		return &hpaws.AWSProfile{}
 	})
@@ -1058,10 +1071,12 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to load aws profiles: %s", profileErr.Error())
 	}
 
+	glog.Infof("Recovered %d user profiles", len(profiles.([]interface{})))
 	awsProfileInfos := map[string]*hpaws.AWSProfile{}
 	for _, awsProfile := range profiles.([]interface{}) {
 		awsProfileInfos[awsProfile.(*hpaws.AWSProfile).UserId] = awsProfile.(*hpaws.AWSProfile)
 	}
+
 	server.AWSProfiles = awsProfileInfos
 
 	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
@@ -1072,6 +1087,7 @@ func (server *Server) reloadClusterState() error {
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
 	}
+	glog.Infof("Found %d deployments in store during recovery", len(deployments.([]interface{})))
 
 	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
 		return &StoreTemplateDeployment{}
@@ -1079,6 +1095,8 @@ func (server *Server) reloadClusterState() error {
 	if templateErr != nil {
 		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
 	}
+
+	glog.Infof("Recovered %d templates", len(templates.([]interface{})))
 
 	for _, template := range templates.([]interface{}) {
 		templateId := template.(*StoreTemplateDeployment)
@@ -1229,7 +1247,9 @@ func (server *Server) NewShutDownScheduler(
 			} else {
 				deploymentInfo.State = DELETED
 			}
-			server.storeDeployment(deploymentInfo)
+			if err := server.storeDeployment(deploymentInfo); err != nil {
+				glog.Warningf("Unable to store deployment %s: %s", deploymentInfo.Deployment.Name, err.Error())
+			}
 
 			server.mutex.Lock()
 			delete(server.DeployedClusters, deploymentInfo.Deployment.Name)

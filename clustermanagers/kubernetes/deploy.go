@@ -1702,13 +1702,17 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 			string(service.Spec.Type) == "LoadBalancer" {
 			nodeId, _ := k8sDeployer.findNodeIdFromServiceName(serviceName)
 			port := service.Spec.Ports[0].Port
-			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
-			serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10)
-			k8sDeployer.Services[serviceName] = ServiceMapping{
-				PublicUrl: serviceUrl,
-				NodeId:    nodeId,
+			if len(service.Status.LoadBalancer.Ingress) > 0 {
+				hostname := service.Status.LoadBalancer.Ingress[0].Hostname
+				serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10)
+				k8sDeployer.Services[serviceName] = ServiceMapping{
+					PublicUrl: serviceUrl,
+					NodeId:    nodeId,
+				}
+				return serviceUrl, nil
+			} else {
+				return "", errors.New("Service ingress is not yet available")
 			}
-			return serviceUrl, nil
 		}
 	}
 
