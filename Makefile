@@ -21,5 +21,11 @@ test:
 build:
 	${GO_EXECUTABLE} build .
 
+build-docker:
+	sudo docker build . -t hyperpilot/deployer
+
+push:
+	sudo docker push hyperpilot/deployer:latest	
+
 dev-test: build
 	./deployer --config ./documents/dev.config -logtostderr=true -v=2
