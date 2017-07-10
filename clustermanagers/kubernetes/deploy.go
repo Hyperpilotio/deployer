@@ -14,6 +14,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/share"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
@@ -1675,6 +1676,32 @@ func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(serviceName string) (i
 	}
 
 	return 0, errors.New("Unable to find service in mappings")
+}
+
+// GetServiceAddress return ServiceAddress object
+func (k8sDeployer *K8SDeployer) GetServiceAddress(serviceName string) (*share.ServiceAddress, error) {
+	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
+	}
+
+	services, err := k8sClient.CoreV1().Services("").List(metav1.ListOptions{})
+	if err != nil {
+		return nil, errors.New("Unable to list services in the cluster: " + err.Error())
+	}
+
+	for _, service := range services.Items {
+		if (service.ObjectMeta.Name == serviceName || service.ObjectMeta.Name == serviceName+"-publicport0") &&
+			string(service.Spec.Type) == "LoadBalancer" {
+			port := service.Spec.Ports[0].Port
+			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
+			address := &share.ServiceAddress{Host: hostname, Port: port}
+
+			return address, nil
+		}
+	}
+
+	return nil, errors.New("Service not found in endpoints")
 }
 
 func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {

@@ -17,6 +17,7 @@ import (
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clustermanagers/share"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
@@ -1427,6 +1428,43 @@ func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error
 	}
 
 	return nodeInfo.PublicDnsName + ":" + nodePort, nil
+}
+
+func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*share.ServiceAddress, error) {
+	var nodePort int32
+	taskFamilyName := ""
+	for _, task := range ecsDeployer.Deployment.TaskDefinitions {
+		for _, container := range task.ContainerDefinitions {
+			if *container.Name == serviceName {
+				nodePort = int32(*container.PortMappings[0].HostPort)
+				taskFamilyName = *task.Family
+				break
+			}
+		}
+	}
+
+	if nodePort == 0 {
+		return nil, errors.New("Unable to find container in deployment container defintiions")
+	}
+
+	nodeId := -1
+	for _, nodeMapping := range ecsDeployer.Deployment.NodeMapping {
+		if nodeMapping.Task == taskFamilyName {
+			nodeId = nodeMapping.Id
+			break
+		}
+	}
+
+	if nodeId == -1 {
+		return nil, errors.New("Unable to find task in deployment node mappings")
+	}
+
+	nodeInfo, nodeOk := ecsDeployer.AWSCluster.NodeInfos[nodeId]
+	if !nodeOk {
+		return nil, errors.New("Unable to find node in cluster")
+	}
+
+	return &share.ServiceAddress{Host: nodeInfo.PublicDnsName, Port: nodePort}, nil
 }
 
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
