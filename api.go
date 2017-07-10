@@ -258,6 +258,7 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/state", server.getDeploymentState)
 
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
+		daemonsGroup.GET("/:deployment/services/:service/address", server.getServiceAddress)
 		daemonsGroup.GET("/:deployment/services", server.getServices)
 	}
 
@@ -893,6 +894,39 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 	}
 
 	c.String(http.StatusOK, serviceUrl)
+}
+
+func (server *Server) getServiceAddress(c *gin.Context) {
+	deploymentName := c.Param("deployment")
+	serviceName := c.Param("service")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find deployment",
+		})
+		return
+	}
+
+	serviceAddress, err := deploymentInfo.Deployer.GetServiceAddress(serviceName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to get service url: " + err.Error(),
+		})
+		return
+	}
+
+	address, err := json.Marshal(serviceAddress)
+	if err != nil {
+		return
+	}
+
+	c.String(http.StatusOK, string(address))
 }
 
 func (server *Server) getServices(c *gin.Context) {

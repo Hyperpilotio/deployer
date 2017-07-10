@@ -9,6 +9,7 @@ import (
 	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/clustermanagers/share"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
 	"github.com/pborman/uuid"
@@ -28,6 +29,7 @@ type Deployer interface {
 	GetLog() *log.DeploymentLog
 	GetScheduler() *job.Scheduler
 	GetServiceUrl(serviceName string) (string, error)
+	GetServiceAddress(serviceName string) (*share.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)
 }
 
