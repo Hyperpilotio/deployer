@@ -19,14 +19,14 @@ import (
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 )
 
 // NewDeployer return the EC2 of Deployer
 func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*ECSDeployer, error) {
-	log, err := log.NewLogger(config, deployment.Name)
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
@@ -91,7 +91,7 @@ func (ecsDeployer *ECSDeployer) GetAWSCluster() *hpaws.AWSCluster {
 	return ecsDeployer.AWSCluster
 }
 
-func (ecsDeployer *ECSDeployer) GetLog() *log.DeploymentLog {
+func (ecsDeployer *ECSDeployer) GetLog() *log.FileLog {
 	return ecsDeployer.DeploymentLog
 }
 
@@ -156,6 +156,12 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
 	// TODO Implement EC2 UpdateDeployment
 	return nil
+}
+
+func (ecsDeployer *ECSDeployer) DeployExtensions(
+	extensions *apis.Deployment,
+	newDeployment *apis.Deployment) error {
+	return errors.New("Unimplemented")
 }
 
 // DeleteDeployment clean up the cluster from AWS ECS.
@@ -260,6 +266,10 @@ func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 	}
 
 	return nil
+}
+
+func (ecsDeployer *ECSDeployer) CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error) {
+	return nil, errors.New("Unimplemented")
 }
 
 func createTags(ec2Svc *ec2.EC2, resources []*string, tags []*ec2.Tag) error {
@@ -1470,8 +1480,6 @@ func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
 }
 
-func (ecsDeployer *ECSDeployer) DeployExtensions(
-	extensions *apis.Deployment,
-	newDeployment *apis.Deployment) error {
-	return errors.New("Unimplemented")
+func (ecsDeployer *ECSDeployer) GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error) {
+	return nil, errors.New("Unimplemented")
 }

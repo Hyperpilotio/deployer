@@ -10,7 +10,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 )
@@ -21,11 +21,13 @@ type Deployer interface {
 	UpdateDeployment() error
 	DeployExtensions(extensions *apis.Deployment, mergedDeployment *apis.Deployment) error
 	DeleteDeployment() error
+	CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error)
 	ReloadClusterState(storeInfo interface{}) error
 	GetStoreInfo() interface{}
+	GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error)
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
 	GetAWSCluster() *aws.AWSCluster
-	GetLog() *log.DeploymentLog
+	GetLog() *log.FileLog
 	GetScheduler() *job.Scheduler
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
@@ -40,7 +42,7 @@ func NewDeployer(
 	createName bool) (Deployer, error) {
 
 	if createName {
-		deployment.Name = createUniqueDeploymentName(deployment.Name)
+		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
 	switch deployType {
@@ -53,7 +55,7 @@ func NewDeployer(
 	}
 }
 
-func createUniqueDeploymentName(familyName string) string {
+func CreateUniqueDeploymentName(familyName string) string {
 	randomId := strings.ToUpper(strings.Split(uuid.NewUUID().String(), "-")[0])
 	return fmt.Sprintf("%s-%s", familyName, randomId)
 }

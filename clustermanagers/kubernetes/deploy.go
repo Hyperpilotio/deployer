@@ -16,7 +16,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
@@ -39,7 +39,7 @@ var publicPortType = 1
 
 // NewDeployer return the K8S of Deployer
 func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*K8SDeployer, error) {
-	log, err := log.NewLogger(config, deployment.Name)
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
@@ -56,7 +56,7 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 	return deployer, nil
 }
 
-func (k8sDeployer *K8SDeployer) GetLog() *log.DeploymentLog {
+func (k8sDeployer *K8SDeployer) GetLog() *log.FileLog {
 	return k8sDeployer.DeploymentLog
 }
 
@@ -148,6 +148,10 @@ func (k8sDeployer *K8SDeployer) DeployExtensions(
 func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	deleteDeployment(k8sDeployer)
 	return nil
+}
+
+func (k8sDeployer *K8SDeployer) CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error) {
+	return nil, nil
 }
 
 func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
@@ -1741,4 +1745,18 @@ func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 		BastionIp: k8sDeployer.BastionIp,
 		MasterIp:  k8sDeployer.MasterIp,
 	}
+}
+
+func (k8sDeployer *K8SDeployer) GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error) {
+	log, err := log.NewLogger(filesPath, deployment.Name)
+	if err != nil {
+		return nil, errors.New("Error creating deployment logger: " + err.Error())
+	}
+
+	return &InternalCluster{
+		Deployment:    deployment,
+		DeploymentLog: log,
+		NodeInfos:     make(map[int]*hpaws.NodeInfo),
+		Created:       time.Now(),
+	}, nil
 }

@@ -1,10 +1,13 @@
 package kubernetes
 
 import (
+	"time"
+
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/aws"
+	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
 
 	"k8s.io/client-go/pkg/api/v1"
@@ -22,7 +25,7 @@ type K8SDeployer struct {
 	Config     *viper.Viper
 	AWSCluster *aws.AWSCluster
 
-	DeploymentLog *log.DeploymentLog
+	DeploymentLog *log.FileLog
 	Deployment    *apis.Deployment
 	Scheduler     *job.Scheduler
 
@@ -49,6 +52,14 @@ type DeploymentLoadBalancers struct {
 type StoreInfo struct {
 	BastionIp string
 	MasterIp  string
+}
+
+type InternalCluster struct {
+	Deployment    *apis.Deployment
+	DeploymentLog *log.FileLog
+	NodeInfos     map[int]*hpaws.NodeInfo
+	State         int
+	Created       time.Time
 }
 
 type ClusterInfo struct {

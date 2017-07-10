@@ -38,12 +38,14 @@ const (
 	DELETING  = 3
 	DELETED   = 4
 	FAILED    = 5
+	DEPLOYING = 6
 )
 
 // Per deployment tracking struct for the server
 type DeploymentInfo struct {
 	Deployer   clustermanagers.Deployer `json:"-"`
 	Deployment *apis.Deployment         `json:"Deployment"`
+	Clusters   map[string]interface{}   `json:"Clusters"`
 	TemplateId string                   `json:"TemplateId"`
 	Created    time.Time                `json:"Created"`
 	ShutDown   time.Time                `json:"ShutDown"`
@@ -260,6 +262,13 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 		daemonsGroup.GET("/:deployment/services/:service/address", server.getServiceAddress)
 		daemonsGroup.GET("/:deployment/services", server.getServices)
+	}
+
+	clustersGroup := router.Group("/v1/clusters")
+	{
+		clustersGroup.POST("/:cluster/deployments", server.createClusterDeployment)
+		clustersGroup.DELETE("/:cluster/deployments/:deployment", server.deleteClusterDeployment)
+		clustersGroup.PUT("/:cluster/deployments/:deployment", server.updateClusterDeployment)
 	}
 
 	templateGroup := router.Group("/v1/templates")

@@ -6,7 +6,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
 )
 
@@ -15,7 +15,7 @@ type ECSDeployer struct {
 	AWSCluster *aws.AWSCluster
 
 	Deployment    *apis.Deployment
-	DeploymentLog *log.DeploymentLog
+	DeploymentLog *log.FileLog
 	Scheduler     *job.Scheduler
 }
 
