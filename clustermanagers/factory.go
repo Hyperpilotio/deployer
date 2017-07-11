@@ -9,9 +9,9 @@ import (
 	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
-	"github.com/hyperpilotio/deployer/clustermanagers/share"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/deployer/share"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 )
