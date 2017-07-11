@@ -1,11 +1,8 @@
 package kubernetes
 
 import (
-	"time"
-
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/aws"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
@@ -52,14 +49,6 @@ type DeploymentLoadBalancers struct {
 type StoreInfo struct {
 	BastionIp string
 	MasterIp  string
-}
-
-type InternalCluster struct {
-	Deployment    *apis.Deployment
-	DeploymentLog *log.FileLog
-	NodeInfos     map[int]*hpaws.NodeInfo
-	State         int
-	Created       time.Time
 }
 
 type ClusterInfo struct {

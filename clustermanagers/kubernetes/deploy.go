@@ -150,10 +150,6 @@ func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error) {
-	return nil, nil
-}
-
 func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	describeInstancesInput := &ec2.DescribeInstancesInput{
 		Filters: []*ec2.Filter{
@@ -1745,18 +1741,4 @@ func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 		BastionIp: k8sDeployer.BastionIp,
 		MasterIp:  k8sDeployer.MasterIp,
 	}
-}
-
-func (k8sDeployer *K8SDeployer) GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error) {
-	log, err := log.NewLogger(filesPath, deployment.Name)
-	if err != nil {
-		return nil, errors.New("Error creating deployment logger: " + err.Error())
-	}
-
-	return &InternalCluster{
-		Deployment:    deployment,
-		DeploymentLog: log,
-		NodeInfos:     make(map[int]*hpaws.NodeInfo),
-		Created:       time.Now(),
-	}, nil
 }

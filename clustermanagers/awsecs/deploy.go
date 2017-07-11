@@ -268,10 +268,6 @@ func (ecsDeployer *ECSDeployer) DeleteDeployment() error {
 	return nil
 }
 
-func (ecsDeployer *ECSDeployer) CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error) {
-	return nil, errors.New("Unimplemented")
-}
-
 func createTags(ec2Svc *ec2.EC2, resources []*string, tags []*ec2.Tag) error {
 	tagParams := &ec2.CreateTagsInput{
 		Resources: resources,
@@ -1478,8 +1474,4 @@ func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*apis.Ser
 
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
-}
-
-func (ecsDeployer *ECSDeployer) GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error) {
-	return nil, errors.New("Unimplemented")
 }

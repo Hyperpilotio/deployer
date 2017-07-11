@@ -2,31 +2,12 @@ package main
 
 import (
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
-	"github.com/hyperpilotio/go-utils/log"
 )
-
-type clusterState int
-
-type cluster struct {
-	deploymentId  string
-	deployment    *apis.Deployment
-	deploymentLog *log.FileLog
-	NodeInfos     map[int]*hpaws.NodeInfo
-	state         clusterState
-	created       time.Time
-}
-
-type Clusters struct {
-	mutex       sync.Mutex
-	Deployments []*cluster
-}
 
 func (server *Server) createClusterDeployment(c *gin.Context) {
 	clusterName := c.Param("cluster")
@@ -54,29 +35,36 @@ func (server *Server) createClusterDeployment(c *gin.Context) {
 	deployment.Name = clustermanagers.CreateUniqueDeploymentName(deployment.Name)
 	server.mutex.Unlock()
 
-	cluster, err := deploymentInfo.Deployer.GetInternalCluster(server.Config.GetString("filesPath"), deployment)
+	inCluster, err := clustermanagers.NewInCluster(deploymentInfo.GetDeploymentType(),
+		server.Config.GetString("filesPath"), deployment)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to create cluster",
+			"data":  "Unable to create internal cluster",
 		})
 		return
 	}
 
-	// cluster.State = DEPLOYING
+	inClusterDeploymentInfo := &DeploymentInfo{
+		Deployment: deployment,
+		InCluster:  make(map[string]clustermanagers.InCluster),
+		Created:    time.Now(),
+		State:      CREATING,
+	}
 
 	go func() {
-		// log := cluster.deploymentLog
+		log := inCluster.GetLog()
 
-		if _, err := deploymentInfo.Deployer.CreateClusterDeployment(server.UploadedFiles, cluster); err != nil {
-			// log.Logger.Error("Unable to create cluster deployment")
-			// cluster.state = FAILED
+		if _, err := deploymentInfo.Deployer.CreateInClusterDeployment(server.UploadedFiles, inCluster); err != nil {
+			log.Logger.Error("Unable to create cluster deployment")
+			inClusterDeploymentInfo.State = FAILED
 		} else {
-			// log.Logger.Infof("Update deployment successfully!")
-			// cluster.state = AVAILABLE
+			log.Logger.Infof("Update deployment successfully!")
+			inClusterDeploymentInfo.State = AVAILABLE
 
 			server.mutex.Lock()
-			deploymentInfo.Clusters[deployment.Name] = cluster
+			inClusterDeploymentInfo.InCluster[deployment.Name] = inCluster
+			server.DeployedInClusters[clusterName] = inClusterDeploymentInfo
 			server.mutex.Unlock()
 		}
 	}()

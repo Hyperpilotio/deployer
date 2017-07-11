@@ -43,13 +43,13 @@ const (
 
 // Per deployment tracking struct for the server
 type DeploymentInfo struct {
-	Deployer   clustermanagers.Deployer `json:"-"`
-	Deployment *apis.Deployment         `json:"Deployment"`
-	Clusters   map[string]interface{}   `json:"Clusters"`
-	TemplateId string                   `json:"TemplateId"`
-	Created    time.Time                `json:"Created"`
-	ShutDown   time.Time                `json:"ShutDown"`
-	State      DeploymentState          `json:"State"`
+	Deployer   clustermanagers.Deployer             `json:"-"`
+	InCluster  map[string]clustermanagers.InCluster `json:"-"`
+	Deployment *apis.Deployment                     `json:"Deployment"`
+	TemplateId string                               `json:"TemplateId"`
+	Created    time.Time                            `json:"Created"`
+	ShutDown   time.Time                            `json:"ShutDown"`
+	State      DeploymentState                      `json:"State"`
 }
 
 // This defines what's being persisted in store
@@ -129,7 +129,8 @@ type Server struct {
 	AWSProfiles map[string]*hpaws.AWSProfile
 
 	// Maps deployment name to deployed cluster struct
-	DeployedClusters map[string]*DeploymentInfo
+	DeployedClusters   map[string]*DeploymentInfo
+	DeployedInClusters map[string]*DeploymentInfo
 
 	// Maps file id to location on disk
 	UploadedFiles map[string]string
@@ -143,10 +144,11 @@ type Server struct {
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:           config,
-		DeployedClusters: make(map[string]*DeploymentInfo),
-		UploadedFiles:    make(map[string]string),
-		Templates:        make(map[string]*apis.Deployment),
+		Config:             config,
+		DeployedClusters:   make(map[string]*DeploymentInfo),
+		DeployedInClusters: make(map[string]*DeploymentInfo),
+		UploadedFiles:      make(map[string]string),
+		Templates:          make(map[string]*apis.Deployment),
 	}
 }
 

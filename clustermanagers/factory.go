@@ -21,10 +21,9 @@ type Deployer interface {
 	UpdateDeployment() error
 	DeployExtensions(extensions *apis.Deployment, mergedDeployment *apis.Deployment) error
 	DeleteDeployment() error
-	CreateClusterDeployment(uploadedFiles map[string]string, internalCluster interface{}) (interface{}, error)
+	CreateInClusterDeployment(uploadedFiles map[string]string, inCluster interface{}) (interface{}, error)
 	ReloadClusterState(storeInfo interface{}) error
 	GetStoreInfo() interface{}
-	GetInternalCluster(filesPath string, deployment *apis.Deployment) (interface{}, error)
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.FileLog
@@ -32,6 +31,10 @@ type Deployer interface {
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)
+}
+
+type InCluster interface {
+	GetLog() *log.FileLog
 }
 
 func NewDeployer(
@@ -50,6 +53,17 @@ func NewDeployer(
 		return awsecs.NewDeployer(config, awsProfile, deployment)
 	case "K8S":
 		return kubernetes.NewDeployer(config, awsProfile, deployment)
+	default:
+		return nil, errors.New("Unsupported deploy type: " + deployType)
+	}
+}
+
+func NewInCluster(deployType string, filesPath string, deployment *apis.Deployment) (InCluster, error) {
+	switch deployType {
+	case "ECS":
+		return awsecs.NewInCluster(filesPath, deployment)
+	case "K8S":
+		return kubernetes.NewInCluster(filesPath, deployment)
 	default:
 		return nil, errors.New("Unsupported deploy type: " + deployType)
 	}
