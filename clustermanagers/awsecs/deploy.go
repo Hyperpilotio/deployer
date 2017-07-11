@@ -17,10 +17,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
-	"github.com/hyperpilotio/deployer/clustermanagers/share"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/deployer/share"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 )
