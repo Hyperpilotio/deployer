@@ -9,21 +9,20 @@ import (
 	"github.com/hyperpilotio/go-utils/log"
 )
 
-type InCluster struct {
+type InClusterK8SDeployer struct {
 	Deployment    *apis.Deployment
 	DeploymentLog *log.FileLog
 	NodeInfos     map[int]*hpaws.NodeInfo
-	State         int
 	Created       time.Time
 }
 
-func NewInCluster(filesPath string, deployment *apis.Deployment) (*InCluster, error) {
+func NewInClusterDeployer(filesPath string, deployment *apis.Deployment) (*InClusterK8SDeployer, error) {
 	log, err := log.NewLogger(filesPath, deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	inlCluster := &InCluster{
+	inlCluster := &InClusterK8SDeployer{
 		Deployment:    deployment,
 		DeploymentLog: log,
 		NodeInfos:     make(map[int]*hpaws.NodeInfo),
@@ -35,9 +34,4 @@ func NewInCluster(filesPath string, deployment *apis.Deployment) (*InCluster, er
 
 func (inCluster *InCluster) GetLog() *log.FileLog {
 	return inCluster.DeploymentLog
-}
-
-func (k8sDeployer *K8SDeployer) CreateInClusterDeployment(
-	uploadedFiles map[string]string, inCluster interface{}) (interface{}, error) {
-	return nil, nil
 }
