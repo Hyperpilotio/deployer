@@ -43,13 +43,12 @@ const (
 
 // Per deployment tracking struct for the server
 type DeploymentInfo struct {
-	Deployer   clustermanagers.Deployer             `json:"-"`
-	InCluster  map[string]clustermanagers.InCluster `json:"-"`
-	Deployment *apis.Deployment                     `json:"Deployment"`
-	TemplateId string                               `json:"TemplateId"`
-	Created    time.Time                            `json:"Created"`
-	ShutDown   time.Time                            `json:"ShutDown"`
-	State      DeploymentState                      `json:"State"`
+	Deployer   clustermanagers.Deployer `json:"-"`
+	Deployment *apis.Deployment         `json:"Deployment"`
+	TemplateId string                   `json:"TemplateId"`
+	Created    time.Time                `json:"Created"`
+	ShutDown   time.Time                `json:"ShutDown"`
+	State      DeploymentState          `json:"State"`
 }
 
 // This defines what's being persisted in store
@@ -120,10 +119,11 @@ func ParseStateString(state string) DeploymentState {
 
 // Server store the stats / data of every deployment
 type Server struct {
-	Config          *viper.Viper
-	DeploymentStore blobstore.BlobStore
-	ProfileStore    blobstore.BlobStore
-	TemplateStore   blobstore.BlobStore
+	Config            *viper.Viper
+	DeploymentStore   blobstore.BlobStore
+	ProfileStore      blobstore.BlobStore
+	TemplateStore     blobstore.BlobStore
+	InClusterDeployer clustermanagers.Deployer
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -262,13 +262,6 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 		daemonsGroup.GET("/:deployment/services/:service/address", server.getServiceAddress)
 		daemonsGroup.GET("/:deployment/services", server.getServices)
-	}
-
-	clustersGroup := router.Group("/v1/clusters")
-	{
-		clustersGroup.POST("/:cluster/deployments", server.createClusterDeployment)
-		clustersGroup.DELETE("/:cluster/deployments/:deployment", server.deleteClusterDeployment)
-		clustersGroup.PUT("/:cluster/deployments/:deployment", server.updateClusterDeployment)
 	}
 
 	templateGroup := router.Group("/v1/templates")
@@ -546,14 +539,20 @@ func (server *Server) createDeployment(c *gin.Context) {
 		State:      CREATING,
 	}
 
-	deployer, err := clustermanagers.NewDeployer(
-		server.Config, awsProfile, deploymentInfo.GetDeploymentType(), deployment, true)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Error initialize cluster deployer: " + err.Error(),
-		})
-		return
+	var deployer clustermanagers.Deployer
+	if server.Config.GetBool("inCluster") {
+		deployer = server.InClusterDeployer
+	} else {
+		newDeployer, err := clustermanagers.NewDeployer(
+			server.Config, awsProfile, deploymentInfo.GetDeploymentType(), deployment, true)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Error initialize cluster deployer: " + err.Error(),
+			})
+			return
+		}
+		deployer = newDeployer
 	}
 	deploymentInfo.Deployer = deployer
 
@@ -1150,6 +1149,10 @@ func (server *Server) reloadClusterState() error {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
 
+		if server.Config.GetBool("inCluster") {
+			server.InClusterDeployer = deployer
+		}
+
 		deploymentInfo := &DeploymentInfo{
 			Deployer:   deployer,
 			Deployment: deployment,
@@ -1201,6 +1204,9 @@ func (server *Server) NewShutDownScheduler(
 	deployer clustermanagers.Deployer,
 	deploymentInfo *DeploymentInfo,
 	custScheduleRunTime string) error {
+	if server.Config.GetBool("inCluster") {
+		return nil
+	}
 	if deployer.GetScheduler() != nil {
 		deployer.GetScheduler().Stop()
 	}
