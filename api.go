@@ -119,11 +119,12 @@ func ParseStateString(state string) DeploymentState {
 
 // Server store the stats / data of every deployment
 type Server struct {
-	Config            *viper.Viper
-	DeploymentStore   blobstore.BlobStore
-	ProfileStore      blobstore.BlobStore
-	TemplateStore     blobstore.BlobStore
-	InClusterDeployer clustermanagers.Deployer
+	Config                   *viper.Viper
+	DeploymentStore          blobstore.BlobStore
+	InClusterDeploymentStore blobstore.BlobStore
+	ProfileStore             blobstore.BlobStore
+	TemplateStore            blobstore.BlobStore
+	OriginalDeployer         clustermanagers.Deployer
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -195,6 +196,12 @@ func (server *Server) StartServer() error {
 		server.DeploymentStore = deploymentStore
 	}
 
+	if inClusterDeploymentStore, err := blobstore.NewBlobStore("InClusterDeployments", server.Config); err != nil {
+		return errors.New("Unable to create in-cluster deployments store: " + err.Error())
+	} else {
+		server.InClusterDeploymentStore = inClusterDeploymentStore
+	}
+
 	if profileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
 		return errors.New("Unable to create awsProfiles store: " + err.Error())
 	} else {
@@ -207,8 +214,14 @@ func (server *Server) StartServer() error {
 		server.TemplateStore = templateStore
 	}
 
-	if err := server.reloadClusterState(); err != nil {
-		return errors.New("Unable to reload cluster state: " + err.Error())
+	if server.Config.GetBool("inCluster") {
+		if err := server.reloadInClusterState(); err != nil {
+			return errors.New("Unable to reload in cluster state: " + err.Error())
+		}
+	} else {
+		if err := server.reloadClusterState(); err != nil {
+			return errors.New("Unable to reload cluster state: " + err.Error())
+		}
 	}
 
 	//gin.SetMode("release")
@@ -539,20 +552,15 @@ func (server *Server) createDeployment(c *gin.Context) {
 		State:      CREATING,
 	}
 
-	var deployer clustermanagers.Deployer
-	if server.Config.GetBool("inCluster") {
-		deployer = server.InClusterDeployer
-	} else {
-		newDeployer, err := clustermanagers.NewDeployer(
-			server.Config, awsProfile, deploymentInfo.GetDeploymentType(), deployment, true)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Error initialize cluster deployer: " + err.Error(),
-			})
-			return
-		}
-		deployer = newDeployer
+	deployer, err := clustermanagers.NewDeployer(
+		server.Config, awsProfile, deploymentInfo.GetDeploymentType(),
+		deployment, true, server.OriginalDeployer)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Error initialize cluster deployer: " + err.Error(),
+		})
+		return
 	}
 	deploymentInfo.Deployer = deployer
 
@@ -1144,13 +1152,10 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile, storeDeployment.Type, deployment, false)
+		deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile,
+			storeDeployment.Type, deployment, false, server.OriginalDeployer)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
-		}
-
-		if server.Config.GetBool("inCluster") {
-			server.InClusterDeployer = deployer
 		}
 
 		deploymentInfo := &DeploymentInfo{
@@ -1196,6 +1201,132 @@ func (server *Server) reloadClusterState() error {
 			}
 		}
 	}
+
+	return nil
+}
+
+func (server *Server) reloadInClusterState() error {
+	profiles, profileErr := server.ProfileStore.LoadAll(func() interface{} {
+		return &hpaws.AWSProfile{}
+	})
+	if profileErr != nil {
+		return fmt.Errorf("Unable to load aws profiles: %s", profileErr.Error())
+	}
+
+	inClusterUserId := ""
+	inClusterAwsProfile := &hpaws.AWSProfile{}
+	awsProfileInfos := map[string]*hpaws.AWSProfile{}
+	for _, awsProfile := range profiles.([]interface{}) {
+		if awsProfile.(*hpaws.AWSProfile).AwsId == server.Config.GetString("awsId") {
+			inClusterUserId = awsProfile.(*hpaws.AWSProfile).UserId
+			inClusterAwsProfile = awsProfile.(*hpaws.AWSProfile)
+			awsProfileInfos[inClusterUserId] = inClusterAwsProfile
+			break
+		}
+	}
+	server.AWSProfiles = awsProfileInfos
+
+	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
+		return &StoreTemplateDeployment{}
+	})
+	if templateErr != nil {
+		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
+	}
+
+	for _, template := range templates.([]interface{}) {
+		templateId := template.(*StoreTemplateDeployment)
+		deploymentJSON := template.(*StoreTemplateDeployment).Deployment
+
+		deployment := &apis.Deployment{}
+		if err := json.Unmarshal([]byte(deploymentJSON), deployment); err != nil {
+			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateId)
+			continue
+		}
+		server.Templates[template.(*StoreTemplateDeployment).TemplateId] = deployment
+	}
+
+	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
+		return &StoreDeployment{
+			ClusterManager: &kubernetes.StoreInfo{},
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
+	}
+
+	for _, deployment := range deployments.([]interface{}) {
+		storeDeployment := deployment.(*StoreDeployment)
+		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
+		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+			// TODO: Remove failed stored deployments
+			continue
+		}
+
+		if storeDeployment.UserId != inClusterUserId {
+			glog.Warningf("Skip loading deployment %s: Not in-cluster user id", storeDeployment.Name)
+			continue
+		}
+
+		deploymentName := storeDeployment.Name
+
+		deployment := &apis.Deployment{}
+		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
+		if unmarshalErr != nil {
+			glog.Warning("Skip loading deployment: Unable to load deployment manifest for deployment " + deploymentName)
+			continue
+		}
+
+		inClusterDeployment := false
+		for _, nodeMapping := range deployment.NodeMapping {
+			if nodeMapping.Task == "deployer" {
+				inClusterDeployment = true
+				break
+			}
+		}
+
+		if !inClusterDeployment {
+			continue
+		}
+
+		server.Config.Set("inCluster", false)
+		deployer, err := clustermanagers.NewDeployer(server.Config, inClusterAwsProfile,
+			storeDeployment.Type, deployment, false, nil)
+		if err != nil {
+			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
+		}
+		server.Config.Set("inCluster", true)
+
+		// Reload keypair
+		if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+			}
+			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+			continue
+		}
+
+		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
+			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+			}
+			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+		}
+
+		server.OriginalDeployer = deployer
+		break
+	}
+
+	// TODO reload InClusterDeployments
+	/*
+		inDeployments, err := server.InClusterDeploymentStore.LoadAll(func() interface{} {
+			return &StoreDeployment{
+				ClusterManager: &kubernetes.StoreInfo{},
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("Unable to load in-cluster deployment: %s", err.Error())
+		}
+	*/
 
 	return nil
 }
