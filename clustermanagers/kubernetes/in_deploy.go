@@ -127,7 +127,6 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 				},
 			},
 		},
-		MaxResults: aws.Int64(1),
 	}
 	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
 	if describeErr != nil {
