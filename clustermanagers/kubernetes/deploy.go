@@ -44,7 +44,7 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	awsCluster := hpaws.NewAWSCluster(deployment, awsProfile)
+	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
 	deployer := &K8SDeployer{
 		Config:        config,
 		AWSCluster:    awsCluster,

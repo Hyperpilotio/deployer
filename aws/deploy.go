@@ -10,8 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/ec2"
 
-	"github.com/hyperpilotio/deployer/apis"
-
 	"github.com/golang/glog"
 	"golang.org/x/crypto/ssh"
 )
@@ -73,11 +71,11 @@ func CreateKeypair(ec2Svc *ec2.EC2, name string) (*ec2.CreateKeyPairOutput, erro
 	return keyOutput, nil
 }
 
-func NewAWSCluster(deployment *apis.Deployment, awsProfile *AWSProfile) *AWSCluster {
+func NewAWSCluster(name string, region string, awsProfile *AWSProfile) *AWSCluster {
 	return &AWSCluster{
 		AWSProfile:  awsProfile,
-		Name:        deployment.Name,
-		Region:      deployment.Region,
+		Name:        name,
+		Region:      region,
 		NodeInfos:   make(map[int]*NodeInfo),
 		InstanceIds: make([]*string, 0),
 	}

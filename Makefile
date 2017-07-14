@@ -14,6 +14,7 @@ glide-check:
 init: glide-check
 	glide install
 	rm -rf "vendor/k8s.io/client-go/vendor/github.com/golang/glog"
+	rm -rf "vendor/github.com/op/go-logging"
 
 test:
 	${GO_EXECUTABLE} test ${PACKAGES}
@@ -25,7 +26,7 @@ build-docker:
 	sudo docker build . -t hyperpilot/deployer
 
 push:
-	sudo docker push hyperpilot/deployer:latest	
+	sudo docker push hyperpilot/deployer:latest
 
 dev-test: build
 	./deployer --config ./documents/dev.config -logtostderr=true -v=2
