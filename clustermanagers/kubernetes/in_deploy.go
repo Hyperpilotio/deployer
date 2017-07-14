@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/spf13/viper"
 
@@ -94,7 +95,7 @@ func (deployer *InClusterK8SDeployer) getLaunchConfiguration(autoscalingSvc *aut
 // CreateDeployment start a deployment
 func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
 	awsCluster := deployer.AWSCluster
-	//log := deployer.DeploymentLog.Logger
+	// log := deployer.DeploymentLog.Logger
 
 	sess, sessionErr := hpaws.CreateSession(awsCluster.AWSProfile, awsCluster.Region)
 	if sessionErr != nil {
@@ -165,19 +166,19 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
 			DeviceName: mapping.DeviceName,
 			Ebs: &ec2.EbsBlockDevice{
-				DeleteOnTermination: mapping.Ebs.DeleteOnTermination,
-				Encrypted:           mapping.Ebs.Encrypted,
-				Iops:                mapping.Ebs.Iops,
-				SnapshotId:          mapping.Ebs.SnapshotId,
-				VolumeSize:          mapping.Ebs.VolumeSize,
-				VolumeType:          mapping.Ebs.VolumeType,
+				// DeleteOnTermination: mapping.Ebs.DeleteOnTermination,
+				// Encrypted:           mapping.Ebs.Encrypted,
+				// Iops:                mapping.Ebs.Iops,
+				// SnapshotId:          mapping.Ebs.SnapshotId,
+				VolumeSize: mapping.Ebs.VolumeSize,
+				VolumeType: mapping.Ebs.VolumeType,
 			},
-			NoDevice:    aws.String(strconv.FormatBool(*mapping.NoDevice)),
-			VirtualName: mapping.VirtualName,
+			// NoDevice:    aws.String(strconv.FormatBool(*mapping.NoDevice)),
+			// VirtualName: mapping.VirtualName,
 		})
 	}
 
-	runResult, runErr := ec2Svc.RunInstances(&ec2.RunInstancesInput{
+	runInstancesInput := &ec2.RunInstancesInput{
 		KeyName:             launchConfig.KeyName,
 		ImageId:             launchConfig.ImageId,
 		BlockDeviceMappings: blockDeviceMappings,
@@ -185,13 +186,17 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
 			Name: launchConfig.IamInstanceProfile,
 		},
-		SecurityGroups:    launchConfig.SecurityGroups,
-		UserData:          launchConfig.UserData,
-		KernelId:          launchConfig.KernelId,
+		// SecurityGroups: launchConfig.SecurityGroups,
+		UserData: launchConfig.UserData,
+		// KernelId:          launchConfig.KernelId,
 		NetworkInterfaces: networkSpecs,
 		InstanceType:      aws.String(node.InstanceType),
-	})
+		MinCount:          aws.Int64(1),
+		MaxCount:          aws.Int64(1),
+	}
+	glog.V(1).Infof("runInstancesInput: %+v", runInstancesInput)
 
+	runResult, runErr := ec2Svc.RunInstances(runInstancesInput)
 	if runErr != nil {
 		return nil, errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 	}
