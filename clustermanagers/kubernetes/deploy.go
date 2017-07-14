@@ -193,12 +193,10 @@ func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	return nil
 }
 
-func uploadFiles(ec2Svc *ec2.EC2, k8sDeployer *K8SDeployer, uploadedFiles map[string]string) error {
-	awsCluster := k8sDeployer.AWSCluster
-	deployment := k8sDeployer.Deployment
-	bastionIp := k8sDeployer.BastionIp
-	log := k8sDeployer.DeploymentLog.Logger
-
+func uploadFiles(awsCluster *hpaws.AWSCluster,
+	deployment *apis.Deployment,
+	uploadedFiles map[string]string,
+	bastionIp string, log *logging.Logger) error {
 	if len(deployment.Files) == 0 {
 		return nil
 	}
@@ -272,7 +270,7 @@ func deployCluster(k8sDeployer *K8SDeployer, uploadedFiles map[string]string) er
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
-	if err := uploadFiles(ec2Svc, k8sDeployer, uploadedFiles); err != nil {
+	if err := uploadFiles(awsCluster, deployment, uploadedFiles, k8sDeployer.BastionIp, log); err != nil {
 		deleteDeploymentOnFailure(k8sDeployer)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
