@@ -610,6 +610,22 @@ func deleteNetworkInterfaces(ec2Svc *ec2.EC2, filters []*ec2.Filter, log *loggin
 	return nil
 }
 
+func deleteClusterSecurityGroupNetworkInterfaces(ec2Svc *ec2.EC2,
+	clusterSecurityGroupId string, log *logging.Logger) error {
+	// If in-cluster ec2 Instance terminate, network interfaces need to delete
+	log.Infof("Deleting clusterSecurityGroup network interfaces...")
+	filters := []*ec2.Filter{&ec2.Filter{
+		Name:   aws.String("group-id"),
+		Values: []*string{aws.String(clusterSecurityGroupId)},
+	}}
+
+	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
+		log.Warningf("Unable to delete network interfaces: %s", err.Error())
+	}
+
+	return nil
+}
+
 func deleteElbSecurityGroup(ec2Svc *ec2.EC2, stackName string, log *logging.Logger) error {
 	errBool := false
 	describeParams := &ec2.DescribeSecurityGroupsInput{
@@ -810,14 +826,8 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 		log.Warningf("Unable to find k8s-master/k8s-node stack...")
 	}
 
-	// If in-cluster ec2 Instance terminate, network interfaces need to delete
-	log.Infof("Deleting clusterSecurityGroup network interfaces...")
-	filters := []*ec2.Filter{&ec2.Filter{
-		Name:   aws.String("group-id"),
-		Values: []*string{aws.String(clusterSecurityGroupId)},
-	}}
-	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
-		log.Warningf("Unable to delete network interfaces: %s", err.Error())
+	if err := deleteClusterSecurityGroupNetworkInterfaces(ec2Svc, clusterSecurityGroupId, log); err != nil {
+		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
 	if err := deleteLoadBalancers(elbSvc, false, stackName, log); err != nil {
