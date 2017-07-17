@@ -827,7 +827,7 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 	}
 
 	if err := deleteClusterSecurityGroupNetworkInterfaces(ec2Svc, clusterSecurityGroupId, log); err != nil {
-		log.Warningf("Unable to delete load balancers: " + err.Error())
+		log.Warningf("Unable to delete network interfaces of kubernetes cluster security group: " + err.Error())
 	}
 
 	if err := deleteLoadBalancers(elbSvc, false, stackName, log); err != nil {
