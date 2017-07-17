@@ -20,7 +20,6 @@ import (
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
-	"github.com/hyperpilotio/deployer/share"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 )
@@ -1430,7 +1429,7 @@ func (ecsDeployer *ECSDeployer) GetServiceUrl(serviceName string) (string, error
 	return nodeInfo.PublicDnsName + ":" + nodePort, nil
 }
 
-func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*share.ServiceAddress, error) {
+func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*apis.ServiceAddress, error) {
 	var nodePort int32
 	taskFamilyName := ""
 	for _, task := range ecsDeployer.Deployment.TaskDefinitions {
@@ -1464,7 +1463,7 @@ func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*share.Se
 		return nil, errors.New("Unable to find node in cluster")
 	}
 
-	return &share.ServiceAddress{Host: nodeInfo.PublicDnsName, Port: nodePort}, nil
+	return &apis.ServiceAddress{Host: nodeInfo.PublicDnsName, Port: nodePort}, nil
 }
 
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
