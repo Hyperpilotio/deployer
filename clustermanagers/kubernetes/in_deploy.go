@@ -178,15 +178,9 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
 			DeviceName: mapping.DeviceName,
 			Ebs: &ec2.EbsBlockDevice{
-				// DeleteOnTermination: mapping.Ebs.DeleteOnTermination,
-				// Encrypted:           mapping.Ebs.Encrypted,
-				// Iops:                mapping.Ebs.Iops,
-				// SnapshotId:          mapping.Ebs.SnapshotId,
 				VolumeSize: mapping.Ebs.VolumeSize,
 				VolumeType: mapping.Ebs.VolumeType,
 			},
-			// NoDevice:    aws.String(strconv.FormatBool(*mapping.NoDevice)),
-			// VirtualName: mapping.VirtualName,
 		})
 	}
 
@@ -198,9 +192,7 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
 			Name: launchConfig.IamInstanceProfile,
 		},
-		// SecurityGroups: launchConfig.SecurityGroups,
-		UserData: launchConfig.UserData,
-		// KernelId:          launchConfig.KernelId,
+		UserData:          launchConfig.UserData,
 		NetworkInterfaces: networkSpecs,
 		InstanceType:      aws.String(node.InstanceType),
 		MinCount:          aws.Int64(int64(nodeCount)),
@@ -266,6 +258,14 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		return errors.New("Unable to wait for ec2 instances be status ok: " + err.Error())
 	}
 
+	_, err = autoscalingSvc.AttachInstances(&autoscaling.AttachInstancesInput{
+		AutoScalingGroupName: deployer.AutoScalingGroup.AutoScalingGroupName,
+		InstanceIds:          awsCluster.InstanceIds,
+	})
+	if err != nil {
+		return errors.New("Unable to attach new instances to autoscaling group: " + err.Error())
+	}
+
 	return nil
 }
 
@@ -313,8 +313,6 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		// deleteDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
-
-	// TODO: Attach in-cluster ec2 instance ids to auto scaling groups
 
 	return nil, nil
 }
@@ -577,7 +575,39 @@ func (inK8SDeployer *InClusterK8SDeployer) DeployExtensions(
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
-func (inK8SDeployer *InClusterK8SDeployer) DeleteDeployment() error {
+func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
+	err := deleteK8S(getAllDeployedNamespaces(deployer.Deployment),
+		deployer.KubeConfig,
+		deployer.GetLog().Logger)
+	if err != nil {
+		return errors.New("Unable to delete kubernetes objects: " + err.Error())
+	}
+
+	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
+	if sessionErr != nil {
+		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	autoscalingSvc := autoscaling.New(sess)
+	_, err = autoscalingSvc.DetachInstances(&autoscaling.DetachInstancesInput{
+		AutoScalingGroupName:           deployer.AutoScalingGroup.AutoScalingGroupName,
+		InstanceIds:                    deployer.AWSCluster.InstanceIds,
+		ShouldDecrementDesiredCapacity: aws.Bool(true),
+	})
+
+	if err != nil {
+		return errors.New("Unable to detach instances: " + err.Error())
+	}
+
+	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
+		InstanceIds: deployer.AWSCluster.InstanceIds,
+	})
+
+	if err != nil {
+		return fmt.Errorf("Unable to terminate EC2 instance: %s", err.Error())
+	}
+
 	return nil
 }
 
