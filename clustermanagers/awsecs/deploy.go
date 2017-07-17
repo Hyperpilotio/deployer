@@ -19,14 +19,14 @@ import (
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 )
 
 // NewDeployer return the EC2 of Deployer
 func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*ECSDeployer, error) {
-	log, err := log.NewLogger(config, deployment.Name)
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
@@ -91,12 +91,16 @@ func (ecsDeployer *ECSDeployer) GetAWSCluster() *hpaws.AWSCluster {
 	return ecsDeployer.AWSCluster
 }
 
-func (ecsDeployer *ECSDeployer) GetLog() *log.DeploymentLog {
+func (ecsDeployer *ECSDeployer) GetLog() *log.FileLog {
 	return ecsDeployer.DeploymentLog
 }
 
 func (ecsDeployer *ECSDeployer) GetScheduler() *job.Scheduler {
 	return ecsDeployer.Scheduler
+}
+
+func (ecsDeployer *ECSDeployer) SetScheduler(sheduler *job.Scheduler) {
+	ecsDeployer.Scheduler = sheduler
 }
 
 // CreateDeployment start a deployment
@@ -153,7 +157,7 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	return nil, nil
 }
 
-func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
+func (ecsDeployer *ECSDeployer) UpdateDeployment(updateDeployment *apis.Deployment) error {
 	// TODO Implement EC2 UpdateDeployment
 	return nil
 }

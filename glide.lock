@@ -1,5 +1,5 @@
-hash: 9722858d6d248004a38d68a94e4c3b746852021e062c91a4cec8b41f66731ec8
-updated: 2017-07-04T12:25:09.169208379+08:00
+hash: b511c5135cabd78b4fb1e13a06a8d5c80187089a0c70ba83aed557521984aaa6
+updated: 2017-07-06T20:17:02.487016312+08:00
 imports:
 - name: github.com/aws/aws-sdk-go
   version: 00fb2125993965df739fa3398b03bef3eb2e198f
@@ -99,6 +99,10 @@ imports:
   version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
 - name: github.com/hyperpilotio/blobstore
   version: 2d9f571d349328c90844d537818adeafa29f53d4
+- name: github.com/hyperpilotio/go-utils
+  version: f7a943dc589b24d401aa511f4abd04f8cc5b36cf
+  subpackages:
+  - log
 - name: github.com/imdario/mergo
   version: 6633656539c1639d9d78127b7d47c622b5d7b6dc
 - name: github.com/jmespath/go-jmespath

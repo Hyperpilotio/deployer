@@ -16,7 +16,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/deployer/log"
+	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
@@ -39,7 +39,7 @@ var publicPortType = 1
 
 // NewDeployer return the K8S of Deployer
 func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*K8SDeployer, error) {
-	log, err := log.NewLogger(config, deployment.Name)
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
@@ -56,12 +56,16 @@ func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *
 	return deployer, nil
 }
 
-func (k8sDeployer *K8SDeployer) GetLog() *log.DeploymentLog {
+func (k8sDeployer *K8SDeployer) GetLog() *log.FileLog {
 	return k8sDeployer.DeploymentLog
 }
 
 func (k8sDeployer *K8SDeployer) GetScheduler() *job.Scheduler {
 	return k8sDeployer.Scheduler
+}
+
+func (k8sDeployer *K8SDeployer) SetScheduler(sheduler *job.Scheduler) {
+	k8sDeployer.Scheduler = sheduler
 }
 
 func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {
@@ -85,10 +89,10 @@ func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
+func (k8sDeployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error {
+	k8sDeployer.Deployment = deployment
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
-	deployment := k8sDeployer.Deployment
 	stackName := awsCluster.StackName()
 	log := k8sDeployer.DeploymentLog.Logger
 
@@ -1376,6 +1380,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	deployment := k8sDeployer.Deployment
 	log := k8sDeployer.DeploymentLog.Logger
+	k8sDeployer.Services = map[string]ServiceMapping{}
 
 	allNamespaces := getAllDeployedNamespaces(deployment)
 	c := make(chan bool, 1)
