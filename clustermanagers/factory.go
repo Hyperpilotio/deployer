@@ -11,7 +11,6 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
-	"github.com/hyperpilotio/deployer/share"
 	"github.com/pborman/uuid"
 	"github.com/spf13/viper"
 )
@@ -29,7 +28,7 @@ type Deployer interface {
 	GetLog() *log.DeploymentLog
 	GetScheduler() *job.Scheduler
 	GetServiceUrl(serviceName string) (string, error)
-	GetServiceAddress(serviceName string) (*share.ServiceAddress, error)
+	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)
 }
 

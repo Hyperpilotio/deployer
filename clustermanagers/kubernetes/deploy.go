@@ -17,7 +17,6 @@ import (
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/deployer/log"
-	"github.com/hyperpilotio/deployer/share"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
@@ -1679,7 +1678,7 @@ func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(serviceName string) (i
 }
 
 // GetServiceAddress return ServiceAddress object
-func (k8sDeployer *K8SDeployer) GetServiceAddress(serviceName string) (*share.ServiceAddress, error) {
+func (k8sDeployer *K8SDeployer) GetServiceAddress(serviceName string) (*apis.ServiceAddress, error) {
 	k8sClient, err := k8s.NewForConfig(k8sDeployer.KubeConfig)
 	if err != nil {
 		return nil, errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
@@ -1695,7 +1694,7 @@ func (k8sDeployer *K8SDeployer) GetServiceAddress(serviceName string) (*share.Se
 			string(service.Spec.Type) == "LoadBalancer" {
 			port := service.Spec.Ports[0].Port
 			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
-			address := &share.ServiceAddress{Host: hostname, Port: port}
+			address := &apis.ServiceAddress{Host: hostname, Port: port}
 
 			return address, nil
 		}
