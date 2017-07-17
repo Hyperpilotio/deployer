@@ -18,7 +18,7 @@ import (
 // Cluster manager specific Deployer, able to deployer containers and services
 type Deployer interface {
 	CreateDeployment(uploadedFiles map[string]string) (interface{}, error)
-	UpdateDeployment() error
+	UpdateDeployment(updateDeployment *apis.Deployment) error
 	DeployExtensions(extensions *apis.Deployment, mergedDeployment *apis.Deployment) error
 	DeleteDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
@@ -27,6 +27,7 @@ type Deployer interface {
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.FileLog
 	GetScheduler() *job.Scheduler
+	SetScheduler(sheduler *job.Scheduler)
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)

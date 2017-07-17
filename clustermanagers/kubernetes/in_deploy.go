@@ -115,7 +115,7 @@ func setupEC2(deployer *InClusterK8SDeployer,
 	ec2Svc *ec2.EC2,
 	autoscalingSvc *autoscaling.AutoScaling) error {
 	awsCluster := deployer.AWSCluster
-	log := deployer.DeploymentLog.Logger
+	log := deployer.GetLog().Logger
 	if err := deployer.findAutoscalingGroup(autoscalingSvc); err != nil {
 		return errors.New("Unable to find autoscaling group: " + err.Error())
 	}
@@ -235,6 +235,10 @@ func setupEC2(deployer *InClusterK8SDeployer,
 			Value: aws.String(deployer.OriginalAWSCluster.StackName()),
 		},
 		{
+			Key:   aws.String("deployment"),
+			Value: aws.String(deployer.OriginalAWSCluster.Name),
+		},
+		{
 			Key:   aws.String("InternalCluster"),
 			Value: aws.String(awsCluster.StackName()),
 		},
@@ -274,7 +278,7 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	awsCluster := deployer.AWSCluster
 	deployment := deployer.Deployment
 	bastionIp := deployer.BastionIp
-	log := deployer.DeploymentLog.Logger
+	log := deployer.GetLog().Logger
 
 	sess, sessionErr := hpaws.CreateSession(awsCluster.AWSProfile, awsCluster.Region)
 	if sessionErr != nil {
@@ -346,7 +350,7 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
 	deployment := deployer.Deployment
 	kubeConfig := deployer.KubeConfig
-	log := deployer.DeploymentLog.Logger
+	log := deployer.GetLog().Logger
 
 	if kubeConfig == nil {
 		return errors.New("Unable to find kube config in deployment")
@@ -450,6 +454,10 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 	}
 
 	return nil
+}
+
+func getInClusterNamespaces(awsCluster *hpaws.AWSCluster) []string {
+	return []string{strings.ToLower(awsCluster.Name)}
 }
 
 func createUniqueNamespace(deploymentName string) string {
@@ -564,11 +572,28 @@ func populateInClusterNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) e
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func (inK8SDeployer *InClusterK8SDeployer) UpdateDeployment() error {
+func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployment) error {
+	deployer.Deployment = deployment
+	log := deployer.GetLog().Logger
+
+	log.Info("Updating in-cluster kubernetes deployment")
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	if err := deleteK8S(getInClusterNamespaces(deployer.AWSCluster), deployer.KubeConfig, log); err != nil {
+		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
+	}
+
+	if err := deployer.deployKubernetesObjects(k8sClient, true); err != nil {
+		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
+	}
+
 	return nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) DeployExtensions(
+func (deployer *InClusterK8SDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
 	return nil
@@ -576,9 +601,8 @@ func (inK8SDeployer *InClusterK8SDeployer) DeployExtensions(
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
-	err := deleteK8S(getAllDeployedNamespaces(deployer.Deployment),
-		deployer.KubeConfig,
-		deployer.GetLog().Logger)
+	log := deployer.GetLog().Logger
+	err := deleteK8S(getInClusterNamespaces(deployer.AWSCluster), deployer.KubeConfig, log)
 	if err != nil {
 		return errors.New("Unable to delete kubernetes objects: " + err.Error())
 	}
@@ -611,30 +635,33 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	return nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) ReloadClusterState(storeInfo interface{}) error {
+func (deployer *InClusterK8SDeployer) ReloadClusterState(storeInfo interface{}) error {
 	return nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetStoreInfo() interface{} {
+func (deployer *InClusterK8SDeployer) GetStoreInfo() interface{} {
 	return nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
-	return inK8SDeployer.AWSCluster
+func (deployer *InClusterK8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
+	return deployer.AWSCluster
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetLog() *log.FileLog {
-	return inK8SDeployer.DeploymentLog
+func (deployer *InClusterK8SDeployer) GetLog() *log.FileLog {
+	return deployer.DeploymentLog
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetScheduler() *job.Scheduler {
+func (deployer *InClusterK8SDeployer) GetScheduler() *job.Scheduler {
 	return nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
+func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
+}
+
+func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 	return "", nil
 }
 
-func (inK8SDeployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface{}, error) {
+func (deployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface{}, error) {
 	return nil, nil
 }

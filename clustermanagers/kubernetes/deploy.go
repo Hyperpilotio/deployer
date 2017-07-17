@@ -16,6 +16,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
+	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
@@ -64,6 +65,10 @@ func (k8sDeployer *K8SDeployer) GetScheduler() *job.Scheduler {
 	return k8sDeployer.Scheduler
 }
 
+func (k8sDeployer *K8SDeployer) SetScheduler(sheduler *job.Scheduler) {
+	k8sDeployer.Scheduler = sheduler
+}
+
 func (k8sDeployer *K8SDeployer) GetKubeConfigPath() string {
 	return k8sDeployer.KubeConfigPath
 }
@@ -85,10 +90,10 @@ func (k8sDeployer *K8SDeployer) CreateDeployment(uploadedFiles map[string]string
 }
 
 // UpdateDeployment start a deployment on EC2 is ready
-func (k8sDeployer *K8SDeployer) UpdateDeployment() error {
+func (k8sDeployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error {
+	k8sDeployer.Deployment = deployment
 	awsCluster := k8sDeployer.AWSCluster
 	awsProfile := awsCluster.AWSProfile
-	deployment := k8sDeployer.Deployment
 	stackName := awsCluster.StackName()
 	log := k8sDeployer.DeploymentLog.Logger
 
@@ -539,59 +544,32 @@ func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string,
 	}
 }
 
-func waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, securityGroupNames []*string,
+func waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, filters []*ec2.Filter,
 	timeout time.Duration, log *logging.Logger) error {
-	c := make(chan bool, 1)
-	quit := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-quit:
-				return
-			default:
-				params := &ec2.DescribeNetworkInterfacesInput{
-					Filters: []*ec2.Filter{
-						{
-							Name:   aws.String("group-name"),
-							Values: securityGroupNames,
-						},
-					},
-				}
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		params := &ec2.DescribeNetworkInterfacesInput{
+			Filters: filters,
+		}
 
-				allAvailable := true
-				resp, _ := ec2Svc.DescribeNetworkInterfaces(params)
-				for _, nif := range resp.NetworkInterfaces {
-					if aws.StringValue(nif.Status) != "available" {
-						allAvailable = false
-					}
-				}
-				if allAvailable || len(resp.NetworkInterfaces) == 0 {
-					c <- true
-				}
-				time.Sleep(time.Second * 5)
+		allAvailable := true
+		resp, _ := ec2Svc.DescribeNetworkInterfaces(params)
+		for _, nif := range resp.NetworkInterfaces {
+			if aws.StringValue(nif.Status) != "available" {
+				allAvailable = false
 			}
 		}
-	}()
-
-	select {
-	case <-c:
-		log.Info("NetworkInterfaces are available")
-		return nil
-	case <-time.After(timeout):
-		quit <- true
-		return errors.New("Timed out waiting for NetworkInterfaces to be available")
-	}
+		if allAvailable || len(resp.NetworkInterfaces) == 0 {
+			log.Info("NetworkInterfaces are available")
+			return true, nil
+		}
+		return false, nil
+	})
 }
 
-func deleteNetworkInterfaces(ec2Svc *ec2.EC2, securityGroupNames []*string, log *logging.Logger) error {
+func deleteNetworkInterfaces(ec2Svc *ec2.EC2, filters []*ec2.Filter, log *logging.Logger) error {
 	errBool := false
 	describeNetworkInterfacesInput := &ec2.DescribeNetworkInterfacesInput{
-		Filters: []*ec2.Filter{
-			{
-				Name:   aws.String("group-name"),
-				Values: securityGroupNames,
-			},
-		},
+		Filters: filters,
 	}
 
 	resp, err := ec2Svc.DescribeNetworkInterfaces(describeNetworkInterfacesInput)
@@ -611,7 +589,7 @@ func deleteNetworkInterfaces(ec2Svc *ec2.EC2, securityGroupNames []*string, log 
 		}
 	}
 
-	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, securityGroupNames, time.Duration(60)*time.Second, log); err != nil {
+	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, filters, time.Duration(60)*time.Second, log); err != nil {
 		return fmt.Errorf("Unable to wait until network interface is available: %s\n", err.Error())
 	}
 
@@ -667,7 +645,12 @@ func deleteElbSecurityGroup(ec2Svc *ec2.EC2, stackName string, log *logging.Logg
 		}
 	}
 
-	if err := deleteNetworkInterfaces(ec2Svc, k8sElbSgNames, log); err != nil {
+	filters := []*ec2.Filter{&ec2.Filter{
+		Name:   aws.String("group-name"),
+		Values: k8sElbSgNames,
+	}}
+
+	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
 		log.Warningf("Unable to delete network interfaces: %s", err.Error())
 	}
 
@@ -771,6 +754,7 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
 	k8sNodeStackName := ""
 	vpcID := ""
+	clusterSecurityGroupId := ""
 	for _, stack := range describeStacksOutput.Stacks {
 		if strings.HasPrefix(aws.StringValue(stack.StackName), stackName+"-K8sStack") {
 			k8sNodeStackName = aws.StringValue(stack.StackName)
@@ -778,6 +762,14 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 				for _, param := range stack.Parameters {
 					if aws.StringValue(param.ParameterKey) == "VPCID" {
 						vpcID = aws.StringValue(param.ParameterValue)
+						break
+					}
+				}
+			}
+			if clusterSecurityGroupId == "" {
+				for _, param := range stack.Parameters {
+					if aws.StringValue(param.ParameterKey) == "ClusterSecGroup" {
+						clusterSecurityGroupId = aws.StringValue(param.ParameterValue)
 						break
 					}
 				}
@@ -816,6 +808,16 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 		}
 	} else {
 		log.Warningf("Unable to find k8s-master/k8s-node stack...")
+	}
+
+	// If in-cluster ec2 Instance terminate, network interfaces need to delete
+	log.Infof("Deleting clusterSecurityGroup network interfaces...")
+	filters := []*ec2.Filter{&ec2.Filter{
+		Name:   aws.String("group-id"),
+		Values: []*string{aws.String(clusterSecurityGroupId)},
+	}}
+	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
+		log.Warningf("Unable to delete network interfaces: %s", err.Error())
 	}
 
 	if err := deleteLoadBalancers(elbSvc, false, stackName, log); err != nil {

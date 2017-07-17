@@ -99,6 +99,10 @@ func (ecsDeployer *ECSDeployer) GetScheduler() *job.Scheduler {
 	return ecsDeployer.Scheduler
 }
 
+func (ecsDeployer *ECSDeployer) SetScheduler(sheduler *job.Scheduler) {
+	ecsDeployer.Scheduler = sheduler
+}
+
 // CreateDeployment start a deployment
 func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
 	awsCluster := ecsDeployer.AWSCluster
@@ -153,9 +157,9 @@ func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string
 	return nil, nil
 }
 
-func (ecsDeployer *ECSDeployer) UpdateDeployment() error {
+func (ecsDeployer *ECSDeployer) UpdateDeployment(updateDeployment *apis.Deployment) error {
 	// TODO Implement EC2 UpdateDeployment
-	return nil
+	return errors.New("Unimplemented")
 }
 
 func (ecsDeployer *ECSDeployer) DeployExtensions(

@@ -20,7 +20,6 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
-	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/spf13/viper"
@@ -451,27 +450,20 @@ func (server *Server) updateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
-	// Update deployment
 	deployment.Name = deploymentName
-	deploymentInfo.Deployment = deployment
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
-	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
-	}
 	deploymentInfo.State = UPDATING
+	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(deployment); err != nil {
 			log.Logger.Error("Unable to update deployment")
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Update deployment successfully!")
+			deploymentInfo.Deployment = deployment
 			deploymentInfo.State = AVAILABLE
 		}
 		server.storeDeployment(deploymentInfo)
@@ -692,7 +684,7 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		return
 	}
 
-	deployment, ok := server.Templates[templateId]
+	templateDeployment, ok := server.Templates[templateId]
 	if !ok {
 		server.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{
@@ -701,31 +693,29 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		})
 		return
 	}
-	server.mutex.Unlock()
 
-	// Update deployment
+	deployment := *templateDeployment
 	deployment.UserId = deploymentInfo.Deployment.UserId
 	deployment.Name = deploymentName
-	deploymentInfo.Deployment = deployment
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deploymentInfo.Deployer.(*awsecs.ECSDeployer).Deployment = deployment
-	case "K8S":
-		deploymentInfo.Deployer.(*kubernetes.K8SDeployer).Deployment = deployment
-	}
 	deploymentInfo.State = UPDATING
+	server.mutex.Unlock()
 
 	log := deploymentInfo.Deployer.GetLog()
 
 	go func() {
 		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, deployment)
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(&deployment); err != nil {
 			log.Logger.Error("Unable to reset template deployment")
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Reset template deployment successfully!")
+			deploymentInfo.Deployment = &deployment
 			deploymentInfo.State = AVAILABLE
+		}
+
+		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			log.Logger.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 		server.storeDeployment(deploymentInfo)
 	}()
@@ -1048,27 +1038,46 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	deployment, ok := server.Templates[templateId]
+	templateDeployment, ok := server.Templates[templateId]
 	if !ok {
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
 	}
 
+	copyDeployment := *templateDeployment
 	if needMergeDeployment.UserId != "" {
-		deployment.UserId = needMergeDeployment.UserId
+		copyDeployment.UserId = needMergeDeployment.UserId
 	}
 
 	if needMergeDeployment.Name != "" {
-		deployment.Name = needMergeDeployment.Name
+		copyDeployment.Name = needMergeDeployment.Name
+	}
+
+	existingMapping := copyDeployment.NodeMapping
+	copyDeployment.NodeMapping = make([]apis.NodeMapping, 0)
+
+	for _, nodeMapping := range existingMapping {
+		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
 	for _, nodeMapping := range needMergeDeployment.NodeMapping {
-		deployment.NodeMapping = append(deployment.NodeMapping, nodeMapping)
-	}
-	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
-		deployment.KubernetesDeployment.Kubernetes = append(deployment.KubernetesDeployment.Kubernetes, task)
+		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
-	return deployment, nil
+	copyKubernetesDeployment := *copyDeployment.KubernetesDeployment
+	copyDeployment.KubernetesDeployment = &copyKubernetesDeployment
+
+	existingKubernetesDeployment := copyDeployment.KubernetesDeployment.Kubernetes
+	copyDeployment.KubernetesDeployment.Kubernetes = make([]apis.KubernetesTask, 0)
+
+	for _, task := range existingKubernetesDeployment {
+		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
+	}
+
+	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
+		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
+	}
+
+	return &copyDeployment, nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
@@ -1389,12 +1398,7 @@ func (server *Server) NewShutDownScheduler(
 		}()
 	})
 
-	switch deploymentInfo.GetDeploymentType() {
-	case "ECS":
-		deployer.(*awsecs.ECSDeployer).Scheduler = scheduler
-	case "K8S":
-		deployer.(*kubernetes.K8SDeployer).Scheduler = scheduler
-	}
+	deployer.SetScheduler(scheduler)
 
 	return nil
 }
