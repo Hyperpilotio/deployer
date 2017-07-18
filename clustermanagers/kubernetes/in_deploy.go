@@ -596,6 +596,19 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 func (deployer *InClusterK8SDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
+	}
+
+	originalDeployment := deployer.Deployment
+	deployer.Deployment = extensions
+	if err := deployer.deployKubernetesObjects(k8sClient, true); err != nil {
+		deployer.Deployment = originalDeployment
+		return errors.New("Unable to deploy k8s objects: " + err.Error())
+	}
+
+	deployer.Deployment = newDeployment
 	return nil
 }
 
