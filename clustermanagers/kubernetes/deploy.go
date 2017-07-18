@@ -462,89 +462,7 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 	return nil
 }
 
-func deleteSecurityGroup(ec2Svc *ec2.EC2, vpcID *string, log *logging.Logger) error {
-	errBool := false
-	describeParams := &ec2.DescribeSecurityGroupsInput{
-		Filters: []*ec2.Filter{
-			{
-				Name:   aws.String("vpc-id"),
-				Values: []*string{vpcID},
-			},
-		},
-	}
-
-	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
-	if err != nil {
-		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
-	}
-
-	for _, group := range resp.SecurityGroups {
-		if aws.StringValue(group.GroupName) == "default" {
-			continue
-		}
-		params := &ec2.DeleteSecurityGroupInput{
-			GroupId: group.GroupId,
-		}
-		if _, err := ec2Svc.DeleteSecurityGroup(params); err != nil {
-			log.Warningf("Unable to delete security group: %s\n", err.Error())
-			errBool = true
-		}
-	}
-
-	if errBool {
-		return errors.New("Unable to delete all the relative security groups")
-	}
-
-	return nil
-}
-
-func waitUntilInternetGatewayDeleted(ec2Svc *ec2.EC2, deploymentName string,
-	timeout time.Duration, log *logging.Logger) error {
-	c := make(chan bool, 1)
-	quit := make(chan bool)
-	go func() {
-		for {
-			select {
-			case <-quit:
-				return
-			default:
-				params := &ec2.DescribeTagsInput{
-					Filters: []*ec2.Filter{
-						{
-							Name: aws.String("resource-type"),
-							Values: []*string{
-								aws.String("internet-gateway"),
-							},
-						},
-						{
-							Name: aws.String("tag:deployment"),
-							Values: []*string{
-								aws.String(deploymentName),
-							},
-						},
-					},
-				}
-
-				resp, _ := ec2Svc.DescribeTags(params)
-				if resp.Tags == nil {
-					c <- true
-				}
-				time.Sleep(time.Second * 10)
-			}
-		}
-	}()
-
-	select {
-	case <-c:
-		log.Info("InternetGateway is deleted")
-		return nil
-	case <-time.After(timeout):
-		quit <- true
-		return errors.New("Timed out waiting for InternetGateway to be deleted")
-	}
-}
-
-func waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, filters []*ec2.Filter,
+func waitUntilNetworkInterfacesAvailable(ec2Svc *ec2.EC2, filters []*ec2.Filter,
 	timeout time.Duration, log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
 		params := &ec2.DescribeNetworkInterfacesInput{
@@ -564,6 +482,39 @@ func waitUntilNetworkInterfaceIsAvailable(ec2Svc *ec2.EC2, filters []*ec2.Filter
 		}
 		return false, nil
 	})
+}
+
+func waitUntilKubernetesInstanceTerminated(ec2Svc *ec2.EC2, stackName string, log *logging.Logger) error {
+	describeInstancesInput := &ec2.DescribeInstancesInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:KubernetesCluster"),
+				Values: []*string{aws.String(stackName)},
+			},
+		},
+	}
+
+	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
+	if describeErr != nil {
+		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
+	}
+
+	var instanceIds []*string
+	for _, reservation := range describeInstancesOutput.Reservations {
+		for _, instance := range reservation.Instances {
+			instanceIds = append(instanceIds, instance.InstanceId)
+		}
+	}
+
+	terminatedInstanceParams := &ec2.DescribeInstancesInput{
+		InstanceIds: instanceIds,
+	}
+
+	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
+		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
+	}
+
+	return nil
 }
 
 func deleteNetworkInterfaces(ec2Svc *ec2.EC2, filters []*ec2.Filter, log *logging.Logger) error {
@@ -589,7 +540,7 @@ func deleteNetworkInterfaces(ec2Svc *ec2.EC2, filters []*ec2.Filter, log *loggin
 		}
 	}
 
-	if err := waitUntilNetworkInterfaceIsAvailable(ec2Svc, filters, time.Duration(60)*time.Second, log); err != nil {
+	if err := waitUntilNetworkInterfacesAvailable(ec2Svc, filters, time.Duration(60)*time.Second, log); err != nil {
 		return fmt.Errorf("Unable to wait until network interface is available: %s\n", err.Error())
 	}
 
@@ -611,16 +562,32 @@ func deleteNetworkInterfaces(ec2Svc *ec2.EC2, filters []*ec2.Filter, log *loggin
 }
 
 func deleteClusterSecurityGroupNetworkInterfaces(ec2Svc *ec2.EC2,
-	clusterSecurityGroupId string, log *logging.Logger) error {
-	// If in-cluster ec2 Instance terminate, network interfaces need to delete
-	log.Infof("Deleting clusterSecurityGroup network interfaces...")
+	stackName string, log *logging.Logger) error {
+	describeParams := &ec2.DescribeSecurityGroupsInput{
+		Filters: []*ec2.Filter{
+			{
+				Name:   aws.String("tag:KubernetesCluster"),
+				Values: []*string{aws.String(stackName)},
+			},
+			{
+				Name:   aws.String("tag:Name"),
+				Values: []*string{aws.String("k8s-cluster-security-group")},
+			},
+		},
+	}
+
+	resp, err := ec2Svc.DescribeSecurityGroups(describeParams)
+	if err != nil {
+		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
+	}
+
 	filters := []*ec2.Filter{&ec2.Filter{
 		Name:   aws.String("group-id"),
-		Values: []*string{aws.String(clusterSecurityGroupId)},
+		Values: []*string{resp.SecurityGroups[0].GroupId},
 	}}
 
 	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
-		log.Warningf("Unable to delete network interfaces: %s", err.Error())
+		return fmt.Errorf("Unable to delete network interfaces: %s", err.Error())
 	}
 
 	return nil
@@ -766,171 +733,44 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 	ec2Svc := ec2.New(sess)
 	cfSvc := cloudformation.New(sess)
 
-	// find k8s-node stack name
-	describeStacksOutput, _ := cfSvc.DescribeStacks(nil)
-	k8sNodeStackName := ""
-	vpcID := ""
-	clusterSecurityGroupId := ""
-	for _, stack := range describeStacksOutput.Stacks {
-		if strings.HasPrefix(aws.StringValue(stack.StackName), stackName+"-K8sStack") {
-			k8sNodeStackName = aws.StringValue(stack.StackName)
-			if vpcID == "" {
-				for _, param := range stack.Parameters {
-					if aws.StringValue(param.ParameterKey) == "VPCID" {
-						vpcID = aws.StringValue(param.ParameterValue)
-						break
-					}
-				}
-			}
-			if clusterSecurityGroupId == "" {
-				for _, param := range stack.Parameters {
-					if aws.StringValue(param.ParameterKey) == "ClusterSecGroup" {
-						clusterSecurityGroupId = aws.StringValue(param.ParameterValue)
-						break
-					}
-				}
-			}
-		} else if aws.StringValue(stack.StackName) == stackName {
-			if vpcID == "" {
-				for _, output := range stack.Outputs {
-					if aws.StringValue(output.OutputKey) == "VPCID" {
-						vpcID = aws.StringValue(output.OutputValue)
-						break
-					}
-				}
-			}
-		}
+	log.Infof("Deleting %s stack...", stackName)
+	_, err := cfSvc.DeleteStack(&cloudformation.DeleteStackInput{
+		StackName: aws.String(stackName),
+	})
+	if err != nil {
+		log.Warningf("Unable to delete stack: %s", err.Error())
 	}
 
-	// delete k8s-master/k8s-node stack
-	if k8sNodeStackName != "" {
-		log.Infof("Deleting k8s-master/k8s-node stack...")
-		deleteStackInput := &cloudformation.DeleteStackInput{
-			StackName: aws.String(k8sNodeStackName),
-		}
-
-		if _, err := cfSvc.DeleteStack(deleteStackInput); err != nil {
-			log.Warningf("Unable to delete stack: %s", err.Error())
-		}
-
-		describeStacksInput := &cloudformation.DescribeStacksInput{
-			StackName: aws.String(k8sNodeStackName),
-		}
-
-		if err := cfSvc.WaitUntilStackDeleteComplete(describeStacksInput); err != nil {
-			log.Warningf("Unable to wait until stack is deleted: %s", err.Error())
-		} else if err == nil {
-			log.Infof("Delete %s stack ok...", k8sNodeStackName)
-		}
-	} else {
-		log.Warningf("Unable to find k8s-master/k8s-node stack...")
-	}
-
-	if err := deleteClusterSecurityGroupNetworkInterfaces(ec2Svc, clusterSecurityGroupId, log); err != nil {
-		log.Warningf("Unable to delete network interfaces of kubernetes cluster security group: " + err.Error())
-	}
-
+	log.Infof("Deleting %s load balancers...", stackName)
 	if err := deleteLoadBalancers(elbSvc, false, stackName, log); err != nil {
 		log.Warningf("Unable to delete load balancers: " + err.Error())
 	}
 
-	// delete bastion-Host EC2 instance
-	log.Infof("Deleting bastion-Host EC2 instance...")
-	if err := deleteBastionHost(ec2Svc, deploymentName); err != nil {
-		log.Warningf("Unable to delete bastion-Host EC2 instance: %s", err.Error())
+	log.Infof("Waiting until %s kubernetes instance is terminated...", stackName)
+	if err := waitUntilKubernetesInstanceTerminated(ec2Svc, stackName, log); err != nil {
+		log.Warningf("Unable wait for k8s-node ec2 instance to be terminated: " + err.Error())
 	}
 
-	// delete bastion-host stack
-	log.Infof("Deleting bastion-host stack...")
-	deleteBastionHostStackInput := &cloudformation.DeleteStackInput{
+	log.Infof("Deleting %s network interfaces of clusterSecurityGroup...", stackName)
+	if err := deleteClusterSecurityGroupNetworkInterfaces(ec2Svc, stackName, log); err != nil {
+		log.Warningf("Unable to delete network interfaces of kubernetes cluster security group: " + err.Error())
+	}
+
+	log.Infof("Deleting %s elb security group...", stackName)
+	if err := deleteElbSecurityGroup(ec2Svc, stackName, log); err != nil {
+		log.Warningf("Unable to deleting %s elb securityGroups: %s", stackName, err.Error())
+	}
+
+	log.Infof("Waiting until %s stack to be delete completed...", stackName)
+	err = cfSvc.WaitUntilStackDeleteComplete(&cloudformation.DescribeStacksInput{
 		StackName: aws.String(stackName),
-	}
-
-	if _, err := cfSvc.DeleteStack(deleteBastionHostStackInput); err != nil {
-		log.Warningf("Unable to delete stack: %s", err.Error())
-	}
-
-	if err := waitUntilInternetGatewayDeleted(ec2Svc, deploymentName, time.Duration(3)*time.Minute, log); err != nil {
-		log.Warningf("Unable to wait for internetGateway to be deleted: %s", err.Error())
-	}
-
-	// delete securityGroup
-	retryTimes := 5
-	log.Infof("Deleteing securityGroup...")
-	for i := 1; i <= retryTimes; i++ {
-		if err := deleteSecurityGroup(ec2Svc, aws.String(vpcID), log); err != nil {
-			log.Warningf("Unable to delete securityGroup: %s, retrying %d time", err.Error(), i)
-		} else if err == nil {
-			log.Infof("Delete securityGroup ok...")
-			break
-		}
-		time.Sleep(time.Duration(30) * time.Second)
-	}
-
-	describeBastionHostStacksInput := &cloudformation.DescribeStacksInput{
-		StackName: aws.String(stackName),
-	}
-
-	if err := cfSvc.WaitUntilStackDeleteComplete(describeBastionHostStacksInput); err != nil {
-		log.Warningf("Unable to wait until stack is deleted: %s", err.Error())
+	})
+	if err != nil {
+		log.Warningf("Unable to wait until %s stack to be delete completed: %s", stackName, err.Error())
 	} else if err == nil {
 		log.Infof("Delete %s stack ok...", stackName)
 	}
 
-	return nil
-}
-
-func deleteBastionHost(ec2Svc *ec2.EC2, deploymentName string) error {
-	describeInstancesInput := &ec2.DescribeInstancesInput{
-		Filters: []*ec2.Filter{
-			{
-				Name: aws.String("tag:Name"),
-				Values: []*string{
-					aws.String("bastion-host"),
-				},
-			},
-			{
-				Name: aws.String("tag:deployment"),
-				Values: []*string{
-					aws.String(deploymentName),
-				},
-			},
-			{
-				Name: aws.String("instance-state-name"),
-				Values: []*string{
-					aws.String("running"),
-				},
-			},
-		},
-	}
-
-	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
-	if describeErr != nil {
-		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
-	}
-
-	var instanceIds []*string
-	for _, reservation := range describeInstancesOutput.Reservations {
-		for _, instance := range reservation.Instances {
-			instanceIds = append(instanceIds, instance.InstanceId)
-		}
-	}
-
-	params := &ec2.TerminateInstancesInput{
-		InstanceIds: instanceIds,
-	}
-
-	if _, err := ec2Svc.TerminateInstances(params); err != nil {
-		return fmt.Errorf("Unable to terminate EC2 instance: %s\n", err.Error())
-	}
-
-	terminatedInstanceParams := &ec2.DescribeInstancesInput{
-		InstanceIds: instanceIds,
-	}
-
-	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
-		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
-	}
 	return nil
 }
 
@@ -1318,6 +1158,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 		// Assigning Pods to Nodes
 		nodeSelector := map[string]string{}
 		log.Infof("Selecting node %d for deployment %s", mapping.Id, family)
+
 		nodeSelector["hyperpilot/node-id"] = strconv.Itoa(mapping.Id)
 
 		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
