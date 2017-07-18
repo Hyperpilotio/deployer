@@ -581,13 +581,15 @@ func deleteClusterSecurityGroupNetworkInterfaces(ec2Svc *ec2.EC2,
 		return fmt.Errorf("Unable to describe tags of security group: %s\n", err.Error())
 	}
 
-	filters := []*ec2.Filter{&ec2.Filter{
-		Name:   aws.String("group-id"),
-		Values: []*string{resp.SecurityGroups[0].GroupId},
-	}}
+	if len(resp.SecurityGroups) > 0 {
+		filters := []*ec2.Filter{&ec2.Filter{
+			Name:   aws.String("group-id"),
+			Values: []*string{resp.SecurityGroups[0].GroupId},
+		}}
 
-	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
-		return fmt.Errorf("Unable to delete network interfaces: %s", err.Error())
+		if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
+			return fmt.Errorf("Unable to delete network interfaces: %s", err.Error())
+		}
 	}
 
 	return nil
