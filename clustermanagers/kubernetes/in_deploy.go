@@ -139,6 +139,12 @@ func setupEC2(deployer *InClusterK8SDeployer,
 					aws.String(deployer.OriginalAWSCluster.StackName()),
 				},
 			},
+			{
+				Name: aws.String("instance-state-name"),
+				Values: []*string{
+					aws.String("running"),
+				},
+			},
 		},
 	}
 	describeInstancesOutput, describeErr := ec2Svc.DescribeInstances(describeInstancesInput)
@@ -318,7 +324,31 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
+	recordPrivateEndpoints(deployer, k8sClient)
+
 	return nil, nil
+}
+
+func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clientset) {
+	log := deployer.DeploymentLog.Logger
+	namespaces := getInClusterNamespaces(deployer.AWSCluster)
+	deployer.Services = map[string]ServiceMapping{}
+
+	for _, namespace := range namespaces {
+		services, serviceError := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{})
+		if serviceError != nil {
+			log.Warningf("Unable to list services for namespace '%s': %s", namespace, serviceError.Error())
+			return
+		}
+		for _, service := range services.Items {
+			serviceName := service.GetObjectMeta().GetName()
+			port := service.Spec.Ports[0].Port
+			serviceMapping := ServiceMapping{
+				PrivateUrl: serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10),
+			}
+			deployer.Services[serviceName] = serviceMapping
+		}
+	}
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
@@ -679,6 +709,13 @@ func (deployer *InClusterK8SDeployer) ReloadClusterState(storeInfo interface{}) 
 		return errors.New("Unable to find autoscaling group: " + err.Error())
 	}
 
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during get cluster: " + err.Error())
+	}
+
+	recordPrivateEndpoints(deployer, k8sClient)
+
 	return nil
 }
 
@@ -702,9 +739,63 @@ func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
 }
 
 func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
-	return "", nil
+	if info, ok := deployer.Services[serviceName]; ok {
+		return info.PrivateUrl, nil
+	}
+
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return "", errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
+	}
+
+	namespace := getInClusterNamespaces(deployer.AWSCluster)[0]
+	services, err := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{})
+	if err != nil {
+		return "", errors.New("Unable to list services in the cluster: " + err.Error())
+	}
+
+	for _, service := range services.Items {
+		if service.ObjectMeta.Name == serviceName {
+			nodeId, _ := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			port := service.Spec.Ports[0].Port
+			serviceUrl := serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10)
+			deployer.Services[serviceName] = ServiceMapping{
+				PrivateUrl: serviceUrl,
+				NodeId:     nodeId,
+			}
+			return serviceUrl, nil
+		}
+	}
+
+	return "", errors.New("Service not found in endpoints")
 }
 
 func (deployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface{}, error) {
-	return nil, nil
+	if len(deployer.AWSCluster.NodeInfos) < 0 {
+		k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+		if err != nil {
+			return nil, errors.New("Unable to connect to kubernetes: " + err.Error())
+		}
+		recordPrivateEndpoints(deployer, k8sClient)
+	}
+
+	nodeNameInfos := map[string]string{}
+	for id, nodeInfo := range deployer.AWSCluster.NodeInfos {
+		nodeNameInfos[strconv.Itoa(id)] = aws.StringValue(nodeInfo.Instance.PrivateDnsName)
+	}
+
+	serviceMappings := make(map[string]interface{})
+	for serviceName, serviceMapping := range deployer.Services {
+		if serviceMapping.NodeId == 0 {
+			serviceNodeId, err := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			if err != nil {
+				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
+			}
+			serviceMapping.NodeId = serviceNodeId
+		}
+		serviceMapping.NodeName = nodeNameInfos[strconv.Itoa(serviceMapping.NodeId)]
+		serviceMappings[serviceName] = serviceMapping
+	}
+
+	return serviceMappings, nil
 }

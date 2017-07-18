@@ -1227,6 +1227,7 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	deployment := k8sDeployer.Deployment
 	log := k8sDeployer.DeploymentLog.Logger
+	k8sDeployer.Services = map[string]ServiceMapping{}
 
 	allNamespaces := getAllDeployedNamespaces(deployment)
 	c := make(chan bool, 1)
@@ -1486,7 +1487,7 @@ func (k8sDeployer *K8SDeployer) GetServiceMappings() (map[string]interface{}, er
 	serviceMappings := make(map[string]interface{})
 	for serviceName, serviceMapping := range k8sDeployer.Services {
 		if serviceMapping.NodeId == 0 {
-			serviceNodeId, err := k8sDeployer.findNodeIdFromServiceName(serviceName)
+			serviceNodeId, err := findNodeIdFromServiceName(k8sDeployer.Deployment, serviceName)
 			if err != nil {
 				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
 			}
@@ -1500,7 +1501,7 @@ func (k8sDeployer *K8SDeployer) GetServiceMappings() (map[string]interface{}, er
 }
 
 // findNodeIdFromServiceName finds the node id that should be running this service
-func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(serviceName string) (int, error) {
+func findNodeIdFromServiceName(deployment *apis.Deployment, serviceName string) (int, error) {
 	// if a service name contains a number (e.g: benchmark-agent-2), we assume
 	// it's the second benchmark agent from the mapping. Since we should be sorting
 	// the node ids when we deploy them, we should always assign the same service name
@@ -1514,9 +1515,9 @@ func (k8sDeployer *K8SDeployer) findNodeIdFromServiceName(serviceName string) (i
 			realServiceName = strings.Join(parts[:len(parts)-1], "-")
 		}
 	}
-	sort.Sort(k8sDeployer.Deployment.NodeMapping)
+	sort.Sort(deployment.NodeMapping)
 	current := 0
-	for _, mapping := range k8sDeployer.Deployment.NodeMapping {
+	for _, mapping := range deployment.NodeMapping {
 		if mapping.Task == realServiceName {
 			current += 1
 			if current == count {
@@ -1572,7 +1573,7 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 	for _, service := range services.Items {
 		if (service.ObjectMeta.Name == serviceName || service.ObjectMeta.Name == serviceName+"-publicport0") &&
 			string(service.Spec.Type) == "LoadBalancer" {
-			nodeId, _ := k8sDeployer.findNodeIdFromServiceName(serviceName)
+			nodeId, _ := findNodeIdFromServiceName(k8sDeployer.Deployment, serviceName)
 			port := service.Spec.Ports[0].Port
 			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
 			serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10)
