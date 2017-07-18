@@ -215,7 +215,7 @@ func (server *Server) StartServer() error {
 
 	if server.Config.GetBool("inCluster") {
 		if err := server.reloadInClusterState(); err != nil {
-			return errors.New("Unable to reload in cluster state: " + err.Error())
+			return errors.New("Unable to reload in-cluster state: " + err.Error())
 		}
 	} else {
 		if err := server.reloadClusterState(); err != nil {
@@ -968,10 +968,17 @@ func (server *Server) getServices(c *gin.Context) {
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
 
+	var deploymentStore blobstore.BlobStore
+	if server.Config.GetBool("inCluster") {
+		deploymentStore = server.InClusterDeploymentStore
+	} else {
+		deploymentStore = server.DeploymentStore
+	}
+
 	switch deploymentInfo.State {
 	case DELETED:
 		glog.Infof("Deleting deployment from store: " + deploymentName)
-		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+		if err := deploymentStore.Delete(deploymentName); err != nil {
 			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 	default:
@@ -981,7 +988,7 @@ func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
 		}
 
-		if err := server.DeploymentStore.Store(deploymentName, deployment); err != nil {
+		if err := deploymentStore.Store(deploymentName, deployment); err != nil {
 			return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 		}
 	}
@@ -1267,7 +1274,6 @@ func (server *Server) reloadInClusterState() error {
 		storeDeployment := deployment.(*StoreDeployment)
 		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			// TODO: Remove failed stored deployments
 			continue
 		}
 
@@ -1325,17 +1331,50 @@ func (server *Server) reloadInClusterState() error {
 		break
 	}
 
-	// TODO reload InClusterDeployments
-	/*
-		inDeployments, err := server.InClusterDeploymentStore.LoadAll(func() interface{} {
-			return &StoreDeployment{
-				ClusterManager: &kubernetes.StoreInfo{},
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("Unable to load in-cluster deployment: %s", err.Error())
+	inDeployments, err := server.InClusterDeploymentStore.LoadAll(func() interface{} {
+		return &StoreDeployment{
+			ClusterManager: &kubernetes.StoreInfo{},
 		}
-	*/
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to load in-cluster deployment: %s", err.Error())
+	}
+
+	for _, deployment := range inDeployments.([]interface{}) {
+		storeDeployment := deployment.(*StoreDeployment)
+		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
+		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
+			continue
+		}
+
+		if storeDeployment.UserId != inClusterUserId {
+			glog.Warningf("Skip loading deployment %s: Not in-cluster user id", storeDeployment.Name)
+			continue
+		}
+
+		deploymentName := storeDeployment.Name
+
+		deployment := &apis.Deployment{}
+		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
+		if unmarshalErr != nil {
+			glog.Warning("Skip loading deployment: Unable to load deployment manifest for deployment " + deploymentName)
+			continue
+		}
+
+		deployer, err := clustermanagers.NewDeployer(server.Config, inClusterAwsProfile,
+			storeDeployment.Type, deployment, false, server.OriginalDeployer)
+		if err != nil {
+			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
+		}
+
+		server.DeployedClusters[deploymentName] = &DeploymentInfo{
+			Deployer:   deployer,
+			Deployment: deployment,
+			TemplateId: storeDeployment.TemplateId,
+			Created:    time.Now(),
+			State:      ParseStateString(storeDeployment.Status),
+		}
+	}
 
 	return nil
 }
