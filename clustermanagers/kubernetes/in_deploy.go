@@ -699,6 +699,10 @@ func (deployer *InClusterK8SDeployer) ReloadClusterState(storeInfo interface{}) 
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
+	if len(deployer.AWSCluster.NodeInfos) == 0 {
+		return errors.New("Unable to find in-cluster ec2 instance...")
+	}
+
 	awsCluster := deployer.AWSCluster
 	for _, node := range awsCluster.NodeInfos {
 		awsCluster.InstanceIds = append(awsCluster.InstanceIds, node.Instance.InstanceId)
