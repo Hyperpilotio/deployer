@@ -299,7 +299,7 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	}
 
 	if err := uploadFiles(awsCluster, deployment, uploadedFiles, bastionIp, log); err != nil {
-		// deleteDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
@@ -309,12 +309,12 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	}
 
 	if err := tagKubeNodes(k8sClient, awsCluster, deployment, log); err != nil {
-		// deleteDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
 	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
-		// deleteDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
@@ -325,21 +325,21 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 	namespaces, namespacesErr := getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		if !skipDelete {
-			// deleteDeploymentOnFailure(deployer)
+			deleteInClusterDeploymentOnFailure(deployer)
 		}
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := createInClusterSecrets(k8sClient, namespaces, deployer.Deployment); err != nil {
 		if !skipDelete {
-			// deleteDeploymentOnFailure(deployer)
+			deleteInClusterDeploymentOnFailure(deployer)
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := deployer.deployServices(k8sClient, namespaces); err != nil {
 		if !skipDelete {
-			// deleteDeploymentOnFailure(deployer)
+			deleteInClusterDeploymentOnFailure(deployer)
 		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -612,6 +612,16 @@ func (deployer *InClusterK8SDeployer) DeployExtensions(
 	return nil
 }
 
+func deleteInClusterDeploymentOnFailure(deployer *InClusterK8SDeployer) {
+	log := deployer.GetLog().Logger
+	if deployer.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
+		log.Warning("Skipping delete deployment on failure")
+		return
+	}
+
+	deployer.DeleteDeployment()
+}
+
 // DeleteDeployment clean up the cluster from kubenetes.
 func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	log := deployer.GetLog().Logger
@@ -649,6 +659,26 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 }
 
 func (deployer *InClusterK8SDeployer) ReloadClusterState(storeInfo interface{}) error {
+	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
+	if sessionErr != nil {
+		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	if err := populateInClusterNodeInfos(ec2Svc, deployer.AWSCluster); err != nil {
+		return errors.New("Unable to populate node infos: " + err.Error())
+	}
+
+	awsCluster := deployer.AWSCluster
+	for _, node := range awsCluster.NodeInfos {
+		awsCluster.InstanceIds = append(awsCluster.InstanceIds, node.Instance.InstanceId)
+	}
+
+	autoscalingSvc := autoscaling.New(sess)
+	if err := deployer.findAutoscalingGroup(autoscalingSvc); err != nil {
+		return errors.New("Unable to find autoscaling group: " + err.Error())
+	}
+
 	return nil
 }
 

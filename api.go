@@ -641,7 +641,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 		defer log.LogFile.Close()
 
 		if err := deploymentInfo.Deployer.DeleteDeployment(); err != nil {
-			log.Logger.Error("Unable to delete deployment")
+			log.Logger.Errorf("Unable to delete deployment: %s", err.Error())
 			deploymentInfo.State = FAILED
 		} else {
 			log.Logger.Infof("Delete deployment successfully!")
@@ -1367,12 +1367,21 @@ func (server *Server) reloadInClusterState() error {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
 
-		server.DeployedClusters[deploymentName] = &DeploymentInfo{
+		deploymentInfo := &DeploymentInfo{
 			Deployer:   deployer,
 			Deployment: deployment,
 			TemplateId: storeDeployment.TemplateId,
 			Created:    time.Now(),
 			State:      ParseStateString(storeDeployment.Status),
+		}
+
+		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
+			if err := server.InClusterDeploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+			}
+			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
+		} else {
+			server.DeployedClusters[deploymentName] = deploymentInfo
 		}
 	}
 
