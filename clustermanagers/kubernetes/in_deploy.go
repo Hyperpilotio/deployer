@@ -319,6 +319,16 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		return nil, errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
+	_, err = k8sClient.CoreV1().Namespaces().Create(&v1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: deployment.Name,
+		},
+	})
+	if err != nil {
+		deleteInClusterDeploymentOnFailure(deployer)
+		return nil, errors.New("Unable to create namespace for deployment: " + err.Error())
+	}
+
 	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
@@ -331,7 +341,7 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 
 func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clientset) {
 	log := deployer.DeploymentLog.Logger
-	namespaces := getInClusterNamespaces(deployer.AWSCluster)
+	namespaces := []string{deployer.getNamespace()}
 	deployer.Services = map[string]ServiceMapping{}
 
 	for _, namespace := range namespaces {
@@ -352,22 +362,14 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
-	namespaces, namespacesErr := getExistingNamespaces(k8sClient)
-	if namespacesErr != nil {
-		if !skipDelete {
-			deleteInClusterDeploymentOnFailure(deployer)
-		}
-		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
-	}
-
-	if err := createInClusterSecrets(k8sClient, namespaces, deployer.Deployment); err != nil {
+	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
 		if !skipDelete {
 			deleteInClusterDeploymentOnFailure(deployer)
 		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := deployer.deployServices(k8sClient, namespaces); err != nil {
+	if err := deployer.deployServices(k8sClient); err != nil {
 		if !skipDelete {
 			deleteInClusterDeploymentOnFailure(deployer)
 		}
@@ -377,7 +379,7 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 	return nil
 }
 
-func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, existingNamespaces map[string]bool) error {
+func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) error {
 	deployment := deployer.Deployment
 	kubeConfig := deployer.KubeConfig
 	log := deployer.GetLog().Logger
@@ -396,7 +398,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 	// We sort before we create services because we want to have a deterministic way to assign
 	// service ids
 	sort.Sort(deployment.NodeMapping)
-
+	namespace := deployer.getNamespace()
 	for _, mapping := range deployment.NodeMapping {
 		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
 
@@ -410,11 +412,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
 		}
 		family := task.Family
-		namespace := createUniqueNamespace(deployment.Name)
-		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return err
-		}
-
 		originalFamily := family
 		count, ok := taskCount[family]
 
@@ -442,12 +439,13 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 		nodeSelector := map[string]string{}
 		log.Infof("Selecting node %d for deployment %s", mapping.Id, family)
 		nodeSelector["hyperpilot/node-id"] = strconv.Itoa(mapping.Id)
+		nodeSelector["hyperpilot/deployment"] = deployment.Name
 
 		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			err := createServiceForInClusterDeployment(namespace, family, k8sClient, task, container, log)
+			err := deployer.createServiceForInClusterDeployment(k8sClient, family, task, container, log)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -471,11 +469,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 		}
 
 		daemonSet := task.DaemonSet
-		namespace := createUniqueNamespace(deployment.Name)
-		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return err
-		}
-
 		daemonSets := k8sClient.Extensions().DaemonSets(namespace)
 		log.Infof("Creating daemonset %s", task.Family)
 		if _, err := daemonSets.Create(daemonSet); err != nil {
@@ -486,26 +479,18 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset, e
 	return nil
 }
 
-func getInClusterNamespaces(awsCluster *hpaws.AWSCluster) []string {
-	return []string{strings.ToLower(awsCluster.Name)}
+func (deployer *InClusterK8SDeployer) getNamespace() string {
+	return strings.ToLower(deployer.AWSCluster.Name)
 }
 
-func createUniqueNamespace(deploymentName string) string {
-	return strings.ToLower(deploymentName)
-}
-
-func createInClusterSecrets(k8sClient *k8s.Clientset, existingNamespaces map[string]bool, deployment *apis.Deployment) error {
-	secrets := deployment.KubernetesDeployment.Secrets
+func (deployer *InClusterK8SDeployer) createInClusterSecrets(k8sClient *k8s.Clientset) error {
+	secrets := deployer.Deployment.KubernetesDeployment.Secrets
 	if len(secrets) == 0 {
 		return nil
 	}
 
+	namespace := deployer.getNamespace()
 	for _, secret := range secrets {
-		namespace := createUniqueNamespace(deployment.Name)
-		if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
-		}
-
 		k8sSecret := k8sClient.CoreV1().Secrets(namespace)
 		if _, err := k8sSecret.Create(&secret); err != nil {
 			return fmt.Errorf("Unable to create secret %s: %s", secret.Name, err.Error())
@@ -515,17 +500,23 @@ func createInClusterSecrets(k8sClient *k8s.Clientset, existingNamespaces map[str
 	return nil
 }
 
-func createServiceForInClusterDeployment(namespace string, family string, k8sClient *k8s.Clientset,
-	task apis.KubernetesTask, container v1.Container, log *logging.Logger) error {
+func (deployer *InClusterK8SDeployer) createServiceForInClusterDeployment(
+	k8sClient *k8s.Clientset,
+	family string,
+	task apis.KubernetesTask,
+	container v1.Container,
+	log *logging.Logger) error {
 	if len(container.Ports) == 0 {
 		return nil
 	}
 
+	namespace := deployer.getNamespace()
 	service := k8sClient.CoreV1().Services(namespace)
 	serviceName := family
 	if !strings.HasPrefix(family, serviceName) {
 		serviceName = serviceName + "-" + container.Name
 	}
+
 	labels := map[string]string{"app": family}
 	servicePorts := []v1.ServicePort{}
 	for i, port := range container.Ports {
@@ -553,8 +544,8 @@ func createServiceForInClusterDeployment(namespace string, family string, k8sCli
 	if err != nil {
 		return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
 	}
-	log.Infof("Created %s internal service", serviceName)
 
+	log.Infof("Created %s internal service", serviceName)
 	return nil
 }
 
@@ -612,7 +603,7 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := deleteK8S(getInClusterNamespaces(deployer.AWSCluster), deployer.KubeConfig, log); err != nil {
+	if err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
@@ -655,7 +646,7 @@ func deleteInClusterDeploymentOnFailure(deployer *InClusterK8SDeployer) {
 // DeleteDeployment clean up the cluster from kubenetes.
 func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	log := deployer.GetLog().Logger
-	err := deleteK8S(getInClusterNamespaces(deployer.AWSCluster), deployer.KubeConfig, log)
+	err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log)
 	if err != nil {
 		return errors.New("Unable to delete kubernetes objects: " + err.Error())
 	}
@@ -752,7 +743,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 		return "", errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
 	}
 
-	namespace := getInClusterNamespaces(deployer.AWSCluster)[0]
+	namespace := deployer.getNamespace()
 	services, err := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{})
 	if err != nil {
 		return "", errors.New("Unable to list services in the cluster: " + err.Error())
