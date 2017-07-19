@@ -768,10 +768,9 @@ func deleteCloudFormationStack(sess *session.Session, deploymentName string,
 		StackName: aws.String(stackName),
 	})
 	if err != nil {
-		log.Warningf("Unable to wait until %s stack to be delete completed: %s", stackName, err.Error())
-	} else if err == nil {
-		log.Infof("Delete %s stack ok...", stackName)
+		return fmt.Errorf("Unable to wait until %s stack to be delete completed: %s", stackName, err.Error())
 	}
+	log.Infof("Delete %s stack ok...", stackName)
 
 	return nil
 }
