@@ -765,6 +765,29 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 	return "", errors.New("Service not found in endpoints")
 }
 
+// GetServiceAddress return ServiceAddress object
+func (deployer *InClusterK8SDeployer) GetServiceAddress(serviceName string) (*apis.ServiceAddress, error) {
+	privateUrl, err := deployer.GetServiceUrl(serviceName)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to get %s service address: ", serviceName, err.Error())
+	}
+
+	serviceUrls := strings.Split(privateUrl, ":")
+	if len(serviceUrls) != 2 {
+		return nil, fmt.Errorf("Unexpected array number...")
+	}
+
+	port, err := strconv.Atoi(serviceUrls[1])
+	if err != nil {
+		return nil, fmt.Errorf("Unable to convert %s port: ", serviceName, err.Error())
+	}
+
+	return &apis.ServiceAddress{
+		Host: serviceUrls[0],
+		Port: int32(port),
+	}, nil
+}
+
 func (deployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface{}, error) {
 	if len(deployer.AWSCluster.NodeInfos) < 0 {
 		k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
