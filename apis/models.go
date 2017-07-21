@@ -64,7 +64,8 @@ func (d NodeMappings) Less(i, j int) bool {
 func (d NodeMappings) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 type VPCPeering struct {
-	TargetVpcId string `json:"targetVpcId"`
+	TargetOwnerId string `json:"targetOwnerId"`
+	TargetVpcId   string `json:"targetVpcId"`
 }
 
 type Deployment struct {

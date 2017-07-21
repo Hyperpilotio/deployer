@@ -508,15 +508,44 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 	if k8sDeployer.Deployment.VPCPeering != nil {
 		ec2Svc := ec2.New(sess)
 		vpcPeering, err := ec2Svc.CreateVpcPeeringConnection(&ec2.CreateVpcPeeringConnectionInput{
-			PeerOwnerId: aws.String(k8sDeployer.Config.GetString("awsId")),
+			PeerOwnerId: aws.String(k8sDeployer.Deployment.VPCPeering.TargetOwnerId),
 			PeerVpcId:   aws.String(k8sDeployer.Deployment.VPCPeering.TargetVpcId),
 			VpcId:       aws.String(vpcId),
 		})
 		if err != nil {
 			return errors.New("Unable to peer vpc: " + err.Error())
 		}
-		k8sDeployer.VpcPeeringConnectionId =
-			*vpcPeering.VpcPeeringConnection.VpcPeeringConnectionId
+
+		vpcPeeringConnectionId := vpcPeering.VpcPeeringConnection.VpcPeeringConnectionId
+		k8sDeployer.VpcPeeringConnectionId = *vpcPeeringConnectionId
+
+		err = acceptVpcPeeringConnection(vpcPeeringConnectionId, k8sDeployer.Config,
+			k8sDeployer.Deployment.Region)
+		if err != nil {
+			return errors.New("Unable to auto accept peer vpc: " + err.Error())
+		}
+	}
+
+	return nil
+}
+
+func acceptVpcPeeringConnection(vpcPeeringConnectionId *string, config *viper.Viper, region string) error {
+	awsProfile := &hpaws.AWSProfile{
+		AwsId:     config.GetString("awsId"),
+		AwsSecret: config.GetString("awsSecret"),
+	}
+
+	sess, sessionErr := hpaws.CreateSession(awsProfile, region)
+	if sessionErr != nil {
+		return errors.New("Unable to create session: " + sessionErr.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	_, err := ec2Svc.AcceptVpcPeeringConnection(&ec2.AcceptVpcPeeringConnectionInput{
+		VpcPeeringConnectionId: vpcPeeringConnectionId,
+	})
+	if err != nil {
+		return errors.New("Unable to accept vpc peering connection: " + err.Error())
 	}
 
 	return nil
