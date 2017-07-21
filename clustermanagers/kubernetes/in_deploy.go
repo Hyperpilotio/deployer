@@ -321,7 +321,7 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 
 	_, err = k8sClient.CoreV1().Namespaces().Create(&v1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: deployment.Name,
+			Name: strings.ToLower(deployment.Name),
 		},
 	})
 	if err != nil {
