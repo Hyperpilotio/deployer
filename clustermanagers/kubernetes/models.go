@@ -27,11 +27,12 @@ type K8SDeployer struct {
 	Deployment    *apis.Deployment
 	Scheduler     *job.Scheduler
 
-	BastionIp      string
-	MasterIp       string
-	KubeConfigPath string
-	Services       map[string]ServiceMapping
-	KubeConfig     *rest.Config
+	BastionIp              string
+	MasterIp               string
+	KubeConfigPath         string
+	Services               map[string]ServiceMapping
+	KubeConfig             *rest.Config
+	VpcPeeringConnectionId string
 }
 
 type CreateDeploymentResponse struct {
@@ -48,8 +49,9 @@ type DeploymentLoadBalancers struct {
 }
 
 type StoreInfo struct {
-	BastionIp string
-	MasterIp  string
+	BastionIp              string
+	MasterIp               string
+	VpcPeeringConnectionId string
 }
 
 type ClusterInfo struct {

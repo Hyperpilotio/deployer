@@ -151,7 +151,47 @@ func (k8sDeployer *K8SDeployer) DeployExtensions(
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
-	deleteDeployment(k8sDeployer)
+	awsCluster := k8sDeployer.AWSCluster
+	awsProfile := awsCluster.AWSProfile
+	deployment := k8sDeployer.Deployment
+	kubeConfig := k8sDeployer.KubeConfig
+	stackName := awsCluster.StackName()
+	deploymentName := awsCluster.Name
+	log := k8sDeployer.DeploymentLog.Logger
+
+	// Deleting kubernetes deployment
+	log.Infof("Deleting kubernetes deployment...")
+	if err := deleteK8S(getAllDeployedNamespaces(deployment), kubeConfig, log); err != nil {
+		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
+	}
+
+	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
+	if sessionErr != nil {
+		log.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
+		return nil
+	}
+
+	// delete cloudformation Stack
+	log.Infof("Deleting cloudformation Stack: %s", stackName)
+	if err := deleteCloudFormationStack(sess, deploymentName, stackName, log); err != nil {
+		log.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
+	}
+
+	ec2Svc := ec2.New(sess)
+	if k8sDeployer.VpcPeeringConnectionId != "" {
+		_, err := ec2Svc.DeleteVpcPeeringConnection(&ec2.DeleteVpcPeeringConnectionInput{
+			VpcPeeringConnectionId: aws.String(k8sDeployer.VpcPeeringConnectionId),
+		})
+		if err != nil {
+			log.Warningf("Unable to remove Vpc peering: " + err.Error())
+		}
+	}
+
+	log.Infof("Deleting KeyPair...")
+	if err := awsecs.DeleteKeyPair(ec2Svc, awsCluster); err != nil {
+		log.Warning("Unable to delete key pair: " + err.Error())
+	}
+
 	return nil
 }
 
@@ -467,7 +507,7 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 
 	if k8sDeployer.Deployment.VPCPeering != nil {
 		ec2Svc := ec2.New(sess)
-		_, err := ec2Svc.CreateVpcPeeringConnection(&ec2.CreateVpcPeeringConnectionInput{
+		vpcPeering, err := ec2Svc.CreateVpcPeeringConnection(&ec2.CreateVpcPeeringConnectionInput{
 			PeerOwnerId: aws.String(k8sDeployer.Config.GetString("awsId")),
 			PeerVpcId:   aws.String(k8sDeployer.Deployment.VPCPeering.TargetVpcId),
 			VpcId:       aws.String(vpcId),
@@ -475,6 +515,8 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 		if err != nil {
 			return errors.New("Unable to peer vpc: " + err.Error())
 		}
+		k8sDeployer.VpcPeeringConnectionId =
+			*vpcPeering.VpcPeeringConnection.VpcPeeringConnectionId
 	}
 
 	return nil
@@ -889,42 +931,7 @@ func deleteDeploymentOnFailure(k8sDeployer *K8SDeployer) {
 		return
 	}
 
-	deleteDeployment(k8sDeployer)
-}
-
-func deleteDeployment(k8sDeployer *K8SDeployer) {
-	awsCluster := k8sDeployer.AWSCluster
-	awsProfile := awsCluster.AWSProfile
-	deployment := k8sDeployer.Deployment
-	kubeConfig := k8sDeployer.KubeConfig
-	stackName := awsCluster.StackName()
-	deploymentName := awsCluster.Name
-	log := k8sDeployer.DeploymentLog.Logger
-
-	// Deleting kubernetes deployment
-	log.Infof("Deleting kubernetes deployment...")
-	if err := deleteK8S(getAllDeployedNamespaces(deployment), kubeConfig, log); err != nil {
-		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
-	}
-
-	sess, sessionErr := hpaws.CreateSession(awsProfile, awsCluster.Region)
-	if sessionErr != nil {
-		log.Warningf("Unable to create aws session for delete: %s", sessionErr.Error())
-		return
-	}
-
-	// delete cloudformation Stack
-	log.Infof("Deleting cloudformation Stack: %s", stackName)
-	if err := deleteCloudFormationStack(sess, deploymentName, stackName, log); err != nil {
-		log.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
-	}
-
-	ec2Svc := ec2.New(sess)
-
-	log.Infof("Deleting KeyPair...")
-	if err := awsecs.DeleteKeyPair(ec2Svc, awsCluster); err != nil {
-		log.Warning("Unable to delete key pair: " + err.Error())
-	}
+	k8sDeployer.DeleteDeployment()
 }
 
 func getAllDeployedNamespaces(deployment *apis.Deployment) []string {
@@ -1420,6 +1427,7 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	k8sStoreInfo := storeInfo.(*StoreInfo)
 	k8sDeployer.BastionIp = k8sStoreInfo.BastionIp
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
+	k8sDeployer.VpcPeeringConnectionId = k8sStoreInfo.VpcPeeringConnectionId
 
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
@@ -1609,7 +1617,8 @@ func (k8sDeployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error
 
 func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 	return &StoreInfo{
-		BastionIp: k8sDeployer.BastionIp,
-		MasterIp:  k8sDeployer.MasterIp,
+		BastionIp:              k8sDeployer.BastionIp,
+		MasterIp:               k8sDeployer.MasterIp,
+		VpcPeeringConnectionId: k8sDeployer.VpcPeeringConnectionId,
 	}
 }
