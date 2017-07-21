@@ -63,6 +63,10 @@ func (d NodeMappings) Less(i, j int) bool {
 }
 func (d NodeMappings) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
+type VPCPeering struct {
+	TargetVpcId string `json:"targetVpcId"`
+}
+
 type Deployment struct {
 	UserId string `form:"userId" json:"userId" binding:"required"`
 	Name   string `form:"name" json:"name" binding:"required"`
@@ -78,6 +82,8 @@ type Deployment struct {
 
 	*ECSDeployment        `form:"ecs" json:"ecs,omitempty"`
 	*KubernetesDeployment `form:"kubernetes" json:"kubernetes,omitempty"`
+
+	*VPCPeering `json:"vpcPeering,omitempty"`
 
 	ShutDownTime string `form:"shutDownTime" json:"shutDownTime,omitempty"`
 }

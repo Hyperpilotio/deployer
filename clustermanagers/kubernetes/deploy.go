@@ -413,11 +413,15 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 	outputs := describeStacksOutput.Stacks[0].Outputs
 	sshProxyCommand := ""
 	getKubeConfigCommand := ""
+	vpcId := ""
 	for _, output := range outputs {
-		if *output.OutputKey == "SSHProxyCommand" {
+		switch *output.OutputKey {
+		case "SSHProxyCommand":
 			sshProxyCommand = *output.OutputValue
-		} else if *output.OutputKey == "GetKubeConfigCommand" {
+		case "GetKubeConfigCommand":
 			getKubeConfigCommand = *output.OutputValue
+		case "VPCID":
+			vpcId = *output.OutputValue
 		}
 	}
 
@@ -425,6 +429,8 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 		return errors.New("Unable to find SSHProxyCommand in stack output")
 	} else if getKubeConfigCommand == "" {
 		return errors.New("Unable to find GetKubeConfigCommand in stack output")
+	} else if vpcId == "" {
+		return errors.New("Unable to find VPCID in stack output")
 	}
 
 	// We expect the SSHProxyCommand to be in the following format:
@@ -457,6 +463,18 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 
 	if err := k8sDeployer.UploadSshKeyToBastion(); err != nil {
 		return errors.New("Unable to upload sshKey: " + err.Error())
+	}
+
+	if k8sDeployer.Deployment.VPCPeering != nil {
+		ec2Svc := ec2.New(sess)
+		_, err := ec2Svc.CreateVpcPeeringConnection(&ec2.CreateVpcPeeringConnectionInput{
+			PeerOwnerId: aws.String(k8sDeployer.Config.GetString("awsId")),
+			PeerVpcId:   aws.String(k8sDeployer.Deployment.VPCPeering.TargetVpcId),
+			VpcId:       aws.String(vpcId),
+		})
+		if err != nil {
+			return errors.New("Unable to peer vpc: " + err.Error())
+		}
 	}
 
 	return nil
