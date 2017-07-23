@@ -1041,7 +1041,7 @@ func (server *Server) storeTemplateFile(c *gin.Context) {
 	})
 }
 
-func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment *apis.Deployment) (*apis.Deployment, error) {
+func (server *Server) mergeNewDeployment(templateId string, newDeployment *apis.Deployment) (*apis.Deployment, error) {
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
@@ -1051,13 +1051,30 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 	}
 
 	copyDeployment := *templateDeployment
-	if needMergeDeployment.UserId != "" {
-		copyDeployment.UserId = needMergeDeployment.UserId
+	if newDeployment.UserId != "" {
+		copyDeployment.UserId = newDeployment.UserId
 	}
 
-	if needMergeDeployment.Name != "" {
-		copyDeployment.Name = needMergeDeployment.Name
+	if newDeployment.Name != "" {
+		copyDeployment.Name = newDeployment.Name
 	}
+
+	// Allow new deployment to overwrite node id with new instance type
+	newClusterNodes := []apis.ClusterNode{}
+	clusterMapping := make(map[int]apis.ClusterNode)
+	for _, node := range templateDeployment.ClusterDefinition.Nodes {
+		clusterMapping[node.Id] = node
+	}
+
+	for _, node := range newDeployment.ClusterDefinition.Nodes {
+		clusterMapping[node.Id] = node
+	}
+
+	for _, node := range clusterMapping {
+		newClusterNodes = append(newClusterNodes, node)
+	}
+
+	copyDeployment.ClusterDefinition.Nodes = newClusterNodes
 
 	existingMapping := copyDeployment.NodeMapping
 	copyDeployment.NodeMapping = make([]apis.NodeMapping, 0)
@@ -1066,7 +1083,7 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
-	for _, nodeMapping := range needMergeDeployment.NodeMapping {
+	for _, nodeMapping := range newDeployment.NodeMapping {
 		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
 	}
 
@@ -1080,7 +1097,7 @@ func (server *Server) mergeNewDeployment(templateId string, needMergeDeployment 
 		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
 	}
 
-	for _, task := range needMergeDeployment.KubernetesDeployment.Kubernetes {
+	for _, task := range newDeployment.KubernetesDeployment.Kubernetes {
 		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
 	}
 
