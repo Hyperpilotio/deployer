@@ -12,4 +12,4 @@ COPY deployer /opt/deployer/deployer
 COPY ./documents/deployed.config /etc/deployer/config.json
 COPY ./ui/ /opt/deployer/src/github.com/hyperpilotio/deployer/ui/
 
-CMD ["/opt/deployer/deployer"]
+CMD ["/opt/deployer/deployer", "-v", "1", "-logtostderr"]
