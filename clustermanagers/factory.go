@@ -45,7 +45,7 @@ func NewDeployer(
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
-	if config.GetBool("inCluster") {
+	if config.GetBool("inCluster") && originalDeployer != nil {
 		switch deployType {
 		case "K8S":
 			k8sDeployer := originalDeployer.(*kubernetes.K8SDeployer)

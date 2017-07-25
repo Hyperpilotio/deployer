@@ -1320,13 +1320,11 @@ func (server *Server) reloadInClusterState() error {
 			continue
 		}
 
-		server.Config.Set("inCluster", false)
 		deployer, err := clustermanagers.NewDeployer(server.Config, inClusterAwsProfile,
 			storeDeployment.Type, deployment, false, nil)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
-		server.Config.Set("inCluster", true)
 
 		// Reload keypair
 		if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
