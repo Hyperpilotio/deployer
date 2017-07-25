@@ -158,10 +158,6 @@ func setupEC2(deployer *InClusterK8SDeployer,
 
 	reservation := describeInstancesOutput.Reservations[0]
 	instance := reservation.Instances[0]
-
-	// We assume cluster definition has nodes for all the same type for now.
-	node := deployer.Deployment.ClusterDefinition.Nodes[0]
-	nodeCount := len(deployer.Deployment.ClusterDefinition.Nodes)
 	networkSpecs := []*ec2.InstanceNetworkInterfaceSpecification{}
 	for i, networkInterface := range instance.NetworkInterfaces {
 		groupIds := []*string{}
@@ -190,37 +186,34 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		})
 	}
 
-	runInstancesInput := &ec2.RunInstancesInput{
-		KeyName:             launchConfig.KeyName,
-		ImageId:             launchConfig.ImageId,
-		BlockDeviceMappings: blockDeviceMappings,
-		EbsOptimized:        launchConfig.EbsOptimized,
-		IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
-			Name: launchConfig.IamInstanceProfile,
-		},
-		UserData:          launchConfig.UserData,
-		NetworkInterfaces: networkSpecs,
-		InstanceType:      aws.String(node.InstanceType),
-		MinCount:          aws.Int64(int64(nodeCount)),
-		MaxCount:          aws.Int64(int64(nodeCount)),
-	}
-	glog.V(1).Infof("runInstancesInput: %+v", runInstancesInput)
-
-	runResult, runErr := ec2Svc.RunInstances(runInstancesInput)
-	if runErr != nil {
-		return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
-	}
-
-	if len(runResult.Instances) != nodeCount {
-		return fmt.Errorf("Unable to find equal amount of nodes after ec2 create, expecting: %d, found: %d",
-			nodeCount, len(runResult.Instances))
-	}
-
-	for i, node := range deployer.Deployment.ClusterDefinition.Nodes {
-		awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
-			Instance: runResult.Instances[i],
+	nodeCount := len(deployer.Deployment.ClusterDefinition.Nodes)
+	for _, node := range deployer.Deployment.ClusterDefinition.Nodes {
+		runInstancesInput := &ec2.RunInstancesInput{
+			KeyName:      launchConfig.KeyName,
+			ImageId:      launchConfig.ImageId,
+			EbsOptimized: launchConfig.EbsOptimized,
+			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
+				Name: launchConfig.IamInstanceProfile,
+			},
+			UserData:          launchConfig.UserData,
+			NetworkInterfaces: networkSpecs,
+			InstanceType:      aws.String(node.InstanceType),
+			MinCount:          aws.Int64(1),
+			MaxCount:          aws.Int64(1),
 		}
-		awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[i].InstanceId)
+		glog.V(1).Infof("runInstancesInput: %+v", runInstancesInput)
+
+		runResult, runErr := ec2Svc.RunInstances(runInstancesInput)
+		if runErr != nil {
+			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
+		}
+
+		if len(runResult.Instances) == 0 {
+			awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
+				Instance: runResult.Instances[0],
+			}
+			awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
+		}
 	}
 
 	describeInstancesInput = &ec2.DescribeInstancesInput{
