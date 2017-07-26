@@ -1276,6 +1276,25 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 		log.Warningf("Unable to create hyperpilot role binding: " + err.Error())
 	}
 
+	defaultRoleBinding := &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "default-cluster-role"},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     "cluster-admin",
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: "default",
+			},
+		},
+	}
+	if _, err := clusterRoleBindings.Create(defaultRoleBinding); err != nil {
+		log.Warningf("Unable to create default role binding: " + err.Error())
+	}
+
 	return nil
 }
 

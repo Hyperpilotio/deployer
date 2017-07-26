@@ -38,25 +38,16 @@ func NewDeployer(
 	awsProfile *aws.AWSProfile,
 	deployType string,
 	deployment *apis.Deployment,
-	createName bool,
-	originalDeployer Deployer) (Deployer, error) {
+	createName bool) (Deployer, error) {
 
 	if createName {
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
-	if config.GetBool("inCluster") && originalDeployer != nil {
+	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
-			k8sDeployer := originalDeployer.(*kubernetes.K8SDeployer)
-			originalClusterInfo := &kubernetes.OriginalClusterInfo{
-				AWSCluster:     k8sDeployer.AWSCluster,
-				BastionIp:      k8sDeployer.BastionIp,
-				MasterIp:       k8sDeployer.MasterIp,
-				KubeConfigPath: k8sDeployer.KubeConfigPath,
-				KubeConfig:     k8sDeployer.KubeConfig,
-			}
-			return kubernetes.NewInClusterDeployer(config, awsProfile, deployment, originalClusterInfo)
+			return kubernetes.NewInClusterDeployer(config, awsProfile, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}

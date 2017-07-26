@@ -123,7 +123,6 @@ type Server struct {
 	InClusterDeploymentStore blobstore.BlobStore
 	ProfileStore             blobstore.BlobStore
 	TemplateStore            blobstore.BlobStore
-	OriginalDeployer         clustermanagers.Deployer
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -213,17 +212,10 @@ func (server *Server) StartServer() error {
 		server.TemplateStore = templateStore
 	}
 
-	if server.Config.GetBool("inCluster") {
-		if err := server.reloadInClusterState(); err != nil {
-			return errors.New("Unable to reload in-cluster state: " + err.Error())
-		}
-	} else {
-		if err := server.reloadClusterState(); err != nil {
-			return errors.New("Unable to reload cluster state: " + err.Error())
-		}
+	if err := server.reloadClusterState(); err != nil {
+		return errors.New("Unable to reload cluster state: " + err.Error())
 	}
 
-	//gin.SetMode("release")
 	router := gin.New()
 
 	// Global middleware
@@ -512,10 +504,6 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	if server.Config.GetBool("inCluster") {
-		deployment.UserId = server.OriginalDeployer.GetAWSCluster().AWSProfile.UserId
-	}
-
 	templateId := c.Param("templateId")
 	if templateId != "" {
 		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, deployment)
@@ -549,8 +537,11 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 
 	deployer, err := clustermanagers.NewDeployer(
-		server.Config, awsProfile, deploymentInfo.GetDeploymentType(),
-		deployment, true, server.OriginalDeployer)
+		server.Config,
+		awsProfile,
+		deploymentInfo.GetDeploymentType(),
+		deployment,
+		true)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -1124,9 +1115,7 @@ func (server *Server) reloadClusterState() error {
 	server.AWSProfiles = awsProfileInfos
 
 	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
-		return &StoreDeployment{
-			ClusterManager: &kubernetes.StoreInfo{},
-		}
+		return &StoreDeployment{}
 	})
 	if err != nil {
 		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
@@ -1189,8 +1178,12 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		deployer, err := clustermanagers.NewDeployer(server.Config, awsProfile,
-			storeDeployment.Type, deployment, false, server.OriginalDeployer)
+		deployer, err := clustermanagers.NewDeployer(
+			server.Config,
+			awsProfile,
+			storeDeployment.Type,
+			deployment,
+			false)
 		if err != nil {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
@@ -1236,171 +1229,6 @@ func (server *Server) reloadClusterState() error {
 					glog.Warningf("Unable to create auto shutdown scheduler for %s: %s", deployment.Name, err.Error())
 				}
 			}
-		}
-	}
-
-	return nil
-}
-
-func (server *Server) reloadInClusterState() error {
-	profiles, profileErr := server.ProfileStore.LoadAll(func() interface{} {
-		return &hpaws.AWSProfile{}
-	})
-	if profileErr != nil {
-		return fmt.Errorf("Unable to load aws profiles: %s", profileErr.Error())
-	}
-
-	inClusterUserId := ""
-	inClusterAwsProfile := &hpaws.AWSProfile{}
-	awsProfileInfos := map[string]*hpaws.AWSProfile{}
-	for _, awsProfile := range profiles.([]interface{}) {
-		if awsProfile.(*hpaws.AWSProfile).AwsId == server.Config.GetString("awsId") {
-			inClusterUserId = awsProfile.(*hpaws.AWSProfile).UserId
-			inClusterAwsProfile = awsProfile.(*hpaws.AWSProfile)
-			awsProfileInfos[inClusterUserId] = inClusterAwsProfile
-			break
-		}
-	}
-	server.AWSProfiles = awsProfileInfos
-
-	templates, templateErr := server.TemplateStore.LoadAll(func() interface{} {
-		return &StoreTemplateDeployment{}
-	})
-	if templateErr != nil {
-		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
-	}
-
-	for _, template := range templates.([]interface{}) {
-		templateId := template.(*StoreTemplateDeployment)
-		deploymentJSON := template.(*StoreTemplateDeployment).Deployment
-
-		deployment := &apis.Deployment{}
-		if err := json.Unmarshal([]byte(deploymentJSON), deployment); err != nil {
-			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateId)
-			continue
-		}
-		server.Templates[template.(*StoreTemplateDeployment).TemplateId] = deployment
-	}
-
-	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
-		return &StoreDeployment{
-			ClusterManager: &kubernetes.StoreInfo{},
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("Unable to load deployment status: %s", err.Error())
-	}
-
-	for _, deployment := range deployments.([]interface{}) {
-		storeDeployment := deployment.(*StoreDeployment)
-		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
-		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			continue
-		}
-
-		if storeDeployment.UserId != inClusterUserId {
-			glog.Warningf("Skip loading deployment %s: Not in-cluster user id", storeDeployment.Name)
-			continue
-		}
-
-		deploymentName := storeDeployment.Name
-
-		deployment := &apis.Deployment{}
-		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
-		if unmarshalErr != nil {
-			glog.Warning("Skip loading deployment: Unable to load deployment manifest for deployment " + deploymentName)
-			continue
-		}
-
-		inClusterDeployment := false
-		for _, nodeMapping := range deployment.NodeMapping {
-			if nodeMapping.Task == "deployer" {
-				inClusterDeployment = true
-				break
-			}
-		}
-
-		if !inClusterDeployment {
-			continue
-		}
-
-		deployer, err := clustermanagers.NewDeployer(server.Config, inClusterAwsProfile,
-			storeDeployment.Type, deployment, false, nil)
-		if err != nil {
-			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
-		}
-
-		// Reload keypair
-		if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
-			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
-				glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
-			}
-			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-			continue
-		}
-
-		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
-			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
-				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-			}
-			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
-		}
-
-		server.OriginalDeployer = deployer
-		break
-	}
-
-	inDeployments, err := server.InClusterDeploymentStore.LoadAll(func() interface{} {
-		return &StoreDeployment{
-			ClusterManager: &kubernetes.StoreInfo{},
-		}
-	})
-	if err != nil {
-		return fmt.Errorf("Unable to load in-cluster deployment: %s", err.Error())
-	}
-
-	for _, deployment := range inDeployments.([]interface{}) {
-		storeDeployment := deployment.(*StoreDeployment)
-		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
-		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			continue
-		}
-
-		if storeDeployment.UserId != inClusterUserId {
-			glog.Warningf("Skip loading deployment %s: Not in-cluster user id", storeDeployment.Name)
-			continue
-		}
-
-		deploymentName := storeDeployment.Name
-
-		deployment := &apis.Deployment{}
-		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
-		if unmarshalErr != nil {
-			glog.Warning("Skip loading deployment: Unable to load deployment manifest for deployment " + deploymentName)
-			continue
-		}
-
-		deployer, err := clustermanagers.NewDeployer(server.Config, inClusterAwsProfile,
-			storeDeployment.Type, deployment, false, server.OriginalDeployer)
-		if err != nil {
-			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
-		}
-
-		deploymentInfo := &DeploymentInfo{
-			Deployer:   deployer,
-			Deployment: deployment,
-			TemplateId: storeDeployment.TemplateId,
-			Created:    time.Now(),
-			State:      ParseStateString(storeDeployment.Status),
-		}
-
-		if err := deployer.ReloadClusterState(storeDeployment.ClusterManager); err != nil {
-			if err := server.InClusterDeploymentStore.Delete(deploymentName); err != nil {
-				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
-			}
-			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
-		} else {
-			server.DeployedClusters[deploymentName] = deploymentInfo
 		}
 	}
 

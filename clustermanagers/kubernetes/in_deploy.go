@@ -29,43 +29,58 @@ import (
 type InClusterK8SDeployer struct {
 	K8SDeployer
 
-	OriginalAWSCluster *hpaws.AWSCluster
-	AutoScalingGroup   *autoscaling.Group
-}
-
-type OriginalClusterInfo struct {
-	AWSCluster     *hpaws.AWSCluster
-	BastionIp      string
-	MasterIp       string
-	KubeConfigPath string
-	KubeConfig     *rest.Config
+	AutoScalingGroup *autoscaling.Group
+	StackName        string
 }
 
 func NewInClusterDeployer(
 	config *viper.Viper,
 	awsProfile *hpaws.AWSProfile,
-	deployment *apis.Deployment,
-	originalClusterInfo *OriginalClusterInfo) (*InClusterK8SDeployer, error) {
+	deployment *apis.Deployment) (*InClusterK8SDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	originalAWSCluster := originalClusterInfo.AWSCluster
-	awsCluster := hpaws.NewAWSCluster(deployment.Name, originalAWSCluster.Region, awsProfile)
+	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
+
+	kubeConfig, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, errors.New("Unable to get in cluster kubeconfig: " + err.Error())
+	}
+
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to create in cluster k8s client: " + err.Error())
+	}
+
+	nodes, err := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+	if err != nil {
+		return nil, errors.New("Unable to list kubernetes nodes: " + err.Error())
+	}
+
+	stackName := ""
+	for _, node := range nodes.Items {
+		if deployment, ok := node.Labels["hyperpilot/deployment"]; ok {
+			stackName = deployment + "-stack"
+			break
+		}
+	}
+
+	if stackName == "" {
+		return nil, errors.New("Unable to find deployment name in node labels")
+	}
+
 	deployer := &InClusterK8SDeployer{
 		K8SDeployer: K8SDeployer{
-			Config:         config,
-			AWSCluster:     awsCluster,
-			Deployment:     deployment,
-			DeploymentLog:  log,
-			Services:       make(map[string]ServiceMapping),
-			KubeConfigPath: originalClusterInfo.KubeConfigPath,
-			BastionIp:      originalClusterInfo.BastionIp,
-			MasterIp:       originalClusterInfo.MasterIp,
-			KubeConfig:     originalClusterInfo.KubeConfig,
+			Config:        config,
+			AWSCluster:    awsCluster,
+			Deployment:    deployment,
+			DeploymentLog: log,
+			Services:      make(map[string]ServiceMapping),
+			KubeConfig:    kubeConfig,
 		},
-		OriginalAWSCluster: originalClusterInfo.AWSCluster,
+		StackName: stackName,
 	}
 
 	return deployer, nil
@@ -80,7 +95,7 @@ func (deployer *InClusterK8SDeployer) findAutoscalingGroup(autoscalingSvc *autos
 	var autoScalingGroup *autoscaling.Group
 	for _, group := range result.AutoScalingGroups {
 		for _, tag := range group.Tags {
-			if *tag.Key == "KubernetesCluster" && *tag.Value == deployer.OriginalAWSCluster.StackName() {
+			if *tag.Key == "KubernetesCluster" && *tag.Value == deployer.StackName {
 				autoScalingGroup = group
 				break
 			}
@@ -88,7 +103,7 @@ func (deployer *InClusterK8SDeployer) findAutoscalingGroup(autoscalingSvc *autos
 	}
 
 	if autoScalingGroup == nil {
-		return errors.New("Unable to find auto scaling group for stack: " + deployer.OriginalAWSCluster.StackName())
+		return errors.New("Unable to find auto scaling group for stack: " + deployer.StackName)
 	}
 
 	deployer.AutoScalingGroup = autoScalingGroup
@@ -136,7 +151,7 @@ func setupEC2(deployer *InClusterK8SDeployer,
 			{
 				Name: aws.String("tag:KubernetesCluster"),
 				Values: []*string{
-					aws.String(deployer.OriginalAWSCluster.StackName()),
+					aws.String(deployer.StackName),
 				},
 			},
 			{
@@ -225,11 +240,11 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		},
 		{
 			Key:   aws.String("KubernetesCluster"),
-			Value: aws.String(deployer.OriginalAWSCluster.StackName()),
+			Value: aws.String(deployer.StackName),
 		},
 		{
 			Key:   aws.String("deployment"),
-			Value: aws.String(deployer.OriginalAWSCluster.Name),
+			Value: aws.String(deployer.Deployment.Name),
 		},
 		{
 			Key:   aws.String("InternalCluster"),
@@ -277,7 +292,6 @@ func setupEC2(deployer *InClusterK8SDeployer,
 func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
 	awsCluster := deployer.AWSCluster
 	deployment := deployer.Deployment
-	bastionIp := deployer.BastionIp
 	log := deployer.GetLog().Logger
 
 	sess, sessionErr := hpaws.CreateSession(awsCluster.AWSProfile, awsCluster.Region)
@@ -296,11 +310,6 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 
 	if err := populateInClusterNodeInfos(ec2Svc, awsCluster); err != nil {
 		return nil, errors.New("Unable to populate node infos: " + err.Error())
-	}
-
-	if err := uploadFiles(awsCluster, deployment, uploadedFiles, bastionIp, log); err != nil {
-		deleteInClusterDeploymentOnFailure(deployer)
-		return nil, errors.New("Unable to upload files to cluster: " + err.Error())
 	}
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
