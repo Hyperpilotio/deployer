@@ -35,13 +35,16 @@ type InClusterK8SDeployer struct {
 
 func NewInClusterDeployer(
 	config *viper.Viper,
-	awsProfile *hpaws.AWSProfile,
 	deployment *apis.Deployment) (*InClusterK8SDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
+	awsProfile := &hpaws.AWSProfile{
+		AwsId:     config.GetString("awsId"),
+		AwsSecret: config.GetString("awsSecret"),
+	}
 	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
 
 	kubeConfig, err := rest.InClusterConfig()

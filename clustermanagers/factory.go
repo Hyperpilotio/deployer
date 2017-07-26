@@ -47,7 +47,7 @@ func NewDeployer(
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
-			return kubernetes.NewInClusterDeployer(config, awsProfile, deployment)
+			return kubernetes.NewInClusterDeployer(config, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}

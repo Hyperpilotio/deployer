@@ -517,10 +517,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 		deployment = mergeDeployment
 	}
 
-	var awsProfile *aws.AWSProfile
-	if !config.GetBool("inCluster") {
+	var awsProfile *hpaws.AWSProfile
+	if !server.Config.GetBool("inCluster") {
 		server.mutex.Lock()
-		awsProfile, profileOk := server.AWSProfiles[deployment.UserId]
+		deploymentAwsProfile, profileOk := server.AWSProfiles[deployment.UserId]
 		server.mutex.Unlock()
 
 		if !profileOk {
@@ -530,6 +530,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			})
 			return
 		}
+		awsProfile = deploymentAwsProfile
 	}
 
 	deploymentInfo := &DeploymentInfo{
