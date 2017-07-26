@@ -175,17 +175,6 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		networkSpecs = append(networkSpecs, networkSpec)
 	}
 
-	// blockDeviceMappings := []*ec2.BlockDeviceMapping{}
-	// for _, mapping := range launchConfig.BlockDeviceMappings {
-	// 	blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
-	// 		DeviceName: mapping.DeviceName,
-	// 		Ebs: &ec2.EbsBlockDevice{
-	// 			VolumeSize: mapping.Ebs.VolumeSize,
-	// 			VolumeType: mapping.Ebs.VolumeType,
-	// 		},
-	// 	})
-	// }
-
 	nodeCount := len(deployer.Deployment.ClusterDefinition.Nodes)
 	for _, node := range deployer.Deployment.ClusterDefinition.Nodes {
 		runInstancesInput := &ec2.RunInstancesInput{
