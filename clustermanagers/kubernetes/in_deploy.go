@@ -776,8 +776,27 @@ func (deployer *InClusterK8SDeployer) GetServiceAddress(serviceName string) (*ap
 		return nil, fmt.Errorf("Unable to convert %s port: ", serviceName, err.Error())
 	}
 
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to connect to Kubernetes during get service url: " + err.Error())
+	}
+
+	namespace := deployer.getNamespace()
+	services, err := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{})
+	if err != nil {
+		return nil, errors.New("Unable to list services in the cluster: " + err.Error())
+	}
+
+	clusterIP := ""
+	for _, service := range services.Items {
+		if service.ObjectMeta.Name == serviceName {
+			clusterIP = service.Spec.ClusterIP
+			break
+		}
+	}
+
 	return &apis.ServiceAddress{
-		Host: serviceUrls[0],
+		Host: clusterIP,
 		Port: int32(port),
 	}, nil
 }
