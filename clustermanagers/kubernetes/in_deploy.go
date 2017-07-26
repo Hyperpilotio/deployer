@@ -175,16 +175,16 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		networkSpecs = append(networkSpecs, networkSpec)
 	}
 
-	blockDeviceMappings := []*ec2.BlockDeviceMapping{}
-	for _, mapping := range launchConfig.BlockDeviceMappings {
-		blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
-			DeviceName: mapping.DeviceName,
-			Ebs: &ec2.EbsBlockDevice{
-				VolumeSize: mapping.Ebs.VolumeSize,
-				VolumeType: mapping.Ebs.VolumeType,
-			},
-		})
-	}
+	// blockDeviceMappings := []*ec2.BlockDeviceMapping{}
+	// for _, mapping := range launchConfig.BlockDeviceMappings {
+	// 	blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
+	// 		DeviceName: mapping.DeviceName,
+	// 		Ebs: &ec2.EbsBlockDevice{
+	// 			VolumeSize: mapping.Ebs.VolumeSize,
+	// 			VolumeType: mapping.Ebs.VolumeType,
+	// 		},
+	// 	})
+	// }
 
 	nodeCount := len(deployer.Deployment.ClusterDefinition.Nodes)
 	for _, node := range deployer.Deployment.ClusterDefinition.Nodes {
@@ -208,12 +208,17 @@ func setupEC2(deployer *InClusterK8SDeployer,
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
-		if len(runResult.Instances) == 0 {
+		if len(runResult.Instances) == 1 {
 			awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
 				Instance: runResult.Instances[0],
 			}
 			awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
 		}
+	}
+
+	if len(awsCluster.InstanceIds) != nodeCount {
+		return fmt.Errorf("Unable to find equal amount of nodes after ec2 create, expecting: %d, found: %d",
+			nodeCount, len(awsCluster.InstanceIds))
 	}
 
 	describeInstancesInput = &ec2.DescribeInstancesInput{
