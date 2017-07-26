@@ -263,6 +263,13 @@ func setupEC2(deployer *InClusterK8SDeployer,
 		return errors.New("Unable to attach new instances to autoscaling group: " + err.Error())
 	}
 
+	err = autoscalingSvc.WaitUntilGroupInService(&autoscaling.DescribeAutoScalingGroupsInput{
+		AutoScalingGroupNames: []*string{deployer.AutoScalingGroup.AutoScalingGroupName},
+	})
+	if err != nil {
+		return errors.New("Unable to wait for instanceIds to be inService: " + err.Error())
+	}
+
 	return nil
 }
 
