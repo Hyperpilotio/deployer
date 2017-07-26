@@ -512,6 +512,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
+	if server.Config.GetBool("inCluster") {
+		deployment.UserId = server.OriginalDeployer.GetAWSCluster().AWSProfile.UserId
+	}
+
 	templateId := c.Param("templateId")
 	if templateId != "" {
 		mergeDeployment, mergeErr := server.mergeNewDeployment(templateId, deployment)
