@@ -517,16 +517,19 @@ func (server *Server) createDeployment(c *gin.Context) {
 		deployment = mergeDeployment
 	}
 
-	server.mutex.Lock()
-	awsProfile, profileOk := server.AWSProfiles[deployment.UserId]
-	server.mutex.Unlock()
+	var awsProfile *aws.AWSProfile
+	if !config.GetBool("inCluster") {
+		server.mutex.Lock()
+		awsProfile, profileOk := server.AWSProfiles[deployment.UserId]
+		server.mutex.Unlock()
 
-	if !profileOk {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "User not found: " + deployment.UserId,
-		})
-		return
+		if !profileOk {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "User not found: " + deployment.UserId,
+			})
+			return
+		}
 	}
 
 	deploymentInfo := &DeploymentInfo{
