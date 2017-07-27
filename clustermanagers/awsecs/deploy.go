@@ -1479,3 +1479,7 @@ func (ecsDeployer *ECSDeployer) GetServiceAddress(serviceName string) (*apis.Ser
 func (ecsDeployer *ECSDeployer) GetStoreInfo() interface{} {
 	return nil
 }
+
+func (ecsDeployer *ECSDeployer) NewStoreInfo() interface{} {
+	return nil
+}

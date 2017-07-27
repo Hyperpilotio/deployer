@@ -724,6 +724,10 @@ func (deployer *InClusterK8SDeployer) GetStoreInfo() interface{} {
 	return nil
 }
 
+func (deployer *InClusterK8SDeployer) NewStoreInfo() interface{} {
+	return nil
+}
+
 func (deployer *InClusterK8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
 	return deployer.AWSCluster
 }

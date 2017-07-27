@@ -23,6 +23,7 @@ type Deployer interface {
 	DeleteDeployment() error
 	ReloadClusterState(storeInfo interface{}) error
 	GetStoreInfo() interface{}
+	NewStoreInfo() interface{}
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
 	GetAWSCluster() *aws.AWSCluster
 	GetLog() *log.FileLog
