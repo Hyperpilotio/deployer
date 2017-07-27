@@ -1670,3 +1670,7 @@ func (k8sDeployer *K8SDeployer) GetStoreInfo() interface{} {
 		VpcPeeringConnectionId: k8sDeployer.VpcPeeringConnectionId,
 	}
 }
+
+func (k8sDeployer *K8SDeployer) NewStoreInfo() interface{} {
+	return &StoreInfo{}
+}
