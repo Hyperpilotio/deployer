@@ -90,7 +90,7 @@ func NewInClusterDeployer(
 }
 
 func (deployer *InClusterK8SDeployer) findAutoscalingGroup(autoscalingSvc *autoscaling.AutoScaling) error {
-	result, err := autoscalingSvc.DescribeAutoScalingGroups(nil)
+	result, err := autoscalingSvc.DescribeAutoScalingGroups(&autoscaling.DescribeAutoScalingGroupsInput{})
 	if err != nil {
 		return fmt.Errorf("Unable to describe auto scaling groups: %s" + err.Error())
 	}
