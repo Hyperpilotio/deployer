@@ -1122,16 +1122,20 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to load deployment templates: %s", templateErr.Error())
 	}
 
+	glog.V(1).Infof("Loading %d template deployment from store", len(templates.([]interface{})))
 	for _, template := range templates.([]interface{}) {
-		templateId := template.(*StoreTemplateDeployment)
+		templateDeployment := template.(*StoreTemplateDeployment)
 		deploymentJSON := template.(*StoreTemplateDeployment).Deployment
 
 		deployment := &apis.Deployment{}
 		if err := json.Unmarshal([]byte(deploymentJSON), deployment); err != nil {
-			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateId)
+			glog.Warningf("Skip loading template deployment %s: Unmarshal error", templateDeployment.TemplateId)
 			continue
 		}
-		server.Templates[template.(*StoreTemplateDeployment).TemplateId] = deployment
+
+		glog.V(1).Infof("Trying to recover template %s deployment from store: %+v",
+			templateDeployment.TemplateId, deployment)
+		server.Templates[templateDeployment.TemplateId] = deployment
 	}
 
 	shutdownTime := server.Config.GetString("shutDownTime")
