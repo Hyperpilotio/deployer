@@ -33,6 +33,14 @@ type InClusterK8SDeployer struct {
 	StackName        string
 }
 
+type ClusterNodes []v1.Node
+
+func (c ClusterNodes) Len() int { return len(c) }
+func (c ClusterNodes) Less(i, j int) bool {
+	return c[i].CreationTimestamp.Before(c[j].CreationTimestamp)
+}
+func (c ClusterNodes) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
+
 func NewInClusterDeployer(
 	config *viper.Viper,
 	deployment *apis.Deployment) (*InClusterK8SDeployer, error) {
@@ -62,8 +70,14 @@ func NewInClusterDeployer(
 		return nil, errors.New("Unable to list kubernetes nodes: " + err.Error())
 	}
 
-	stackName := ""
+	k8sNodes := ClusterNodes{}
 	for _, node := range nodes.Items {
+		k8sNodes = append(k8sNodes, node)
+	}
+	sort.Sort(k8sNodes)
+
+	stackName := ""
+	for _, node := range k8sNodes {
 		if deployment, ok := node.Labels["hyperpilot/deployment"]; ok {
 			stackName = deployment + "-stack"
 			break
