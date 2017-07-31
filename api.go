@@ -1149,6 +1149,7 @@ func (server *Server) reloadClusterState() error {
 
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
+		deploymentName := storeDeployment.Name
 		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			// TODO: Remove failed stored deployments
@@ -1160,19 +1161,21 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		userId := storeDeployment.UserId
-		if userId == "" {
-			glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
-			continue
-		}
+		var awsProfile *hpaws.AWSProfile
+		if !server.Config.GetBool("inCluster") {
+			userId := storeDeployment.UserId
+			if userId == "" {
+				glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
+				continue
+			}
 
-		awsProfile, profileOk := server.AWSProfiles[storeDeployment.UserId]
-		if !profileOk {
-			glog.Warning("Skip loading deployment: Unable to find aws profile for user " + storeDeployment.UserId)
-			continue
+			deploymentAwsProfile, profileOk := server.AWSProfiles[storeDeployment.UserId]
+			if !profileOk {
+				glog.Warning("Skip loading deployment: Unable to find aws profile for user " + storeDeployment.UserId)
+				continue
+			}
+			awsProfile = deploymentAwsProfile
 		}
-
-		deploymentName := storeDeployment.Name
 
 		deployment := &apis.Deployment{}
 		unmarshalErr := json.Unmarshal([]byte(storeDeployment.Deployment), deployment)
@@ -1200,20 +1203,24 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		// Reload keypair
-		if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
-			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
-				glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+		if !server.Config.GetBool("inCluster") {
+			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+				if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+				}
+				glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+				continue
 			}
-			glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-			continue
 		}
 
 		storeClusterManager := deployer.NewStoreInfo()
-		if err := server.DeploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
-			glog.Warningf("Skipping reloading because unable to load %s clustr store info: %s", deploymentName, err.Error())
-			continue
+		if storeClusterManager != nil {
+			if err := server.DeploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
+				glog.Warningf("Skipping reloading because unable to load %s clustr store info: %s", deploymentName, err.Error())
+				continue
+			}
+			storeDeployment.ClusterManager = storeClusterManager
 		}
-		storeDeployment.ClusterManager = storeClusterManager
 
 		if err := deployer.ReloadClusterState(storeClusterManager); err != nil {
 			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
