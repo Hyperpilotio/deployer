@@ -61,7 +61,6 @@ type StoreDeployment struct {
 	UserId      string
 	Deployment  string
 	TemplateId  string
-	InCluster   string
 	// Stores cluster manager specific stored information
 	ClusterManager interface{}
 }
@@ -119,10 +118,11 @@ func ParseStateString(state string) DeploymentState {
 
 // Server store the stats / data of every deployment
 type Server struct {
-	Config          *viper.Viper
-	DeploymentStore blobstore.BlobStore
-	ProfileStore    blobstore.BlobStore
-	TemplateStore   blobstore.BlobStore
+	Config                   *viper.Viper
+	DeploymentStore          blobstore.BlobStore
+	InClusterDeploymentStore blobstore.BlobStore
+	ProfileStore             blobstore.BlobStore
+	TemplateStore            blobstore.BlobStore
 
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
@@ -192,6 +192,12 @@ func (server *Server) StartServer() error {
 		return errors.New("Unable to create deployments store: " + err.Error())
 	} else {
 		server.DeploymentStore = deploymentStore
+	}
+
+	if inClusterDeploymentStore, err := blobstore.NewBlobStore("InClusterDeployments", server.Config); err != nil {
+		return errors.New("Unable to create in-cluster deployments store: " + err.Error())
+	} else {
+		server.InClusterDeploymentStore = inClusterDeploymentStore
 	}
 
 	if profileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
@@ -960,10 +966,18 @@ func (server *Server) getServices(c *gin.Context) {
 
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
+
+	var deploymentStore blobstore.BlobStore
+	if server.Config.GetBool("inCluster") {
+		deploymentStore = server.InClusterDeploymentStore
+	} else {
+		deploymentStore = server.DeploymentStore
+	}
+
 	switch deploymentInfo.State {
 	case DELETED:
 		glog.Infof("Deleting deployment from store: " + deploymentName)
-		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+		if err := deploymentStore.Delete(deploymentName); err != nil {
 			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
 		}
 	default:
@@ -973,11 +987,7 @@ func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
 		}
 
-		if server.Config.GetBool("InCluster") {
-			deployment.InCluster = "true"
-		}
-
-		if err := server.DeploymentStore.Store(deploymentName, deployment); err != nil {
+		if err := deploymentStore.Store(deploymentName, deployment); err != nil {
 			return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
 		}
 	}
@@ -1108,7 +1118,15 @@ func (server *Server) reloadClusterState() error {
 	}
 	server.AWSProfiles = awsProfileInfos
 
-	deployments, err := server.DeploymentStore.LoadAll(func() interface{} {
+	inCluster := server.Config.GetBool("inCluster")
+	var deploymentStore blobstore.BlobStore
+	if inCluster {
+		deploymentStore = server.InClusterDeploymentStore
+	} else {
+		deploymentStore = server.DeploymentStore
+	}
+
+	deployments, err := deploymentStore.LoadAll(func() interface{} {
 		return &StoreDeployment{}
 	})
 	if err != nil {
@@ -1147,19 +1165,12 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
 
-	inCluster := server.Config.GetBool("inCluster")
-
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		deploymentName := storeDeployment.Name
 		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			// TODO: Remove failed stored deployments
-			continue
-		}
-
-		if server.Config.GetBool("InCluster") && storeDeployment.InCluster != "true" {
-			glog.Warningf("Skip loading deployment %s: Not in-cluster deployment", storeDeployment.Name)
 			continue
 		}
 
@@ -1207,7 +1218,7 @@ func (server *Server) reloadClusterState() error {
 		// Reload keypair
 		if !inCluster {
 			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
-				if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+				if err := deploymentStore.Delete(deploymentName); err != nil {
 					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
 				}
 				glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
@@ -1217,7 +1228,7 @@ func (server *Server) reloadClusterState() error {
 
 		storeClusterManager := deployer.NewStoreInfo()
 		if storeClusterManager != nil {
-			if err := server.DeploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
+			if err := deploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
 				glog.Warningf("Skipping reloading because unable to load %s cluster store info: %s", deploymentName, err.Error())
 				continue
 			}
@@ -1225,7 +1236,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		if err := deployer.ReloadClusterState(storeClusterManager); err != nil {
-			if err := server.DeploymentStore.Delete(deploymentName); err != nil {
+			if err := deploymentStore.Delete(deploymentName); err != nil {
 				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
 			}
 			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
