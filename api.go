@@ -1147,6 +1147,8 @@ func (server *Server) reloadClusterState() error {
 		return fmt.Errorf("Unable to parse shutDownTime %s: %s", scheduleRunTime, err.Error())
 	}
 
+	inCluster := server.Config.GetBool("inCluster")
+
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		deploymentName := storeDeployment.Name
@@ -1162,7 +1164,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		var awsProfile *hpaws.AWSProfile
-		if !server.Config.GetBool("inCluster") {
+		if !inCluster {
 			userId := storeDeployment.UserId
 			if userId == "" {
 				glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
@@ -1203,7 +1205,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		// Reload keypair
-		if !server.Config.GetBool("inCluster") {
+		if !inCluster {
 			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
 				if err := server.DeploymentStore.Delete(deploymentName); err != nil {
 					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
@@ -1216,7 +1218,7 @@ func (server *Server) reloadClusterState() error {
 		storeClusterManager := deployer.NewStoreInfo()
 		if storeClusterManager != nil {
 			if err := server.DeploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
-				glog.Warningf("Skipping reloading because unable to load %s clustr store info: %s", deploymentName, err.Error())
+				glog.Warningf("Skipping reloading because unable to load %s cluster store info: %s", deploymentName, err.Error())
 				continue
 			}
 			storeDeployment.ClusterManager = storeClusterManager
@@ -1256,9 +1258,6 @@ func (server *Server) NewShutDownScheduler(
 	deployer clustermanagers.Deployer,
 	deploymentInfo *DeploymentInfo,
 	custScheduleRunTime string) error {
-	if server.Config.GetBool("inCluster") {
-		return nil
-	}
 	if deployer.GetScheduler() != nil {
 		deployer.GetScheduler().Stop()
 	}
