@@ -4,7 +4,7 @@ GO_EXECUTABLE ?= go
 PACKAGES=$(glide novendor)
 
 glide-check:
-	@if [ "X$(GLIDE)" = "X"]; then \
+	@if [ "X$(GLIDE)" = "X"	]; then \
 		echo "glide doesn't exist."; \
 		curl https://glide.sh/get | sh ; \
 	else \
@@ -13,20 +13,21 @@ glide-check:
 
 init: glide-check
 	glide install
-	rm -rf "vendor/k8s.io/client-go/vendor/github.com/golang/glog"
-	rm -rf "vendor/github.com/op/go-logging"
 
 test:
 	${GO_EXECUTABLE} test ${PACKAGES}
 
-build:
-	${GO_EXECUTABLE} build .
-
-build-docker:
-	sudo docker build . -t hyperpilot/deployer
-
-push:
-	sudo docker push hyperpilot/deployer:latest
-
 dev-test: build
 	./deployer --config ./documents/dev.config -logtostderr=true -v=2
+
+build:
+	CGO_ENABLED=0 go build -a -installsuffix cgo
+
+build-linux:
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -a -installsuffix cgo
+
+docker-build:
+	docker build . -t ${ORGANIZATION}/${IMAGE}:${TAG}
+
+docker-push:
+	docker push ${ORGANIZATION}/${IMAGE}:${TAG}
