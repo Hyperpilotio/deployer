@@ -213,6 +213,9 @@ func setupEC2(deployer *InClusterK8SDeployer,
 			KeyName:      launchConfig.KeyName,
 			ImageId:      launchConfig.ImageId,
 			EbsOptimized: launchConfig.EbsOptimized,
+			Placement: &ec2.Placement{
+				AvailabilityZone: aws.String(""),
+			},
 			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
 				Name: launchConfig.IamInstanceProfile,
 			},
@@ -222,19 +225,20 @@ func setupEC2(deployer *InClusterK8SDeployer,
 			MinCount:          aws.Int64(1),
 			MaxCount:          aws.Int64(1),
 		}
-		glog.V(1).Infof("runInstancesInput: %+v", runInstancesInput)
 
 		runResult, runErr := ec2Svc.RunInstances(runInstancesInput)
 		if runErr != nil {
 			return errors.New("Unable to run ec2 instance '" + strconv.Itoa(node.Id) + "': " + runErr.Error())
 		}
 
-		if len(runResult.Instances) == 1 {
-			awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
-				Instance: runResult.Instances[0],
-			}
-			awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
+		if len(runResult.Instances) != 1 {
+			return fmt.Errorf("Unexpected instance results: %+v", runResult.Instances)
 		}
+
+		awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
+			Instance: runResult.Instances[0],
+		}
+		awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
 	}
 
 	if len(awsCluster.InstanceIds) != nodeCount {
