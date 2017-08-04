@@ -325,6 +325,11 @@ func deployCluster(k8sDeployer *K8SDeployer, uploadedFiles map[string]string) er
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
+	if err := waitUntilKubernetesNodeExists(k8sClient, awsCluster, time.Duration(2)*time.Minute, log); err != nil {
+		deleteDeploymentOnFailure(k8sDeployer)
+		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
+	}
+
 	if err := tagKubeNodes(k8sClient, awsCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(k8sDeployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
@@ -987,6 +992,31 @@ func getAllDeployedNamespaces(deployment *apis.Deployment) []string {
 	}
 
 	return allNamespaces
+}
+
+func waitUntilKubernetesNodeExists(
+	k8sClient *k8s.Clientset,
+	awsCluster *hpaws.AWSCluster,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	nodeNames := []string{}
+	for _, nodeInfo := range awsCluster.NodeInfos {
+		nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
+	}
+
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		allExists := true
+		for _, nodeName := range nodeNames {
+			if _, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err != nil {
+				allExists = false
+			}
+		}
+		if allExists {
+			log.Infof("%s Kubernetes nodes is exist", awsCluster.Name)
+			return true, nil
+		}
+		return false, nil
+	})
 }
 
 func tagKubeNodes(

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
@@ -337,6 +338,11 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		return nil, errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
 
+	if err := waitUntilKubernetesNodeExists(k8sClient, awsCluster, time.Duration(2)*time.Minute, log); err != nil {
+		deleteInClusterDeploymentOnFailure(deployer)
+		return nil, errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
+	}
+
 	if err := tagKubeNodes(k8sClient, awsCluster, deployment, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to tag Kubernetes nodes: " + err.Error())
@@ -600,15 +606,13 @@ func populateInClusterNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) e
 		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
 	}
 
-	i := 1
-	for _, reservation := range describeInstancesOutput.Reservations {
-		for _, instance := range reservation.Instances {
-			nodeInfo := &hpaws.NodeInfo{
-				Instance:  instance,
-				PrivateIp: *instance.PrivateIpAddress,
+	for _, nodeIfo := range awsCluster.NodeInfos {
+		for _, reservation := range describeInstancesOutput.Reservations {
+			for _, instance := range reservation.Instances {
+				if nodeIfo.Instance.InstanceId == instance.InstanceId {
+					nodeIfo.PrivateIp = *instance.PrivateIpAddress
+				}
 			}
-			awsCluster.NodeInfos[i] = nodeInfo
-			i += 1
 		}
 	}
 
