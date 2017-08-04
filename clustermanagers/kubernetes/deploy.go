@@ -1009,6 +1009,7 @@ func waitUntilKubernetesNodeExists(
 		for _, nodeName := range nodeNames {
 			if _, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err != nil {
 				allExists = false
+				break
 			}
 		}
 		if allExists {
