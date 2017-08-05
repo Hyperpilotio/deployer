@@ -11,14 +11,13 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
-	logging "github.com/op/go-logging"
-	"github.com/spf13/viper"
-
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/job"
+	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
-
+	logging "github.com/op/go-logging"
+	"github.com/spf13/viper"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
@@ -101,6 +100,32 @@ func NewInClusterDeployer(
 	}
 
 	return deployer, nil
+}
+
+func waitUntilKubernetesNodeExists(
+	k8sClient *k8s.Clientset,
+	awsCluster *hpaws.AWSCluster,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	nodeNames := []string{}
+	for _, nodeInfo := range awsCluster.NodeInfos {
+		nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
+	}
+
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		allExists := true
+		for _, nodeName := range nodeNames {
+			if _, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err != nil {
+				allExists = false
+				break
+			}
+		}
+		if allExists {
+			log.Infof("%s Kubernetes nodes is exist", awsCluster.Name)
+			return true, nil
+		}
+		return false, nil
+	})
 }
 
 func (deployer *InClusterK8SDeployer) findAutoscalingGroup(autoscalingSvc *autoscaling.AutoScaling) error {
