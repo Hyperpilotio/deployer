@@ -168,7 +168,7 @@ func (deployer *InClusterK8SDeployer) getLaunchConfiguration(autoscalingSvc *aut
 	return output.LaunchConfigurations[0], nil
 }
 
-func setupEC2(deployer *InClusterK8SDeployer,
+func (deployer *InClusterK8SDeployer) setupEC2(
 	ec2Svc *ec2.EC2,
 	autoscalingSvc *autoscaling.AutoScaling) error {
 	awsCluster := deployer.AWSCluster
@@ -349,8 +349,8 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	ec2Svc := ec2.New(sess)
 
 	log.Infof("Launching EC2 instances")
-	if err := setupEC2(deployer, ec2Svc, autoscalingSvc); err != nil {
-		// deployer.DeleteDeployment()
+	if err := deployer.setupEC2(ec2Svc, autoscalingSvc); err != nil {
+		deployer.DeleteDeployment()
 		return nil, errors.New("Unable to setup EC2: " + err.Error())
 	}
 
@@ -697,10 +697,14 @@ func deleteInClusterDeploymentOnFailure(deployer *InClusterK8SDeployer) {
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
+	if len(deployer.AWSCluster.InstanceIds) == 0 {
+		return nil
+	}
+
 	log := deployer.GetLog().Logger
 	err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log)
 	if err != nil {
-		return errors.New("Unable to delete kubernetes objects: " + err.Error())
+		log.Warningf("Unable to delete kubernetes objects: " + err.Error())
 	}
 
 	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
@@ -717,7 +721,7 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	})
 
 	if err != nil {
-		return errors.New("Unable to detach instances: " + err.Error())
+		log.Warningf("Unable to detach instances: " + err.Error())
 	}
 
 	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
@@ -725,7 +729,7 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	})
 
 	if err != nil {
-		return fmt.Errorf("Unable to terminate EC2 instance: %s", err.Error())
+		log.Warningf("Unable to terminate EC2 instance: %s", err.Error())
 	}
 
 	return nil
