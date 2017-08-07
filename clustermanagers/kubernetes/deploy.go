@@ -418,7 +418,7 @@ func deployKubernetes(sess *session.Session, k8sDeployer *K8SDeployer) error {
 			},
 			{
 				ParameterKey:   aws.String("AvailabilityZone"),
-				ParameterValue: aws.String(awsCluster.Region + "b"),
+				ParameterValue: aws.String(awsCluster.Region + "a"),
 			},
 		},
 		Tags: []*cloudformation.Tag{
