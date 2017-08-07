@@ -232,12 +232,24 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 		networkSpecs = append(networkSpecs, networkSpec)
 	}
 
+	blockDeviceMappings := []*ec2.BlockDeviceMapping{}
+	for _, mapping := range launchConfig.BlockDeviceMappings {
+		blockDeviceMappings = append(blockDeviceMappings, &ec2.BlockDeviceMapping{
+			DeviceName: mapping.DeviceName,
+			Ebs: &ec2.EbsBlockDevice{
+				VolumeSize: mapping.Ebs.VolumeSize,
+				VolumeType: mapping.Ebs.VolumeType,
+			},
+		})
+	}
+
 	nodeCount := len(deployer.Deployment.ClusterDefinition.Nodes)
 	for _, node := range deployer.Deployment.ClusterDefinition.Nodes {
 		runInstancesInput := &ec2.RunInstancesInput{
-			KeyName:      launchConfig.KeyName,
-			ImageId:      launchConfig.ImageId,
-			EbsOptimized: launchConfig.EbsOptimized,
+			KeyName:             launchConfig.KeyName,
+			ImageId:             launchConfig.ImageId,
+			BlockDeviceMappings: blockDeviceMappings,
+			EbsOptimized:        launchConfig.EbsOptimized,
 			Placement: &ec2.Placement{
 				AvailabilityZone: aws.String(""),
 			},
