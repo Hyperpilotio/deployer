@@ -250,9 +250,6 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 			ImageId:             launchConfig.ImageId,
 			BlockDeviceMappings: blockDeviceMappings,
 			EbsOptimized:        launchConfig.EbsOptimized,
-			Placement: &ec2.Placement{
-				AvailabilityZone: aws.String(""),
-			},
 			IamInstanceProfile: &ec2.IamInstanceProfileSpecification{
 				Name: launchConfig.IamInstanceProfile,
 			},
@@ -262,6 +259,8 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 			MinCount:          aws.Int64(1),
 			MaxCount:          aws.Int64(1),
 		}
+
+		log.Infof("Sending run ec2 instances request: %+v", runInstancesInput)
 
 		runResult, runErr := ec2Svc.RunInstances(runInstancesInput)
 		if runErr != nil {
