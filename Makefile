@@ -1,3 +1,6 @@
+ORGANIZATION=hyperpilot
+IMAGE=deployer
+TAG=latest
 GLIDE=$(which glide)
 GO_EXECUTABLE ?= go
 # For windows developer, use $(go list ./... | grep -v /vendor/)
