@@ -121,7 +121,7 @@ func waitUntilKubernetesNodeExists(
 			}
 		}
 		if allExists {
-			log.Infof("%s Kubernetes nodes is exist", awsCluster.Name)
+			log.Infof("%s Kubernetes nodes are available now", awsCluster.Name)
 			return true, nil
 		}
 		return false, nil
@@ -814,6 +814,7 @@ func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
 
 func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 	if info, ok := deployer.Services[serviceName]; ok {
+		deployer.GetLog().Logger.Infof("Found cached service url for service %s: %s", info.PrivateUrl)
 		return info.PrivateUrl, nil
 	}
 
@@ -837,6 +838,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 				PrivateUrl: serviceUrl,
 				NodeId:     nodeId,
 			}
+			deployer.GetLog().Logger.Infof("Found service url from k8s for service %s: %s", serviceUrl)
 			return serviceUrl, nil
 		}
 	}
