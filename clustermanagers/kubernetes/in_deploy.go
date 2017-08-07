@@ -719,6 +719,14 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 		log.Warningf("Unable to delete kubernetes objects: " + err.Error())
 	}
 
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err == nil {
+		namespaces := k8sClient.CoreV1().Namespaces()
+		if err := namespaces.Delete(deployer.getNamespace(), &metav1.DeleteOptions{}); err != nil {
+			log.Warningf("Unable to delete kubernetes namespace: " + err.Error())
+		}
+	}
+
 	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
 	if sessionErr != nil {
 		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
@@ -834,7 +842,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 		}
 	}
 
-	return "", errors.New("Service not found in endpoints")
+	return "", fmt.Errorf("Service [%s] not found in endpoints", serviceName)
 }
 
 // GetServiceAddress return ServiceAddress object
