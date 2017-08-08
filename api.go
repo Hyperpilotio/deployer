@@ -556,8 +556,8 @@ func (server *Server) createDeployment(c *gin.Context) {
 	deploymentInfo.Deployer = deployer
 
 	server.mutex.Lock()
+	defer server.mutex.Unlock()
 	_, clusterOk := server.DeployedClusters[deployment.Name]
-	server.mutex.Unlock()
 	if clusterOk {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
@@ -566,9 +566,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 		return
 	}
 
-	server.mutex.Lock()
 	server.DeployedClusters[deployment.Name] = deploymentInfo
-	server.mutex.Unlock()
 
 	go func() {
 		log := deployer.GetLog()
@@ -878,9 +876,8 @@ func (server *Server) getServiceUrl(c *gin.Context) {
 	serviceName := c.Param("service")
 
 	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
 	deploymentInfo, ok := server.DeployedClusters[deploymentName]
+	server.mutex.Unlock()
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
