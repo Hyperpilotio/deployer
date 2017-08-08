@@ -48,6 +48,17 @@ type DeploymentInfo struct {
 	Created    time.Time                `json:"Created"`
 	ShutDown   time.Time                `json:"ShutDown"`
 	State      DeploymentState          `json:"State"`
+	Error      string                   `json:"Error"`
+}
+
+func (info *DeploymentInfo) SetState(state DeploymentState) {
+	info.State = state
+	info.Error = ""
+}
+
+func (info *DeploymentInfo) SetFailure(error string) {
+	info.State = FAILED
+	info.Error = error
 }
 
 // This defines what's being persisted in store
@@ -444,19 +455,19 @@ func (server *Server) updateDeployment(c *gin.Context) {
 	}
 
 	deployment.Name = deploymentName
-	deploymentInfo.State = UPDATING
+	deploymentInfo.SetState(UPDATING)
 	server.mutex.Unlock()
 
 	go func() {
 		log := deploymentInfo.Deployer.GetLog()
 
 		if err := deploymentInfo.Deployer.UpdateDeployment(deployment); err != nil {
-			log.Logger.Error("Unable to update deployment")
-			deploymentInfo.State = FAILED
+			log.Logger.Error("Unable to update deployment: " + err.Error())
+			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Update deployment successfully!")
 			deploymentInfo.Deployment = deployment
-			deploymentInfo.State = AVAILABLE
+			deploymentInfo.SetState(AVAILABLE)
 		}
 		server.storeDeployment(deploymentInfo)
 	}()
@@ -573,7 +584,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 
 		if resp, err := deployer.CreateDeployment(server.UploadedFiles); err != nil {
 			log.Logger.Infof("Unable to create deployment: " + err.Error())
-			deploymentInfo.State = FAILED
+			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Create deployment successfully!")
 			deploymentInfo.Created = time.Now()
@@ -586,7 +597,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			if err := server.NewShutDownScheduler(deployer, deploymentInfo, ""); err != nil {
 				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
 			}
-			deploymentInfo.State = AVAILABLE
+			deploymentInfo.SetState(AVAILABLE)
 
 			server.mutex.Lock()
 			server.DeployedClusters[deployment.Name] = deploymentInfo
@@ -630,7 +641,7 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 	if scheduler != nil {
 		scheduler.Stop()
 	}
-	deploymentInfo.State = DELETING
+	deploymentInfo.SetState(DELETING)
 	server.mutex.Unlock()
 
 	go func() {
@@ -639,10 +650,10 @@ func (server *Server) deleteDeployment(c *gin.Context) {
 
 		if err := deploymentInfo.Deployer.DeleteDeployment(); err != nil {
 			log.Logger.Errorf("Unable to delete deployment: %s", err.Error())
-			deploymentInfo.State = FAILED
+			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Delete deployment successfully!")
-			deploymentInfo.State = DELETED
+			deploymentInfo.SetState(DELETED)
 		}
 		server.storeDeployment(deploymentInfo)
 
@@ -694,7 +705,7 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 	deployment := *templateDeployment
 	deployment.UserId = deploymentInfo.Deployment.UserId
 	deployment.Name = deploymentName
-	deploymentInfo.State = UPDATING
+	deploymentInfo.SetState(UPDATING)
 	server.mutex.Unlock()
 
 	log := deploymentInfo.Deployer.GetLog()
@@ -703,12 +714,12 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, deployment)
 
 		if err := deploymentInfo.Deployer.UpdateDeployment(&deployment); err != nil {
-			log.Logger.Error("Unable to reset template deployment")
-			deploymentInfo.State = FAILED
+			log.Logger.Error("Unable to reset template deployment: " + err.Error())
+			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Reset template deployment successfully!")
 			deploymentInfo.Deployment = &deployment
-			deploymentInfo.State = AVAILABLE
+			deploymentInfo.SetState(AVAILABLE)
 		}
 
 		if err := server.DeploymentStore.Delete(deploymentName); err != nil {
@@ -774,7 +785,7 @@ func (server *Server) deployExtensions(c *gin.Context) {
 		return
 	}
 
-	deploymentInfo.State = UPDATING
+	deploymentInfo.SetState(UPDATING)
 	server.mutex.Unlock()
 
 	go func() {
@@ -785,11 +796,11 @@ func (server *Server) deployExtensions(c *gin.Context) {
 
 		if err := deploymentInfo.Deployer.DeployExtensions(deployment, newDeployment); err != nil {
 			log.Logger.Error("Unable to deploy extensions deployment: " + err.Error())
-			deploymentInfo.State = FAILED
+			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Deploy extensions deployment successfully!")
 			deploymentInfo.Deployment = newDeployment
-			deploymentInfo.State = AVAILABLE
+			deploymentInfo.SetState(AVAILABLE)
 		}
 
 		server.storeDeployment(deploymentInfo)
@@ -868,7 +879,10 @@ func (server *Server) getDeploymentState(c *gin.Context) {
 		return
 	}
 
-	c.String(http.StatusOK, GetStateString(deploymentInfo.State))
+	c.JSON(http.StatusOK, gin.H{
+		"state": GetStateString(deploymentInfo.State),
+		"data":  deploymentInfo.Error,
+	})
 }
 
 func (server *Server) getServiceUrl(c *gin.Context) {
@@ -1298,16 +1312,17 @@ func (server *Server) NewShutDownScheduler(
 				return
 			}
 
-			deploymentInfo.State = DELETING
+			deploymentInfo.SetState(DELETING)
 			server.mutex.Unlock()
 
 			defer deployer.GetLog().LogFile.Close()
 
 			if err := deployer.DeleteDeployment(); err != nil {
-				deploymentInfo.State = FAILED
-				glog.Infof("Deployment %s failed to delete: %s", deploymentInfo.Deployment.Name, err.Error())
+				deployer.GetLog().Logger.Infof("Deployment %s failed to delete on schedule: %s",
+					deploymentInfo.Deployment.Name, err.Error())
+				deploymentInfo.SetFailure(err.Error())
 			} else {
-				deploymentInfo.State = DELETED
+				deploymentInfo.SetState(DELETED)
 			}
 			server.storeDeployment(deploymentInfo)
 
