@@ -1009,14 +1009,15 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 	}
 
 	server.mutex.Lock()
-	defer server.mutex.Unlock()
-
 	instances, ok := server.AWSRegionInstances[availabilityZoneName]
+	server.mutex.Unlock()
+
 	if !ok {
 		supportInstances, err := awsecs.GetSupportInstanceTypes(&hpaws.AWSProfile{
 			AwsId:     server.Config.GetString("awsId"),
 			AwsSecret: server.Config.GetString("awsSecret"),
 		}, regionName, availabilityZoneName)
+
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -1024,8 +1025,11 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 			})
 			return
 		}
-		server.AWSRegionInstances[availabilityZoneName] = supportInstances
 		instances = supportInstances
+
+		server.mutex.Lock()
+		server.AWSRegionInstances[availabilityZoneName] = supportInstances
+		server.mutex.Unlock()
 	}
 
 	c.JSON(http.StatusOK, gin.H{
