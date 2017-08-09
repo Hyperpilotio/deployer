@@ -732,6 +732,15 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	}
 
 	ec2Svc := ec2.New(sess)
+	describeInstancesInput := &ec2.DescribeInstancesInput{
+		InstanceIds: deployer.AWSCluster.InstanceIds,
+	}
+
+	// We have to wait until the ec2 instances exists, otherwise we cannot terminate them.
+	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
+		return errors.New("Unable to wait for ec2 instances to exist in delete: " + err.Error())
+	}
+
 	autoscalingSvc := autoscaling.New(sess)
 	_, err = autoscalingSvc.DetachInstances(&autoscaling.DetachInstancesInput{
 		AutoScalingGroupName:           deployer.AutoScalingGroup.AutoScalingGroupName,
@@ -740,7 +749,7 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	})
 
 	if err != nil {
-		log.Warningf("Unable to detach instances: " + err.Error())
+		log.Warningf("Unable to detach instances from autoscaling group: " + err.Error())
 	}
 
 	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
