@@ -149,7 +149,7 @@ type Server struct {
 	// Maps template id to templates
 	Templates map[string]*apis.Deployment
 
-	// Maps region name to surpport ec2 instances
+	// Maps availabilityZone name to surpport ec2 instances
 	AWSRegionInstances map[string][]string
 
 	mutex sync.Mutex
@@ -287,7 +287,7 @@ func (server *Server) StartServer() error {
 
 	awsRegionGroup := router.Group("/v1/aws/regions")
 	{
-		awsRegionGroup.GET("/:region/instances", server.getAWSRegionInstances)
+		awsRegionGroup.GET("/:region/availabilityZones/:availabilityZone/instances", server.getAWSRegionInstances)
 	}
 
 	templateGroup := router.Group("/v1/templates")
@@ -990,13 +990,33 @@ func (server *Server) getServices(c *gin.Context) {
 
 func (server *Server) getAWSRegionInstances(c *gin.Context) {
 	regionName := c.Param("region")
+	availabilityZoneName := c.Param("availabilityZone")
+
+	if regionName == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Empty region passed",
+		})
+		return
+	}
+
+	if availabilityZoneName == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Empty availabilityZone passed",
+		})
+		return
+	}
 
 	server.mutex.Lock()
 	defer server.mutex.Unlock()
 
-	instances, ok := server.AWSRegionInstances[regionName]
+	instances, ok := server.AWSRegionInstances[availabilityZoneName]
 	if !ok {
-		supportInstances, err := awsecs.GetSupportInstances(regionName)
+		supportInstances, err := awsecs.GetSupportInstanceTypes(&hpaws.AWSProfile{
+			AwsId:     server.Config.GetString("awsId"),
+			AwsSecret: server.Config.GetString("awsSecret"),
+		}, regionName, availabilityZoneName)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -1004,7 +1024,7 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 			})
 			return
 		}
-		server.AWSRegionInstances[regionName] = supportInstances
+		server.AWSRegionInstances[availabilityZoneName] = supportInstances
 		instances = supportInstances
 	}
 
