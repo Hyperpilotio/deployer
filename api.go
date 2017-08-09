@@ -20,6 +20,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
@@ -148,16 +149,20 @@ type Server struct {
 	// Maps template id to templates
 	Templates map[string]*apis.Deployment
 
+	// Maps region name to surpport ec2 instances
+	AWSRegionInstances map[string][]string
+
 	mutex sync.Mutex
 }
 
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:           config,
-		DeployedClusters: make(map[string]*DeploymentInfo),
-		UploadedFiles:    make(map[string]string),
-		Templates:        make(map[string]*apis.Deployment),
+		Config:             config,
+		DeployedClusters:   make(map[string]*DeploymentInfo),
+		UploadedFiles:      make(map[string]string),
+		Templates:          make(map[string]*apis.Deployment),
+		AWSRegionInstances: make(map[string][]string),
 	}
 }
 
@@ -278,6 +283,11 @@ func (server *Server) StartServer() error {
 		daemonsGroup.GET("/:deployment/services/:service/url", server.getServiceUrl)
 		daemonsGroup.GET("/:deployment/services/:service/address", server.getServiceAddress)
 		daemonsGroup.GET("/:deployment/services", server.getServices)
+	}
+
+	awsRegionGroup := router.Group("/v1/aws/regions")
+	{
+		awsRegionGroup.GET("/:region/instances", server.getAWSRegionInstances)
 	}
 
 	templateGroup := router.Group("/v1/templates")
@@ -975,6 +985,32 @@ func (server *Server) getServices(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
 		"data":  services,
+	})
+}
+
+func (server *Server) getAWSRegionInstances(c *gin.Context) {
+	regionName := c.Param("region")
+
+	server.mutex.Lock()
+	defer server.mutex.Unlock()
+
+	instances, ok := server.AWSRegionInstances[regionName]
+	if !ok {
+		supportInstances, err := awsecs.GetSupportInstances(regionName)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": true,
+				"data":  "Unable to get support instances: " + err.Error(),
+			})
+			return
+		}
+		server.AWSRegionInstances[regionName] = supportInstances
+		instances = supportInstances
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  instances,
 	})
 }
 
