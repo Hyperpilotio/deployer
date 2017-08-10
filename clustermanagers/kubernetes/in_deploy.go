@@ -327,21 +327,6 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 		return errors.New("Unable to wait for ec2 instances be status ok: " + err.Error())
 	}
 
-	_, err = autoscalingSvc.AttachInstances(&autoscaling.AttachInstancesInput{
-		AutoScalingGroupName: deployer.AutoScalingGroup.AutoScalingGroupName,
-		InstanceIds:          awsCluster.InstanceIds,
-	})
-	if err != nil {
-		return errors.New("Unable to attach new instances to autoscaling group: " + err.Error())
-	}
-
-	err = autoscalingSvc.WaitUntilGroupInService(&autoscaling.DescribeAutoScalingGroupsInput{
-		AutoScalingGroupNames: []*string{deployer.AutoScalingGroup.AutoScalingGroupName},
-	})
-	if err != nil {
-		return errors.New("Unable to wait for instanceIds to be inService: " + err.Error())
-	}
-
 	return nil
 }
 
@@ -739,17 +724,6 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	// We have to wait until the ec2 instances exists, otherwise we cannot terminate them.
 	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
 		return errors.New("Unable to wait for ec2 instances to exist in delete: " + err.Error())
-	}
-
-	autoscalingSvc := autoscaling.New(sess)
-	_, err = autoscalingSvc.DetachInstances(&autoscaling.DetachInstancesInput{
-		AutoScalingGroupName:           deployer.AutoScalingGroup.AutoScalingGroupName,
-		InstanceIds:                    deployer.AWSCluster.InstanceIds,
-		ShouldDecrementDesiredCapacity: aws.Bool(true),
-	})
-
-	if err != nil {
-		log.Warningf("Unable to detach instances from autoscaling group: " + err.Error())
 	}
 
 	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
