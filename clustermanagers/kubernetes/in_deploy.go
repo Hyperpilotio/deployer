@@ -272,7 +272,8 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 		}
 
 		awsCluster.NodeInfos[node.Id] = &hpaws.NodeInfo{
-			Instance: runResult.Instances[0],
+			Instance:  runResult.Instances[0],
+			PrivateIp: aws.StringValue(runResult.Instances[0].PrivateIpAddress),
 		}
 		awsCluster.InstanceIds = append(awsCluster.InstanceIds, runResult.Instances[0].InstanceId)
 	}
@@ -290,32 +291,8 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 		return errors.New("Unable to wait for ec2 instances to exist: " + err.Error())
 	}
 
-	tags := []*ec2.Tag{
-		{
-			Key:   aws.String("Name"),
-			Value: aws.String("k8s-node"),
-		},
-		{
-			Key:   aws.String("KubernetesCluster"),
-			Value: aws.String(deployer.StackName),
-		},
-		{
-			Key:   aws.String("deployment"),
-			Value: aws.String(deployer.Deployment.Name),
-		},
-		{
-			Key:   aws.String("InternalCluster"),
-			Value: aws.String(awsCluster.StackName()),
-		},
-	}
-
-	tagParams := &ec2.CreateTagsInput{
-		Resources: awsCluster.InstanceIds,
-		Tags:      tags,
-	}
-
-	if _, err := ec2Svc.CreateTags(tagParams); err != nil {
-		return errors.New("Unable to create tags for new instances: " + err.Error())
+	if err := deployer.tagEC2Instance(ec2Svc); err != nil {
+		return errors.New("Unable to tag ec2 instance: " + err.Error())
 	}
 
 	describeInstanceStatusInput := &ec2.DescribeInstanceStatusInput{
@@ -325,6 +302,52 @@ func (deployer *InClusterK8SDeployer) setupEC2(
 	log.Infof("Waitng for %d EC2 instances to be status ok", nodeCount)
 	if err := ec2Svc.WaitUntilInstanceStatusOk(describeInstanceStatusInput); err != nil {
 		return errors.New("Unable to wait for ec2 instances be status ok: " + err.Error())
+	}
+
+	return nil
+}
+
+func (deployer *InClusterK8SDeployer) tagEC2Instance(ec2Svc *ec2.EC2) error {
+	awsCluster := deployer.AWSCluster
+	log := deployer.GetLog().Logger
+	errBool := false
+	for nodeId, nodeInfo := range awsCluster.NodeInfos {
+		tags := []*ec2.Tag{
+			{
+				Key:   aws.String("Name"),
+				Value: aws.String("k8s-node"),
+			},
+			{
+				Key:   aws.String("KubernetesCluster"),
+				Value: aws.String(deployer.StackName),
+			},
+			{
+				Key:   aws.String("deployment"),
+				Value: aws.String(deployer.Deployment.Name),
+			},
+			{
+				Key:   aws.String("InternalCluster"),
+				Value: aws.String(awsCluster.StackName()),
+			},
+			{
+				Key:   aws.String("NodeId"),
+				Value: aws.String(strconv.Itoa(nodeId)),
+			},
+		}
+
+		tagParams := &ec2.CreateTagsInput{
+			Resources: []*string{nodeInfo.Instance.InstanceId},
+			Tags:      tags,
+		}
+
+		if _, err := ec2Svc.CreateTags(tagParams); err != nil {
+			log.Warningf("Unable to create tags for new instances: %s\n", err.Error())
+			errBool = true
+		}
+	}
+
+	if errBool {
+		return errors.New("Unable to create tags all the relative new instances")
 	}
 
 	return nil
@@ -348,10 +371,6 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	if err := deployer.setupEC2(ec2Svc, autoscalingSvc); err != nil {
 		deployer.DeleteDeployment()
 		return nil, errors.New("Unable to setup EC2: " + err.Error())
-	}
-
-	if err := populateInClusterNodeInfos(ec2Svc, awsCluster); err != nil {
-		return nil, errors.New("Unable to populate node infos: " + err.Error())
 	}
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
@@ -627,11 +646,21 @@ func populateInClusterNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) e
 		return errors.New("Unable to describe ec2 instances: " + describeErr.Error())
 	}
 
-	for _, nodeIfo := range awsCluster.NodeInfos {
-		for _, reservation := range describeInstancesOutput.Reservations {
-			for _, instance := range reservation.Instances {
-				if nodeIfo.Instance.InstanceId == instance.InstanceId {
-					nodeIfo.PrivateIp = *instance.PrivateIpAddress
+	for _, reservation := range describeInstancesOutput.Reservations {
+		for _, instance := range reservation.Instances {
+			nodeInfo := &hpaws.NodeInfo{
+				Instance:  instance,
+				PrivateIp: *instance.PrivateIpAddress,
+			}
+
+			for _, tag := range instance.Tags {
+				if aws.StringValue(tag.Key) == "NodeId" {
+					nodeId, err := strconv.Atoi(aws.StringValue(tag.Value))
+					if err != nil {
+						return errors.New("Unable to convert node id to int: " + err.Error())
+					}
+					awsCluster.NodeInfos[nodeId] = nodeInfo
+					break
 				}
 			}
 		}
@@ -731,6 +760,10 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	})
 	if err != nil {
 		log.Warningf("Unable to terminate EC2 instance: %s", err.Error())
+	}
+
+	if err := ec2Svc.WaitUntilInstanceTerminated(describeInstancesInput); err != nil {
+		log.Warningf("Unable to wait for ec2 instances to terminated in delete: %s", err.Error())
 	}
 
 	privateIps := []*string{}
