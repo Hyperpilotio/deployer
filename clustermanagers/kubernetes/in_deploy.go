@@ -729,9 +729,21 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
 		InstanceIds: deployer.AWSCluster.InstanceIds,
 	})
-
 	if err != nil {
 		log.Warningf("Unable to terminate EC2 instance: %s", err.Error())
+	}
+
+	privateIps := []*string{}
+	for _, nodeInfo := range deployer.AWSCluster.NodeInfos {
+		privateIps = append(privateIps, aws.String(nodeInfo.PrivateIp))
+	}
+
+	filters := []*ec2.Filter{&ec2.Filter{
+		Name:   aws.String("private-ip-address"),
+		Values: privateIps,
+	}}
+	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
+		log.Warningf("Unable to delete network interfaces: %s", err.Error())
 	}
 
 	return nil
