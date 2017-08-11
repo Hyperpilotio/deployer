@@ -171,12 +171,6 @@ func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 		return nil
 	}
 
-	// delete cloudformation Stack
-	log.Infof("Deleting cloudformation Stack: %s", stackName)
-	if err := deleteCloudFormationStack(sess, deploymentName, stackName, log); err != nil {
-		log.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
-	}
-
 	ec2Svc := ec2.New(sess)
 	if k8sDeployer.VpcPeeringConnectionId != "" {
 		_, err := ec2Svc.DeleteVpcPeeringConnection(&ec2.DeleteVpcPeeringConnectionInput{
@@ -185,6 +179,12 @@ func (k8sDeployer *K8SDeployer) DeleteDeployment() error {
 		if err != nil {
 			log.Warningf("Unable to remove Vpc peering: " + err.Error())
 		}
+	}
+
+	// delete cloudformation Stack
+	log.Infof("Deleting cloudformation Stack: %s", stackName)
+	if err := deleteCloudFormationStack(sess, deploymentName, stackName, log); err != nil {
+		log.Warningf("Unable to deleting cloudformation Stack: %s", err.Error())
 	}
 
 	log.Infof("Deleting KeyPair...")
@@ -580,6 +580,12 @@ func waitUntilKubernetesInstanceTerminated(ec2Svc *ec2.EC2, stackName string, lo
 				Name:   aws.String("tag:KubernetesCluster"),
 				Values: []*string{aws.String(stackName)},
 			},
+			{
+				Name: aws.String("instance-state-name"),
+				Values: []*string{
+					aws.String("running"),
+				},
+			},
 		},
 	}
 
@@ -595,11 +601,17 @@ func waitUntilKubernetesInstanceTerminated(ec2Svc *ec2.EC2, stackName string, lo
 		}
 	}
 
-	terminatedInstanceParams := &ec2.DescribeInstancesInput{
+	_, err := ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
 		InstanceIds: instanceIds,
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to terminate EC2 instance: %s", err.Error())
 	}
 
-	if err := ec2Svc.WaitUntilInstanceTerminated(terminatedInstanceParams); err != nil {
+	err = ec2Svc.WaitUntilInstanceTerminated(&ec2.DescribeInstancesInput{
+		InstanceIds: instanceIds,
+	})
+	if err != nil {
 		return fmt.Errorf("Unable to wait until EC2 instance terminated: %s\n", err.Error())
 	}
 
