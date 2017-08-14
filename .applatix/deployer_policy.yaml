@@ -1,0 +1,21 @@
+---
+type: policy
+name: Deployer build policy
+description: Trigger workflow on master branch changes
+template: deployer_workflow
+notifications:
+  -
+    when:
+      - on_success
+      - on_failure
+    whom:
+      - committer
+      - author
+when:
+  -
+    event: on_push
+    target_branches:
+      - "master"
+labels:
+  milestone: build
+  version: 1.0.0
