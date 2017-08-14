@@ -1,0 +1,28 @@
+---
+type: container
+name: deployer_build_binary
+description: This is the template for building Node component.
+container:
+  image: golang:1.7
+  command: "sh -c 'GIT_USER=$(echo %%git_username%%) && \
+            GIT_PASSWORD=$(echo %%git_password%%) && \
+            DEPLOYER=$GOPATH/src/github.com/hyperpilotio/deployer && \
+            echo \"https://$GIT_USER:$GIT_PASSWORD@github.com\" >> /credential && \
+            git config --global credential.helper \"store --file=/credential\" && \
+            mkdir -p $DEPLOYER && \
+            cp -r /src/* $DEPLOYER && \
+            cd $DEPLOYER && \
+            make complete-build-linux' && \
+            cp $GOPATH/src/github.com/hyperpilotio/deployer/deployer /src/deployer"
+inputs:
+  artifacts:
+  - from: "%%code%%"
+    path: /
+  parameters:
+    git_username:
+    git_password:
+    code:
+outputs:
+  artifacts:
+    code:
+      path: "/src"
