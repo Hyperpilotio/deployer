@@ -703,7 +703,9 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 		return
 	}
 
-	deployment := *templateDeployment
+	deployment := &apis.Deployment{}
+	funcs.DeepCopy(deployment, templateDeployment)
+
 	deployment.UserId = deploymentInfo.Deployment.UserId
 	deployment.Name = deploymentName
 	deploymentInfo.SetState(UPDATING)
@@ -714,12 +716,12 @@ func (server *Server) resetTemplateDeployment(c *gin.Context) {
 	go func() {
 		log.Logger.Infof("Resetting deployment to template %s: %+v", templateId, deployment)
 
-		if err := deploymentInfo.Deployer.UpdateDeployment(&deployment); err != nil {
+		if err := deploymentInfo.Deployer.UpdateDeployment(deployment); err != nil {
 			log.Logger.Error("Unable to reset template deployment: " + err.Error())
 			deploymentInfo.SetFailure(err.Error())
 		} else {
 			log.Logger.Infof("Reset template deployment successfully!")
-			deploymentInfo.Deployment = &deployment
+			deploymentInfo.Deployment = deployment
 			deploymentInfo.SetState(AVAILABLE)
 		}
 
