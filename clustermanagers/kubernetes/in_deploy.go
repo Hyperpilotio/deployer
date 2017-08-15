@@ -431,6 +431,19 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
+	if namespacesErr != nil {
+		if !skipDelete {
+			deleteInClusterDeploymentOnFailure(deployer)
+		}
+		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+	}
+
+	namespace := deployer.getNamespace()
+	if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
+	}
+
 	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
 		if !skipDelete {
 			deleteInClusterDeploymentOnFailure(deployer)
@@ -746,13 +759,20 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	}
 
 	ec2Svc := ec2.New(sess)
-	describeInstancesInput := &ec2.DescribeInstancesInput{
-		InstanceIds: deployer.AWSCluster.InstanceIds,
-	}
 
 	// We have to wait until the ec2 instances exists, otherwise we cannot terminate them.
-	if err := ec2Svc.WaitUntilInstanceExists(describeInstancesInput); err != nil {
+	err = ec2Svc.WaitUntilInstanceExists(&ec2.DescribeInstancesInput{
+		InstanceIds: deployer.AWSCluster.InstanceIds,
+	})
+	if err != nil {
 		return errors.New("Unable to wait for ec2 instances to exist in delete: " + err.Error())
+	}
+
+	err = ec2Svc.WaitUntilInstanceStatusOk(&ec2.DescribeInstanceStatusInput{
+		InstanceIds: deployer.AWSCluster.InstanceIds,
+	})
+	if err != nil {
+		return errors.New("Unable to wait for ec2 instances be status ok: " + err.Error())
 	}
 
 	_, err = ec2Svc.TerminateInstances(&ec2.TerminateInstancesInput{
@@ -762,7 +782,10 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 		log.Warningf("Unable to terminate EC2 instance: %s", err.Error())
 	}
 
-	if err := ec2Svc.WaitUntilInstanceTerminated(describeInstancesInput); err != nil {
+	err = ec2Svc.WaitUntilInstanceTerminated(&ec2.DescribeInstancesInput{
+		InstanceIds: deployer.AWSCluster.InstanceIds,
+	})
+	if err != nil {
 		log.Warningf("Unable to wait for ec2 instances to terminated in delete: %s", err.Error())
 	}
 
