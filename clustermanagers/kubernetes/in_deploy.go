@@ -496,7 +496,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		family := task.Family
 		originalFamily := family
 		count, ok := taskCount[family]
-		deploySpec.ObjectMeta.Namespace = namespace
 		if !ok {
 			count = 1
 			deploySpec.Name = originalFamily
