@@ -789,14 +789,9 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 		log.Warningf("Unable to wait for ec2 instances to terminated in delete: %s", err.Error())
 	}
 
-	privateIps := []*string{}
-	for _, nodeInfo := range deployer.AWSCluster.NodeInfos {
-		privateIps = append(privateIps, aws.String(nodeInfo.PrivateIp))
-	}
-
 	filters := []*ec2.Filter{&ec2.Filter{
-		Name:   aws.String("private-ip-address"),
-		Values: privateIps,
+		Name:   aws.String("status"),
+		Values: []*string{aws.String("available")},
 	}}
 	if err := deleteNetworkInterfaces(ec2Svc, filters, log); err != nil {
 		log.Warningf("Unable to delete network interfaces: %s", err.Error())
