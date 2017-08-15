@@ -22,6 +22,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/job"
+	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/spf13/viper"
 
 	"net/http"
@@ -1060,58 +1061,56 @@ func (server *Server) mergeNewDeployment(templateId string, newDeployment *apis.
 		return nil, fmt.Errorf("Unable to find %s deployment templates", templateId)
 	}
 
-	copyDeployment := *templateDeployment
+	newTemplateDeployment := &apis.Deployment{}
+	funcs.DeepCopy(templateDeployment, newTemplateDeployment)
+
 	if newDeployment.UserId != "" {
-		copyDeployment.UserId = newDeployment.UserId
+		newTemplateDeployment.UserId = newDeployment.UserId
 	}
 
 	if newDeployment.Name != "" {
-		copyDeployment.Name = newDeployment.Name
+		newTemplateDeployment.Name = newDeployment.Name
 	}
 
 	// Allow new deployment to overwrite node id with new instance type
 	newClusterNodes := []apis.ClusterNode{}
 	clusterMapping := make(map[int]apis.ClusterNode)
-	for _, node := range templateDeployment.ClusterDefinition.Nodes {
+	for _, node := range newTemplateDeployment.ClusterDefinition.Nodes {
 		clusterMapping[node.Id] = node
 	}
-
 	for _, node := range newDeployment.ClusterDefinition.Nodes {
 		clusterMapping[node.Id] = node
 	}
-
 	for _, node := range clusterMapping {
 		newClusterNodes = append(newClusterNodes, node)
 	}
-
-	copyDeployment.ClusterDefinition.Nodes = newClusterNodes
-
-	existingMapping := copyDeployment.NodeMapping
-	copyDeployment.NodeMapping = make([]apis.NodeMapping, 0)
-
-	for _, nodeMapping := range existingMapping {
-		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
-	}
+	newTemplateDeployment.ClusterDefinition.Nodes = newClusterNodes
 
 	for _, nodeMapping := range newDeployment.NodeMapping {
-		copyDeployment.NodeMapping = append(copyDeployment.NodeMapping, nodeMapping)
-	}
-
-	copyKubernetesDeployment := *copyDeployment.KubernetesDeployment
-	copyDeployment.KubernetesDeployment = &copyKubernetesDeployment
-
-	existingKubernetesDeployment := copyDeployment.KubernetesDeployment.Kubernetes
-	copyDeployment.KubernetesDeployment.Kubernetes = make([]apis.KubernetesTask, 0)
-
-	for _, task := range existingKubernetesDeployment {
-		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
+		if err := checkDuplicateTask(newTemplateDeployment.NodeMapping, nodeMapping); err != nil {
+			return nil, fmt.Errorf("Unable to merge deployment: %s", err.Error())
+		}
+		newTemplateDeployment.NodeMapping =
+			append(newTemplateDeployment.NodeMapping, nodeMapping)
 	}
 
 	for _, task := range newDeployment.KubernetesDeployment.Kubernetes {
-		copyDeployment.KubernetesDeployment.Kubernetes = append(copyDeployment.KubernetesDeployment.Kubernetes, task)
+		newTemplateDeployment.KubernetesDeployment.Kubernetes =
+			append(newTemplateDeployment.KubernetesDeployment.Kubernetes, task)
 	}
 
-	return &copyDeployment, nil
+	return newTemplateDeployment, nil
+}
+
+func checkDuplicateTask(nodeMappings []apis.NodeMapping, checkNodeMapping apis.NodeMapping) error {
+	for _, nodeMapping := range nodeMappings {
+		if nodeMapping.Id == checkNodeMapping.Id && nodeMapping.Task == checkNodeMapping.Task {
+			return fmt.Errorf("Find duplicate %s deployment task on node id %d",
+				checkNodeMapping.Task, checkNodeMapping.Id)
+		}
+	}
+
+	return nil
 }
 
 // reloadClusterState reload cluster state when deployer restart
