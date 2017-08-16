@@ -1274,6 +1274,7 @@ func (server *Server) reloadClusterState() error {
 
 		// Reload keypair
 		if !inCluster {
+			glog.Infof("Reloading key pair for deployment %s", deployment.Name)
 			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
 				if err := deploymentStore.Delete(deploymentName); err != nil {
 					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
@@ -1292,29 +1293,30 @@ func (server *Server) reloadClusterState() error {
 			storeDeployment.ClusterManager = storeClusterManager
 		}
 
+		glog.Infof("Reloading cluster state for deployment: %s", deployment.Name)
 		if err := deployer.ReloadClusterState(storeClusterManager); err != nil {
 			if err := deploymentStore.Delete(deploymentName); err != nil {
-				glog.Warningf("Unable to delete %s deployment after failed check: %s", deploymentName, err.Error())
+				glog.Warningf("Unable to delete %s deployment after failed reload: %s", deploymentName, err.Error())
 			}
-			glog.Warningf("Unable to load %s deployedCluster status: %s", deploymentName, err.Error())
-		} else {
-			deploymentInfo.State = ParseStateString(storeDeployment.Status)
-			newScheduleRunTime := ""
-			createdTime, err := time.Parse(time.RFC822, storeDeployment.Created)
-			if err == nil {
-				deploymentInfo.Created = createdTime
-				realScheduleRunTime := createdTime.Add(scheduleRunTime)
-				if realScheduleRunTime.After(time.Now()) {
-					newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
-				}
+			glog.Warningf("Unable to reload cluster state for deployment %s: %s", deploymentName, err.Error())
+			continue
+		}
+
+		deploymentInfo.State = ParseStateString(storeDeployment.Status)
+		newScheduleRunTime := ""
+		if createdTime, err := time.Parse(time.RFC822, storeDeployment.Created); err == nil {
+			deploymentInfo.Created = createdTime
+			realScheduleRunTime := createdTime.Add(scheduleRunTime)
+			if realScheduleRunTime.After(time.Now()) {
+				newScheduleRunTime = realScheduleRunTime.Sub(time.Now()).String()
 			}
+		}
 
-			server.DeployedClusters[deploymentName] = deploymentInfo
+		server.DeployedClusters[deploymentName] = deploymentInfo
 
-			if deploymentInfo.State == AVAILABLE {
-				if err := server.NewShutDownScheduler(deployer, deploymentInfo, newScheduleRunTime); err != nil {
-					glog.Warningf("Unable to create auto shutdown scheduler for %s: %s", deployment.Name, err.Error())
-				}
+		if deploymentInfo.State == AVAILABLE {
+			if err := server.NewShutDownScheduler(deployer, deploymentInfo, newScheduleRunTime); err != nil {
+				glog.Warningf("Unable to create auto shutdown scheduler for %s: %s", deployment.Name, err.Error())
 			}
 		}
 	}
