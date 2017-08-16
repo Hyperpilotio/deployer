@@ -48,59 +48,35 @@ func GetSupportInstanceTypes(
 		return nil, fmt.Errorf("Unsupported %s availabilityZone in %s region: ", availabilityZoneName, regionName)
 	}
 
-	resp, err := ec2Svc.DescribeReservedInstancesOfferings(&ec2.DescribeReservedInstancesOfferingsInput{
-		AvailabilityZone: aws.String(availabilityZoneName),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("Unable to describe reserved instances offerings: %s", err.Error())
-	}
-
+	index := 0
 	supportInstanceTypes := []string{}
-	for _, reservedInstancesOffering := range resp.ReservedInstancesOfferings {
-		instanceType := aws.StringValue(reservedInstancesOffering.InstanceType)
-		if !inArray(instanceType, supportInstanceTypes) {
-			supportInstanceTypes = append(supportInstanceTypes, instanceType)
+	var nextToken *string
+	for nextToken != nil || index == 0 {
+		describeReservedInstancesOfferingsInput := &ec2.DescribeReservedInstancesOfferingsInput{
+			AvailabilityZone: aws.String(availabilityZoneName),
 		}
-	}
-	if err := recursiveSetInstanceTypes(ec2Svc, availabilityZoneName,
-		resp.NextToken, &supportInstanceTypes); err != nil {
-		return nil, fmt.Errorf("Unable to get support instance types: %s", err.Error())
+
+		if index != 0 {
+			describeReservedInstancesOfferingsInput.NextToken = nextToken
+		}
+
+		resp, err := ec2Svc.DescribeReservedInstancesOfferings(describeReservedInstancesOfferingsInput)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to describe reserved instances offerings: %s", err.Error())
+		}
+
+		for _, reservedInstancesOffering := range resp.ReservedInstancesOfferings {
+			instanceType := aws.StringValue(reservedInstancesOffering.InstanceType)
+			if !inArray(instanceType, supportInstanceTypes) {
+				supportInstanceTypes = append(supportInstanceTypes, instanceType)
+			}
+		}
+		nextToken = resp.NextToken
+		index++
 	}
 
 	sort.Strings(supportInstanceTypes)
 	return supportInstanceTypes, nil
-}
-
-func recursiveSetInstanceTypes(
-	ec2Svc *ec2.EC2,
-	availabilityZoneName string,
-	nextToken *string,
-	supportInstanceTypes *[]string) error {
-	if nextToken == nil {
-		return nil
-	}
-
-	resp, err := ec2Svc.DescribeReservedInstancesOfferings(&ec2.DescribeReservedInstancesOfferingsInput{
-		AvailabilityZone: aws.String(availabilityZoneName),
-		NextToken:        nextToken,
-	})
-	if err != nil {
-		return fmt.Errorf("Unable to describe reserved instances offerings: %s", err.Error())
-	}
-
-	for _, reservedInstancesOffering := range resp.ReservedInstancesOfferings {
-		instanceType := aws.StringValue(reservedInstancesOffering.InstanceType)
-		if !inArray(instanceType, *supportInstanceTypes) {
-			*supportInstanceTypes = append(*supportInstanceTypes, instanceType)
-		}
-	}
-
-	if err := recursiveSetInstanceTypes(ec2Svc, availabilityZoneName,
-		resp.NextToken, supportInstanceTypes); err != nil {
-		return fmt.Errorf("Unable to recursive set instances types: %s", err.Error())
-	}
-
-	return nil
 }
 
 func inArray(a string, list []string) bool {
