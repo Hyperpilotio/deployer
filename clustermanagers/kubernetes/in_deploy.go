@@ -739,17 +739,14 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	}
 
 	log := deployer.GetLog().Logger
-	err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log)
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
-		log.Warningf("Unable to delete kubernetes objects: " + err.Error())
+		return errors.New("Unable to create k8s client: " + err.Error())
 	}
 
-	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
-	if err == nil {
-		namespaces := k8sClient.CoreV1().Namespaces()
-		if err := namespaces.Delete(deployer.getNamespace(), &metav1.DeleteOptions{}); err != nil {
-			log.Warningf("Unable to delete kubernetes namespace: " + err.Error())
-		}
+	namespaces := k8sClient.CoreV1().Namespaces()
+	if err := namespaces.Delete(deployer.getNamespace(), &metav1.DeleteOptions{}); err != nil {
+		log.Warningf("Unable to delete kubernetes namespace %s: %s", deployer.getNamespace(), err.Error())
 	}
 
 	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
