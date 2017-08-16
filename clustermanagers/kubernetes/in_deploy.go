@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
+	extensions "k8s.io/client-go/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 )
 
@@ -481,6 +482,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 	// service ids
 	sort.Sort(deployment.NodeMapping)
 	namespace := deployer.getNamespace()
+	deploy := k8sClient.Extensions().Deployments(namespace)
 	for _, mapping := range deployment.NodeMapping {
 		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
 
@@ -532,12 +534,34 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 			}
 		}
 
-		deploy := k8sClient.Extensions().Deployments(namespace)
 		_, err := deploy.Create(deploySpec)
 		if err != nil {
 			return fmt.Errorf("Unable to create k8s deployment: %s", err)
 		}
 		log.Infof("%s deployment created", family)
+	}
+
+	err := funcs.LoopUntil(time.Minute*20, time.Second*20, func() (bool, error) {
+		deployments, listErr := deploy.List(metav1.ListOptions{})
+		if listErr != nil {
+			return false, errors.New("Unable to list deployments: " + listErr.Error())
+		}
+
+		if len(deployments.Items) != len(deployment.NodeMapping) {
+			return false, fmt.Errorf("Unexpected list of deployments: %d", len(deployments.Items))
+		}
+
+		for _, deployment := range deployments.Items {
+			conditions := deployment.Status.Conditions
+			if conditions[len(conditions)-1].Type != extensions.DeploymentAvailable {
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to wait for deployments to be available")
 	}
 
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
