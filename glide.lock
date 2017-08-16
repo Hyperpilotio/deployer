@@ -101,7 +101,7 @@ imports:
 - name: github.com/hyperpilotio/blobstore
   version: 1d8686626448c5d44b63ca2afcc05b2e05db3acb
 - name: github.com/hyperpilotio/go-utils
-  version: a70ef282e0c46cda89969ae6adbf70025f63ea4d
+  version: f3d0f91a772385bddcc78bfc4a9cbf6bea4829d2
   subpackages:
   - funcs
   - log
