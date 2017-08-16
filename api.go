@@ -1224,12 +1224,14 @@ func (server *Server) reloadClusterState() error {
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		deploymentName := storeDeployment.Name
-		glog.Infof("Trying to recover deployment %s from store", deploymentName)
-		glog.V(2).Infof("Deployment found in store: %+v", deployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			// TODO: Remove failed stored deployments
+			glog.V(1).Infof("Delete %s deployment in status: %s", deploymentName, storeDeployment.Status)
+			if err := deploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment after recover deployment: %s", deploymentName, err.Error())
+			}
 			continue
 		}
+		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
 
 		var awsProfile *hpaws.AWSProfile
 		if !inCluster {
