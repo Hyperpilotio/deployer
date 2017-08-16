@@ -149,20 +149,16 @@ type Server struct {
 	// Maps template id to templates
 	Templates map[string]*apis.Deployment
 
-	// Maps availabilityZone name to surpport ec2 instances
-	AWSRegionInstances map[string][]string
-
 	mutex sync.Mutex
 }
 
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:             config,
-		DeployedClusters:   make(map[string]*DeploymentInfo),
-		UploadedFiles:      make(map[string]string),
-		Templates:          make(map[string]*apis.Deployment),
-		AWSRegionInstances: make(map[string][]string),
+		Config:           config,
+		DeployedClusters: make(map[string]*DeploymentInfo),
+		UploadedFiles:    make(map[string]string),
+		Templates:        make(map[string]*apis.Deployment),
 	}
 }
 
@@ -1008,28 +1004,17 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 		return
 	}
 
-	server.mutex.Lock()
-	instances, ok := server.AWSRegionInstances[availabilityZoneName]
-	server.mutex.Unlock()
+	instances, err := awsecs.GetSupportInstanceTypes(&hpaws.AWSProfile{
+		AwsId:     server.Config.GetString("awsId"),
+		AwsSecret: server.Config.GetString("awsSecret"),
+	}, regionName, availabilityZoneName)
 
-	if !ok {
-		supportInstances, err := awsecs.GetSupportInstanceTypes(&hpaws.AWSProfile{
-			AwsId:     server.Config.GetString("awsId"),
-			AwsSecret: server.Config.GetString("awsSecret"),
-		}, regionName, availabilityZoneName)
-
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to get support instances: " + err.Error(),
-			})
-			return
-		}
-		instances = supportInstances
-
-		server.mutex.Lock()
-		server.AWSRegionInstances[availabilityZoneName] = supportInstances
-		server.mutex.Unlock()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": true,
+			"data":  "Unable to get support instances: " + err.Error(),
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
