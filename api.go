@@ -989,7 +989,7 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 	availabilityZoneName := c.Param("availabilityZone")
 
 	if regionName == "" {
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
 			"data":  "Empty region passed",
 		})
@@ -997,9 +997,9 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 	}
 
 	if availabilityZoneName == "" {
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Empty availabilityZone passed",
+			"data":  "Empty availability zone passed",
 		})
 		return
 	}
@@ -1012,14 +1012,14 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": true,
-			"data":  "Unable to get support instances: " + err.Error(),
+			"data":  "Unable to get supported aws instances: " + err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  instances,
+		"error":     false,
+		"instances": instances,
 	})
 }
 
