@@ -948,6 +948,10 @@ func (deployer *InClusterK8SDeployer) GetServiceAddress(serviceName string) (*ap
 		}
 	}
 
+	if clusterIP == "" {
+		return nil, fmt.Errorf("Unable to find service %s in services", serviceName)
+	}
+
 	return &apis.ServiceAddress{
 		Host: clusterIP,
 		Port: int32(port),
