@@ -553,7 +553,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 
 		for _, deployment := range deployments.Items {
 			conditions := deployment.Status.Conditions
-			if conditions[len(conditions)-1].Type != extensions.DeploymentAvailable {
+			if len(conditions) == 0 || conditions[len(conditions)-1].Type != extensions.DeploymentAvailable {
 				return false, nil
 			}
 		}
