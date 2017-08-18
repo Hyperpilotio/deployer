@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
+	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
 	"k8s.io/client-go/rest"
 )
 
@@ -423,6 +424,7 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+	log := deployer.DeploymentLog.Logger
 	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
@@ -435,6 +437,11 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 
 	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
+	}
+
+	log.Infof("Granting node-reader permission to namespace %s", namespace)
+	if err := deployer.grantNodeReaderPermissionToNamespace(k8sClient, namespace); err != nil {
+		log.Warningf("Unable to grant node-reader permission to namespace %s: %s", namespace, err.Error())
 	}
 
 	if err := deployer.deployServices(k8sClient); err != nil {
@@ -623,6 +630,67 @@ func (deployer *InClusterK8SDeployer) createInClusterSecrets(k8sClient *k8s.Clie
 	return nil
 }
 
+func deleteNodeReaderClusterRoleBindingToNamespace(k8sClient *k8s.Clientset, namespace string, log *logging.Logger) {
+	roleName := "node-reader"
+	roleBinding := roleName + "-binding-" + namespace
+
+	log.Infof("Deleting cluster role binding %s", roleBinding)
+	clusterRoleBinding := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	if err := clusterRoleBinding.Delete(roleBinding, &metav1.DeleteOptions{}); err != nil {
+		log.Warningf("Unable to delete cluster role binding %s for namespace %s", roleName, roleBinding)
+	}
+	log.Infof("Successfully delete cluster role binding %s", roleBinding)
+}
+
+func (deployer *InClusterK8SDeployer) grantNodeReaderPermissionToNamespace(k8sClient *k8s.Clientset, namespace string) error {
+	log := deployer.DeploymentLog.Logger
+	roleName := "node-reader"
+	roleBinding := roleName + "-binding-" + namespace
+
+	// check whether role-binding exists
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	roleBindingObject, err := clusterRoleBindings.Get(roleBinding, metav1.GetOptions{})
+	if err == nil {
+		log.Infof("Find role binding %+v exists", roleBindingObject)
+		return nil
+	}
+	log.Warningf("Unable to find role-binding %s: %s", roleBinding, err.Error())
+
+	// check whether role exists or not
+	clusterRoles := k8sClient.RbacV1beta1().ClusterRoles()
+	role, err := clusterRoles.Get(roleName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf(`Unable to find role %s in cluster scope: %s
+		Please check clusterManagers/kubernetes/deploy.go which should have a function create the role`, roleName, err.Error())
+	}
+
+	log.Infof("Binding cluster role '%s' to namespace %s", roleName, namespace)
+	roleBindingObject = &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: roleBinding,
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "",
+			Kind:     "ClusterRole",
+			Name:     role.GetName(),
+		},
+	}
+
+	if _, err = clusterRoleBindings.Create(roleBindingObject); err != nil {
+		return fmt.Errorf("Unable to create role binding for namespace %s in cluster scope: %s", namespace, err.Error())
+	}
+	log.Infof("Successfully binds cluster role '%s' to namespace '%s'", roleName, namespace)
+
+	return nil
+}
+
 func (deployer *InClusterK8SDeployer) createServiceForInClusterDeployment(
 	k8sClient *k8s.Clientset,
 	family string,
@@ -738,6 +806,9 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
+	log.Info("Deleting cluster role binding for namespace %s", deployer.getNamespace())
+	deleteNodeReaderClusterRoleBindingToNamespace(k8sClient, deployer.getNamespace(), deployer.DeploymentLog.Logger)
+
 	if err := deployer.deployKubernetesObjects(k8sClient, true); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -785,6 +856,8 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	if err != nil {
 		return errors.New("Unable to create k8s client: " + err.Error())
 	}
+
+	deleteNodeReaderClusterRoleBindingToNamespace(k8sClient, deployer.getNamespace(), deployer.DeploymentLog.Logger)
 
 	namespaces := k8sClient.CoreV1().Namespaces()
 	if err := namespaces.Delete(deployer.getNamespace(), &metav1.DeleteOptions{}); err != nil {

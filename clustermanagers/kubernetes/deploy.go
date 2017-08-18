@@ -1269,6 +1269,25 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 		}
 	}
 
+	clusterRole := k8sClient.RbacV1beta1().ClusterRoles()
+	nodeReader := &rbac.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: "node-reader"},
+		Rules: []rbac.PolicyRule{
+			rbac.PolicyRule{
+				APIGroups: []string{""},
+				Resources: []string{"nodes"},
+				Verbs:     []string{"get", "watch", "list"},
+			},
+		},
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ClusterRole",
+			APIVersion: "rbac.authorization.k8s.io/v1beta1",
+		},
+	}
+	if _, err := clusterRole.Create(nodeReader); err != nil {
+		log.Warningf("Unable to create role 'node-reader': %s", err.Error())
+	}
+
 	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
 	hyperpilotRoleBinding := &rbac.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{Name: "hyperpilot-cluster-role"},
