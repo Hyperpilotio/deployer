@@ -1208,8 +1208,7 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		glog.V(1).Infof("Trying to recover template %s deployment from store: %+v",
-			templateDeployment.TemplateId, deployment)
+		glog.V(1).Infof("Recovered template %s deployment from store", templateDeployment.TemplateId)
 		server.Templates[templateDeployment.TemplateId] = deployment
 	}
 
@@ -1225,7 +1224,8 @@ func (server *Server) reloadClusterState() error {
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		deploymentName := storeDeployment.Name
-		glog.V(1).Infof("Trying to recover deployment from store: %+v", storeDeployment)
+		glog.Infof("Trying to recover deployment %s from store", deploymentName)
+		glog.V(2).Infof("Deployment found in store: %+v", deployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			// TODO: Remove failed stored deployments
 			continue
