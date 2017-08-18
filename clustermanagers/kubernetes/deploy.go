@@ -238,7 +238,8 @@ func populateNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
 	return nil
 }
 
-func uploadFiles(awsCluster *hpaws.AWSCluster,
+func uploadFiles(
+	awsCluster *hpaws.AWSCluster,
 	deployment *apis.Deployment,
 	uploadedFiles map[string]string,
 	bastionIp string, log *logging.Logger) error {
@@ -1489,10 +1490,11 @@ func (k8sDeployer *K8SDeployer) ReloadClusterState(storeInfo interface{}) error 
 	k8sDeployer.MasterIp = k8sStoreInfo.MasterIp
 	k8sDeployer.VpcPeeringConnectionId = k8sStoreInfo.VpcPeeringConnectionId
 
+	glog.Infof("Reloading kube config for %s...", k8sDeployer.AWSCluster.Name)
 	if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
-	glog.Infof("Downloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
+	glog.Infof("Reloaded %s kube config at %s", k8sDeployer.AWSCluster.Name, k8sDeployer.KubeConfigPath)
 
 	kubeConfig, err := clientcmd.BuildConfigFromFlags("", k8sDeployer.KubeConfigPath)
 	if err != nil {

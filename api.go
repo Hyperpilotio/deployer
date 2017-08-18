@@ -1264,6 +1264,15 @@ func (server *Server) reloadClusterState() error {
 			return fmt.Errorf("Error initialize %s deployer %s", deploymentName, err.Error())
 		}
 
+		storeClusterManager := deployer.NewStoreInfo()
+		if storeClusterManager != nil {
+			storeDeployment.ClusterManager = storeClusterManager
+			if err := deploymentStore.Load(storeDeployment.Name, storeDeployment); err != nil {
+				glog.Warningf("Skipping reloading deployment %s: Unable to load cluster store info: %s", deploymentName, err.Error())
+				continue
+			}
+		}
+
 		deploymentInfo := &DeploymentInfo{
 			Deployer:   deployer,
 			Deployment: deployment,
@@ -1282,15 +1291,6 @@ func (server *Server) reloadClusterState() error {
 				glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
 				continue
 			}
-		}
-
-		storeClusterManager := deployer.NewStoreInfo()
-		if storeClusterManager != nil {
-			if err := deploymentStore.Load(storeDeployment.Name, storeClusterManager); err != nil {
-				glog.Warningf("Skipping reloading because unable to load %s cluster store info: %s", deploymentName, err.Error())
-				continue
-			}
-			storeDeployment.ClusterManager = storeClusterManager
 		}
 
 		glog.Infof("Reloading cluster state for deployment: %s", deployment.Name)
