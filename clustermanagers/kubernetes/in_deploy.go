@@ -547,7 +547,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		log.Infof("%s deployment created", family)
 	}
 
-	err := funcs.LoopUntil(time.Minute*30, time.Second*20, func() (bool, error) {
+	err := funcs.LoopUntil(time.Minute*60, time.Second*20, func() (bool, error) {
 		deployments, listErr := deploy.List(metav1.ListOptions{})
 		if listErr != nil {
 			return false, errors.New("Unable to list deployments: " + listErr.Error())
