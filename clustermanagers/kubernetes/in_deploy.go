@@ -22,7 +22,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
-	extensions "k8s.io/client-go/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 )
 
@@ -485,7 +484,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 	deploy := k8sClient.Extensions().Deployments(namespace)
 	for _, mapping := range deployment.NodeMapping {
 		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
-
 		task, ok := tasks[mapping.Task]
 		if !ok {
 			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
@@ -495,6 +493,14 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		if deploySpec == nil {
 			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
 		}
+
+		if deploySpec.Labels == nil {
+			deploySpec.Labels = make(map[string]string)
+		}
+		if deploySpec.Spec.Template.Labels == nil {
+			deploySpec.Spec.Template.Labels = make(map[string]string)
+		}
+
 		family := task.Family
 		originalFamily := family
 		count, ok := taskCount[family]
@@ -541,7 +547,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		log.Infof("%s deployment created", family)
 	}
 
-	err := funcs.LoopUntil(time.Minute*20, time.Second*20, func() (bool, error) {
+	err := funcs.LoopUntil(time.Minute*30, time.Second*20, func() (bool, error) {
 		deployments, listErr := deploy.List(metav1.ListOptions{})
 		if listErr != nil {
 			return false, errors.New("Unable to list deployments: " + listErr.Error())
@@ -552,8 +558,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		}
 
 		for _, deployment := range deployments.Items {
-			conditions := deployment.Status.Conditions
-			if len(conditions) == 0 || conditions[len(conditions)-1].Type != extensions.DeploymentAvailable {
+			if deployment.Status.ReadyReplicas == 0 {
 				return false, nil
 			}
 		}
@@ -800,6 +805,13 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 	})
 	if err != nil {
 		log.Warningf("Unable to terminate EC2 instance: %s", err.Error())
+	}
+
+	for _, nodeInfo := range deployer.AWSCluster.NodeInfos {
+		nodeName := aws.StringValue(nodeInfo.Instance.PrivateDnsName)
+		if k8sClient.CoreV1().Nodes().Delete(nodeName, &metav1.DeleteOptions{}); err != nil {
+			log.Warningf("Unable to delete kubelet %s from api: %s", nodeName, err.Error())
+		}
 	}
 
 	err = ec2Svc.WaitUntilInstanceTerminated(&ec2.DescribeInstancesInput{
