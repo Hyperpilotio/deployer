@@ -399,7 +399,6 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	}
 
 	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
-		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
@@ -431,19 +430,6 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
-	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
-	if namespacesErr != nil {
-		if !skipDelete {
-			deleteInClusterDeploymentOnFailure(deployer)
-		}
-		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
-	}
-
-	namespace := deployer.getNamespace()
-	if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
-	}
-
 	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
 		if !skipDelete {
 			deleteInClusterDeploymentOnFailure(deployer)
@@ -547,6 +533,11 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		log.Infof("%s deployment created", family)
 	}
 
+	restartCount := deployer.Config.GetInt("restartCount")
+	if restartCount == 0 {
+		restartCount = 5
+	}
+
 	err := funcs.LoopUntil(time.Minute*60, time.Second*20, func() (bool, error) {
 		deployments, listErr := deploy.List(metav1.ListOptions{})
 		if listErr != nil {
@@ -555,6 +546,29 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 
 		if len(deployments.Items) != len(deployment.NodeMapping) {
 			return false, fmt.Errorf("Unexpected list of deployments: %d", len(deployments.Items))
+		}
+
+		pods, listErr := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{})
+		if listErr != nil {
+			return false, errors.New("Unable to list pods: " + listErr.Error())
+		}
+		for _, pod := range pods.Items {
+			switch pod.Status.Phase {
+			case "Pending":
+				for _, condition := range pod.Status.Conditions {
+					if condition.Reason == "Unschedulable" {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, condition.Message)
+					}
+				}
+			case "Running":
+				for _, containerStatus := range pod.Status.ContainerStatuses {
+					if containerStatus.RestartCount >= int32(restartCount) {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, containerStatus.State.Waiting.Message)
+					}
+				}
+			}
 		}
 
 		for _, deployment := range deployments.Items {
@@ -566,7 +580,7 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		return true, nil
 	})
 	if err != nil {
-		return fmt.Errorf("Unable to wait for deployments to be available")
+		return fmt.Errorf("Unable to wait for deployments to be available: %s", err.Error())
 	}
 
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
@@ -758,7 +772,9 @@ func deleteInClusterDeploymentOnFailure(deployer *InClusterK8SDeployer) {
 		return
 	}
 
-	deployer.DeleteDeployment()
+	go func() {
+		deployer.DeleteDeployment()
+	}()
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
