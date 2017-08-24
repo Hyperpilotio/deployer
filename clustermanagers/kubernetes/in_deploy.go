@@ -533,11 +533,8 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 		log.Infof("%s deployment created", family)
 	}
 
+	deployer.Config.SetDefault("restartCount", 5)
 	restartCount := deployer.Config.GetInt("restartCount")
-	if restartCount == 0 {
-		restartCount = 5
-	}
-
 	err := funcs.LoopUntil(time.Minute*60, time.Second*20, func() (bool, error) {
 		deployments, listErr := deploy.List(metav1.ListOptions{})
 		if listErr != nil {
