@@ -388,17 +388,8 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		return nil, errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	_, err = k8sClient.CoreV1().Namespaces().Create(&v1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: strings.ToLower(deployment.Name),
-		},
-	})
-	if err != nil {
-		deleteInClusterDeploymentOnFailure(deployer)
-		return nil, errors.New("Unable to create namespace for deployment: " + err.Error())
-	}
-
 	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
+		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
@@ -430,17 +421,21 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 }
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
+	if namespacesErr != nil {
+		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+	}
+
+	namespace := deployer.getNamespace()
+	if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
+	}
+
 	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
-		if !skipDelete {
-			deleteInClusterDeploymentOnFailure(deployer)
-		}
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	if err := deployer.deployServices(k8sClient); err != nil {
-		if !skipDelete {
-			deleteInClusterDeploymentOnFailure(deployer)
-		}
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
