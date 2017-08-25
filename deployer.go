@@ -13,6 +13,7 @@ import (
 func Run(fileConfig string) error {
 	viper := viper.New()
 	viper.SetConfigType("json")
+	viper.SetDefault("restartCount", 5)
 
 	if fileConfig == "" {
 		viper.SetConfigName("config")
