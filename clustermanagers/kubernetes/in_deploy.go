@@ -763,9 +763,7 @@ func deleteInClusterDeploymentOnFailure(deployer *InClusterK8SDeployer) {
 		return
 	}
 
-	go func() {
-		deployer.DeleteDeployment()
-	}()
+	deployer.DeleteDeployment()
 }
 
 // DeleteDeployment clean up the cluster from kubenetes.
