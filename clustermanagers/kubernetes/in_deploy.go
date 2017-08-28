@@ -11,13 +11,15 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/aws/aws-sdk-go/service/ec2"
+	"github.com/spf13/viper"
+
 	"github.com/hyperpilotio/deployer/apis"
 	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
 	logging "github.com/op/go-logging"
-	"github.com/spf13/viper"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
@@ -550,6 +552,12 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 					if condition.Reason == "Unschedulable" {
 						return false, fmt.Errorf("Unable to create %s deployment: %s",
 							pod.Name, condition.Message)
+					}
+				}
+				for _, containerStatus := range pod.Status.ContainerStatuses {
+					if containerStatus.State.Waiting.Reason == "ImagePullBackOff" {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, containerStatus.State.Waiting.Message)
 					}
 				}
 			case "Running":
