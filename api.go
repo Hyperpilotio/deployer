@@ -1224,6 +1224,7 @@ func (server *Server) reloadClusterState() error {
 	for _, deployment := range deployments.([]interface{}) {
 		storeDeployment := deployment.(*StoreDeployment)
 		deploymentName := storeDeployment.Name
+		glog.V(2).Infof("Deployment found in store: %+v", deployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
 			glog.V(1).Infof("Delete %s deployment in status: %s", deploymentName, storeDeployment.Status)
 			if err := deploymentStore.Delete(deploymentName); err != nil {
