@@ -8,7 +8,7 @@ import (
 	container "google.golang.org/api/container/v1"
 
 	"github.com/hyperpilotio/deployer/apis"
-	hpagcp "github.com/hyperpilotio/deployer/gcp"
+	hpgcp "github.com/hyperpilotio/deployer/gcp"
 )
 
 // NewDeployer return the GCP of Deployer
@@ -20,7 +20,7 @@ func NewDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDeployer
 
 	// TODO: api need pass param
 	clusterVersion := "1.6.9"
-	gcpProfile := &hpagcp.GCPProfile{
+	gcpProfile := &hpgcp.GCPProfile{
 		UserId:    "alan",
 		ProjectId: "test-179902",
 		Scopes: []string{
@@ -29,7 +29,7 @@ func NewDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDeployer
 		ServiceAccountPath: "/home/alan/test-13274590fb39.json",
 	}
 
-	gcpCluster := hpagcp.NewGCPCluster(deployment.Region, deployment.Name, clusterVersion, gcpProfile)
+	gcpCluster := hpgcp.NewGCPCluster(deployment.Region, deployment.Name, clusterVersion, gcpProfile)
 	deployer := &GCPDeployer{
 		Config:        config,
 		GCPCluster:    gcpCluster,
@@ -47,7 +47,7 @@ func (gcpDeployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string
 	deployment := gcpDeployer.Deployment
 	log := gcpDeployer.DeploymentLog.Logger
 
-	client, err := hpagcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
 	if err != nil {
 		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
