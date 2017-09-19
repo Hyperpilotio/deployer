@@ -1040,6 +1040,11 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
 
+	// TODO need use gcp database store
+	if deploymentInfo.Deployer.GetCluster().GetClusterType() == "GCP" {
+		return nil
+	}
+
 	var deploymentStore blobstore.BlobStore
 	if server.Config.GetBool("inCluster") {
 		deploymentStore = server.InClusterDeploymentStore

@@ -2,10 +2,16 @@ package gcpgke
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
+
+	"bitbucket.org/jpra1113/alango/funcs"
 
 	"github.com/hyperpilotio/go-utils/log"
+	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
+	compute "google.golang.org/api/compute/v1"
 	container "google.golang.org/api/container/v1"
 
 	"github.com/hyperpilotio/deployer/apis"
@@ -109,9 +115,9 @@ func deployCluster(gcpDeployer *GCPDeployer, uploadedFiles map[string]string) er
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
 
-	// if err := populateNodeInfos(ec2Svc, awsCluster); err != nil {
-	// 	return errors.New("Unable to populate node infos: " + err.Error())
-	// }
+	if err := populateNodeInfos(client, gcpCluster); err != nil {
+		return errors.New("Unable to populate node infos: " + err.Error())
+	}
 
 	return nil
 }
@@ -132,10 +138,9 @@ func deployKubernetes(client *http.Client, gcpDeployer *GCPDeployer) error {
 		initialNodeCount = deployNodeCount
 	}
 
-	// test createClusterRequest param
 	createClusterRequest := &container.CreateClusterRequest{
 		Cluster: &container.Cluster{
-			Name:              deployment.Name,
+			Name:              gcpCluster.ClusterId,
 			Zone:              gcpCluster.Zone,
 			Network:           "default",
 			LoggingService:    "logging.googleapis.com",
@@ -187,25 +192,68 @@ func deployKubernetes(client *http.Client, gcpDeployer *GCPDeployer) error {
 		},
 	}
 
-	resp, err := containerSrv.Projects.Zones.Clusters.
+	_, err = containerSrv.Projects.Zones.Clusters.
 		Create(gcpProfile.ProjectId, gcpCluster.Zone, createClusterRequest).Do()
 	if err != nil {
 		return errors.New("Unable to create deployment: " + err.Error())
 	}
-	log.Infof("%+v\n", resp)
 
-	// TODO WaitUntilStackCreateComplete
 	log.Info("Waiting until cluster is completed...")
+	if err := waitUntilClusterCreateComplete(containerSrv, gcpProfile.ProjectId, gcpCluster.Zone,
+		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
 
-	// if err := cfSvc.WaitUntilStackCreateComplete(describeStacksInput); err != nil {
-	// 	return errors.New("Unable to wait until stack complete: " + err.Error())
-	// }
-
+	log.Info("Kuberenete cluster completed")
 	// TODO DownloadKubeConfig
 	// if err := k8sDeployer.DownloadKubeConfig(); err != nil {
 	// 	return errors.New("Unable to download kubeconfig: " + err.Error())
 	// }
 	// log.Infof("Downloaded kube config at %s", k8sDeployer.KubeConfigPath)
+
+	return nil
+}
+
+func waitUntilClusterCreateComplete(
+	containerSrv *container.Service,
+	projectId string,
+	zone string,
+	clusterId string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		resp, err := containerSrv.Projects.Zones.Clusters.NodePools.
+			List(projectId, zone, clusterId).Do()
+		if err != nil {
+			return false, nil
+		}
+		if resp.NodePools[0].Status == "RUNNING" {
+			log.Info("Create cluster complete")
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error {
+	computeSrv, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	clusterFilter := fmt.Sprintf("(cluster-name eq %s)", gcpCluster.ClusterId)
+	resp, err := computeSrv.Instances.
+		List(gcpCluster.GCPProfile.ProjectId, gcpCluster.Zone).
+		Filter(clusterFilter).Do()
+
+	i := 1
+	for _, instance := range resp.Items {
+		nodeInfo := &hpgcp.NodeInfo{
+			Instance: instance,
+		}
+		gcpCluster.NodeInfos[i] = nodeInfo
+		i += 1
+	}
 
 	return nil
 }
