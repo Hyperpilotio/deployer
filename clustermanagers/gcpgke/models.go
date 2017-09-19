@@ -6,6 +6,7 @@ import (
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
+	"k8s.io/client-go/rest"
 )
 
 type GCPDeployer struct {
@@ -15,4 +16,7 @@ type GCPDeployer struct {
 	DeploymentLog *log.FileLog
 	Deployment    *apis.Deployment
 	Scheduler     *job.Scheduler
+
+	KubeConfigPath string
+	KubeConfig     *rest.Config
 }

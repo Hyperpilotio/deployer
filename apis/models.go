@@ -21,7 +21,7 @@ type ClusterDefinition struct {
 
 type GCPDefinition struct {
 	ClusterVersion string `form:"clusterVersion" json:"clusterVersion"`
-	ProjectId      string `form:"projectId" json:"projectId" binding:"required"`
+	ProjectId      string `form:"projectId" json:"projectId"`
 }
 
 type NodeMapping struct {
