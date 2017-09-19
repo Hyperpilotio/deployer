@@ -2,7 +2,7 @@ package kubernetes
 
 import (
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"

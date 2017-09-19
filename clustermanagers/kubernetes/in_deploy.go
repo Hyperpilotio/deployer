@@ -14,7 +14,8 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clusters"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
@@ -977,7 +978,7 @@ func (deployer *InClusterK8SDeployer) NewStoreInfo() interface{} {
 	return nil
 }
 
-func (deployer *InClusterK8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
+func (deployer *InClusterK8SDeployer) GetCluster() clusters.Cluster {
 	return deployer.AWSCluster
 }
 

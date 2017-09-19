@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/gcpgke"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/clusters"
+	"github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/pborman/uuid"
@@ -25,7 +27,7 @@ type Deployer interface {
 	GetStoreInfo() interface{}
 	NewStoreInfo() interface{}
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
-	GetAWSCluster() *aws.AWSCluster
+	GetCluster() clusters.Cluster
 	GetLog() *log.FileLog
 	GetScheduler() *job.Scheduler
 	SetScheduler(sheduler *job.Scheduler)
@@ -45,6 +47,7 @@ func NewDeployer(
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
+	cluster := clusters.NewCluster(config, deployType, awsProfile, deployment)
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
@@ -58,7 +61,9 @@ func NewDeployer(
 	case "ECS":
 		return awsecs.NewDeployer(config, awsProfile, deployment)
 	case "K8S":
-		return kubernetes.NewDeployer(config, awsProfile, deployment)
+		return kubernetes.NewDeployer(config, cluster, awsProfile, deployment)
+	case "GCP":
+		return gcpgke.NewDeployer(config, cluster, deployment)
 	default:
 		return nil, errors.New("Unsupported deploy type: " + deployType)
 	}

@@ -1,8 +1,8 @@
-package gcp
+package gcpgke
 
 import (
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/gcp"
+	"github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"

@@ -12,8 +12,9 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clusters"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
@@ -39,16 +40,19 @@ import (
 var publicPortType = 1
 
 // NewDeployer return the K8S of Deployer
-func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*K8SDeployer, error) {
+func NewDeployer(
+	config *viper.Viper,
+	cluster clusters.Cluster,
+	awsProfile *hpaws.AWSProfile,
+	deployment *apis.Deployment) (*K8SDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
 	deployer := &K8SDeployer{
 		Config:        config,
-		AWSCluster:    awsCluster,
+		AWSCluster:    cluster.(*hpaws.AWSCluster),
 		Deployment:    deployment,
 		DeploymentLog: log,
 		Services:      make(map[string]ServiceMapping),
@@ -1464,7 +1468,7 @@ func (k8sDeployer *K8SDeployer) UploadSshKeyToBastion() error {
 	return nil
 }
 
-func (k8sDeployer *K8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
+func (k8sDeployer *K8SDeployer) GetCluster() clusters.Cluster {
 	return k8sDeployer.AWSCluster
 }
 

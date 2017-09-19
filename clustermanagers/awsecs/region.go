@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"sort"
 
-	hpaws "github.com/hyperpilotio/deployer/aws"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
