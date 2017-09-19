@@ -5,8 +5,12 @@ import (
 	"io/ioutil"
 	"net/http"
 
+	"github.com/hyperpilotio/deployer/apis"
+	"github.com/spf13/viper"
+
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
+	container "google.golang.org/api/container/v1"
 )
 
 type GCPProfile struct {
@@ -28,13 +32,20 @@ type GCPCluster struct {
 	NodeInfos      map[int]*NodeInfo
 }
 
-func NewGCPCluster(zone string, name string, clusterVersion string, gcpProfile *GCPProfile) *GCPCluster {
+func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster {
 	return &GCPCluster{
-		Zone:           zone,
-		Name:           name,
-		ClusterVersion: clusterVersion,
-		GCPProfile:     gcpProfile,
-		NodeInfos:      make(map[int]*NodeInfo),
+		Zone:           deployment.Region,
+		Name:           deployment.Name,
+		ClusterVersion: deployment.KubernetesDeployment.GCPDefinition.ClusterVersion,
+		GCPProfile: &GCPProfile{
+			UserId:    deployment.UserId,
+			ProjectId: deployment.KubernetesDeployment.GCPDefinition.ProjectId,
+			Scopes: []string{
+				container.CloudPlatformScope,
+			},
+			ServiceAccountPath: config.GetString("gpcServiceAccountJSONFile"),
+		},
+		NodeInfos: make(map[int]*NodeInfo),
 	}
 }
 
@@ -50,4 +61,8 @@ func CreateClient(gcpProfile *GCPProfile, Zone string) (*http.Client, error) {
 	}
 
 	return conf.Client(oauth2.NoContext), nil
+}
+
+func (gcpCluster *GCPCluster) GetClusterType() string {
+	return "GCP"
 }

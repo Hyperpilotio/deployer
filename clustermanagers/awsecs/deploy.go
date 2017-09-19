@@ -15,13 +15,15 @@ import (
 	"github.com/aws/aws-sdk-go/service/ecs"
 	"github.com/aws/aws-sdk-go/service/iam"
 	"github.com/golang/glog"
+	logging "github.com/op/go-logging"
+	"github.com/spf13/viper"
+
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
+	"github.com/hyperpilotio/deployer/clusters"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
-	logging "github.com/op/go-logging"
-	"github.com/spf13/viper"
 )
 
 // NewDeployer return the EC2 of Deployer
@@ -87,7 +89,7 @@ func (ecsDeployer *ECSDeployer) ReloadClusterState(storeInfo interface{}) error 
 	return nil
 }
 
-func (ecsDeployer *ECSDeployer) GetAWSCluster() *hpaws.AWSCluster {
+func (ecsDeployer *ECSDeployer) GetCluster() clusters.Cluster {
 	return ecsDeployer.AWSCluster
 }
 

@@ -1,38 +1,32 @@
-package gcp
+package gcpgke
 
 import (
 	"errors"
+	"net/http"
 
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
 	"github.com/hyperpilotio/deployer/apis"
-	hpgcp "github.com/hyperpilotio/deployer/gcp"
+	"github.com/hyperpilotio/deployer/clusters"
+	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
+	"github.com/hyperpilotio/deployer/job"
 )
 
 // NewDeployer return the GCP of Deployer
-func NewDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDeployer, error) {
+func NewDeployer(
+	config *viper.Viper,
+	cluster clusters.Cluster,
+	deployment *apis.Deployment) (*GCPDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	// TODO: api need pass param
-	clusterVersion := "1.6.9"
-	gcpProfile := &hpgcp.GCPProfile{
-		UserId:    "alan",
-		ProjectId: "test-179902",
-		Scopes: []string{
-			container.CloudPlatformScope,
-		},
-		ServiceAccountPath: "/home/alan/test-13274590fb39.json",
-	}
-
-	gcpCluster := hpgcp.NewGCPCluster(deployment.Region, deployment.Name, clusterVersion, gcpProfile)
 	deployer := &GCPDeployer{
 		Config:        config,
-		GCPCluster:    gcpCluster,
+		GCPCluster:    cluster.(*hpgcp.GCPCluster),
 		Deployment:    deployment,
 		DeploymentLog: log,
 	}
@@ -42,25 +36,106 @@ func NewDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDeployer
 
 // CreateDeployment start a deployment
 func (gcpDeployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
+	if err := deployCluster(gcpDeployer, uploadedFiles); err != nil {
+		return nil, errors.New("Unable to deploy kubernetes: " + err.Error())
+	}
+
+	return nil, nil
+}
+
+func (gcpDeployer *GCPDeployer) DeployExtensions(extensions *apis.Deployment, mergedDeployment *apis.Deployment) error {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) UpdateDeployment(updateDeployment *apis.Deployment) error {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) DeleteDeployment() error {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) GetStoreInfo() interface{} {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) NewStoreInfo() interface{} {
+	return nil
+}
+
+func (gcpDeployer *GCPDeployer) GetCluster() clusters.Cluster {
+	return gcpDeployer.GCPCluster
+}
+
+func (gcpDeployer *GCPDeployer) GetLog() *log.FileLog {
+	return gcpDeployer.DeploymentLog
+}
+
+func (gcpDeployer *GCPDeployer) GetScheduler() *job.Scheduler {
+	return gcpDeployer.Scheduler
+}
+
+func (gcpDeployer *GCPDeployer) SetScheduler(sheduler *job.Scheduler) {
+	gcpDeployer.Scheduler = sheduler
+}
+
+func (gcpDeployer *GCPDeployer) GetServiceUrl(serviceName string) (string, error) {
+	return "", nil
+}
+
+func (gcpDeployer *GCPDeployer) GetServiceAddress(serviceName string) (*apis.ServiceAddress, error) {
+	return nil, nil
+}
+
+func (gcpDeployer *GCPDeployer) GetServiceMappings() (map[string]interface{}, error) {
+	return nil, nil
+}
+
+func deployCluster(gcpDeployer *GCPDeployer, uploadedFiles map[string]string) error {
+	gcpCluster := gcpDeployer.GCPCluster
+	// gcpProfile := gcpCluster.GCPProfile
+	// deployment := gcpDeployer.Deployment
+	// log := gcpDeployer.DeploymentLog.Logger
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	if err := deployKubernetes(client, gcpDeployer); err != nil {
+		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
+	}
+
+	// if err := populateNodeInfos(ec2Svc, awsCluster); err != nil {
+	// 	return errors.New("Unable to populate node infos: " + err.Error())
+	// }
+
+	return nil
+}
+
+func deployKubernetes(client *http.Client, gcpDeployer *GCPDeployer) error {
 	gcpCluster := gcpDeployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
 	deployment := gcpDeployer.Deployment
 	log := gcpDeployer.DeploymentLog.Logger
-
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
-	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
 	containerSrv, err := container.New(client)
 	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform container service: " + err.Error())
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+
+	initialNodeCount := 3
+	deployNodeCount := len(deployment.ClusterDefinition.Nodes)
+	if deployNodeCount > initialNodeCount {
+		initialNodeCount = deployNodeCount
 	}
 
 	// test createClusterRequest param
 	createClusterRequest := &container.CreateClusterRequest{
 		Cluster: &container.Cluster{
-			Name:              "cluster-1",
+			Name:              deployment.Name,
 			Zone:              gcpCluster.Zone,
 			Network:           "default",
 			LoggingService:    "logging.googleapis.com",
@@ -68,7 +143,7 @@ func (gcpDeployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string
 			NodePools: []*container.NodePool{
 				&container.NodePool{
 					Name:             "default-pool",
-					InitialNodeCount: int64(len(deployment.ClusterDefinition.Nodes)),
+					InitialNodeCount: int64(initialNodeCount),
 					Config: &container.NodeConfig{
 						MachineType: deployment.ClusterDefinition.Nodes[0].InstanceType,
 						ImageType:   "COS",
@@ -115,9 +190,22 @@ func (gcpDeployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string
 	resp, err := containerSrv.Projects.Zones.Clusters.
 		Create(gcpProfile.ProjectId, gcpCluster.Zone, createClusterRequest).Do()
 	if err != nil {
-		return nil, errors.New("Unable to create deployment: " + err.Error())
+		return errors.New("Unable to create deployment: " + err.Error())
 	}
 	log.Infof("%+v\n", resp)
 
-	return nil, nil
+	// TODO WaitUntilStackCreateComplete
+	log.Info("Waiting until cluster is completed...")
+
+	// if err := cfSvc.WaitUntilStackCreateComplete(describeStacksInput); err != nil {
+	// 	return errors.New("Unable to wait until stack complete: " + err.Error())
+	// }
+
+	// TODO DownloadKubeConfig
+	// if err := k8sDeployer.DownloadKubeConfig(); err != nil {
+	// 	return errors.New("Unable to download kubeconfig: " + err.Error())
+	// }
+	// log.Infof("Downloaded kube config at %s", k8sDeployer.KubeConfigPath)
+
+	return nil
 }

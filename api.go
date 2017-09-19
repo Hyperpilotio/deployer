@@ -18,10 +18,10 @@ import (
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/blobstore"
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/spf13/viper"
@@ -85,6 +85,10 @@ type StoreTemplateDeployment struct {
 
 func (deploymentInfo *DeploymentInfo) GetDeploymentType() string {
 	if deploymentInfo.Deployment.KubernetesDeployment != nil {
+		emptyGCPDefinition := apis.GCPDefinition{}
+		if deploymentInfo.Deployment.KubernetesDeployment.GCPDefinition != emptyGCPDefinition {
+			return "GCP"
+		}
 		return "K8S"
 	} else {
 		return "ECS"
@@ -181,9 +185,9 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 		ClusterManager: deploymentInfo.Deployer.GetStoreInfo(),
 	}
 
-	awsCluster := deploymentInfo.Deployer.GetAWSCluster()
-	if awsCluster.KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(awsCluster.KeyPair.KeyMaterial)
+	cluster := deploymentInfo.Deployer.GetCluster()
+	if cluster.(*hpaws.AWSCluster).KeyPair != nil {
+		storeDeployment.KeyMaterial = aws.StringValue(cluster.(*hpaws.AWSCluster).KeyPair.KeyMaterial)
 	}
 
 	return storeDeployment, nil
@@ -336,18 +340,28 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 		return
 	}
 
-	nodeInfo, nodeOk := deploymentInfo.Deployer.GetAWSCluster().NodeInfos[nodeId]
-	if !nodeOk {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find node in cluster",
-		})
-		return
+	// TODO abstrct nodeInfos
+	cluster := deploymentInfo.Deployer.GetCluster()
+	clusterType := cluster.GetClusterType()
+	publicDnsName := ""
+	switch clusterType {
+	case "AWS":
+		nodeInfo, nodeOk := cluster.(*hpaws.AWSCluster).NodeInfos[nodeId]
+		if !nodeOk {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": true,
+				"data":  "Unable to find node in cluster",
+			})
+			return
+		}
+		publicDnsName = nodeInfo.PublicDnsName
+	case "GCP":
+		// TODO
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  nodeInfo.PublicDnsName,
+		"data":  publicDnsName,
 	})
 }
 
@@ -826,9 +840,9 @@ func (server *Server) getPemFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		awsCluster := deploymentInfo.Deployer.GetAWSCluster()
-		if awsCluster != nil && awsCluster.KeyPair != nil {
-			privateKey := strings.Replace(*awsCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+		cluster := deploymentInfo.Deployer.GetCluster()
+		if cluster != nil && cluster.(*hpaws.AWSCluster).KeyPair != nil {
+			privateKey := strings.Replace(*cluster.(*hpaws.AWSCluster).KeyPair.KeyMaterial, "\\n", "\n", -1)
 			c.String(http.StatusOK, privateKey)
 			return
 		}
@@ -1284,12 +1298,19 @@ func (server *Server) reloadClusterState() error {
 		// Reload keypair
 		if !inCluster {
 			glog.Infof("Reloading key pair for deployment %s", deployment.Name)
-			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
-				if err := deploymentStore.Delete(deploymentName); err != nil {
-					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+
+			// TODO abstrct ReloadKeyPair
+			cluster := deploymentInfo.Deployer.GetCluster()
+			clusterType := cluster.GetClusterType()
+			switch clusterType {
+			case "AWS":
+				if err := cluster.(*hpaws.AWSCluster).ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+					if err := deploymentStore.Delete(deploymentName); err != nil {
+						glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
+					}
+					glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+					continue
 				}
-				glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-				continue
 			}
 		}
 
