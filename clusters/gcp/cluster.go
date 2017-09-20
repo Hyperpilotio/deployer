@@ -26,15 +26,15 @@ type GCPProfile struct {
 }
 
 type NodeInfo struct {
-	Instance      *compute.Instance
-	Arn           string
-	PublicDnsName string
-	PrivateIp     string
+	Instance  *compute.Instance
+	PublicIp  string
+	PrivateIp string
 }
 
 // GCPCluster stores the data of a google cloud platform backed cluster
 type GCPCluster struct {
 	Zone           string
+	Name           string
 	ClusterId      string
 	ClusterVersion string
 	GCPProfile     *GCPProfile
@@ -45,6 +45,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 	clusterId := CreateUniqueClusterId(deployment.Name)
 	return &GCPCluster{
 		Zone:           deployment.Region,
+		Name:           deployment.Name,
 		ClusterId:      clusterId,
 		ClusterVersion: deployment.KubernetesDeployment.GCPDefinition.ClusterVersion,
 		GCPProfile: &GCPProfile{
@@ -79,6 +80,6 @@ func (gcpCluster *GCPCluster) GetClusterType() string {
 }
 
 func CreateUniqueClusterId(deploymentName string) string {
-	randomId := strconv.FormatInt(time.Now().Unix(), 10)
-	return fmt.Sprintf("%s-%s", strings.Split(deploymentName, "-")[0], randomId)
+	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
+	return fmt.Sprintf("%s-%s", strings.Split(deploymentName, "-")[0], timeSeq)
 }
