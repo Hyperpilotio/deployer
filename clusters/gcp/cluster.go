@@ -49,8 +49,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 		ClusterId:      clusterId,
 		ClusterVersion: deployment.KubernetesDeployment.GCPDefinition.ClusterVersion,
 		GCPProfile: &GCPProfile{
-			UserId:    deployment.UserId,
-			ProjectId: deployment.KubernetesDeployment.GCPDefinition.ProjectId,
+			UserId: deployment.UserId,
 			Scopes: []string{
 				container.CloudPlatformScope,
 				compute.ComputeScope,

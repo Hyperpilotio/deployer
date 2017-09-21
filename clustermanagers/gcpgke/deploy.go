@@ -44,9 +44,16 @@ func NewDeployer(
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
+	gcpCluster := cluster.(*hpgcp.GCPCluster)
+	projectId, err := getProjectId(gcpCluster.GCPProfile.ServiceAccountPath)
+	if err != nil {
+		return nil, errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpCluster.GCPProfile.ProjectId = projectId
+
 	deployer := &GCPDeployer{
 		Config:        config,
-		GCPCluster:    cluster.(*hpgcp.GCPCluster),
+		GCPCluster:    gcpCluster,
 		Deployment:    deployment,
 		DeploymentLog: log,
 	}
@@ -808,4 +815,15 @@ func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error 
 	}
 
 	return nil
+}
+
+func getProjectId(serviceAccountPath string) (string, error) {
+	viper := viper.New()
+	viper.SetConfigType("json")
+	viper.SetConfigFile(serviceAccountPath)
+	err := viper.ReadInConfig()
+	if err != nil {
+		return "", err
+	}
+	return viper.GetString("project_id"), nil
 }
