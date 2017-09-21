@@ -7,8 +7,8 @@ import (
 
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
 	"github.com/hyperpilotio/deployer/clustermanagers/gcpgke"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/clusters"
 	"github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
@@ -51,7 +51,7 @@ func NewDeployer(
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
-			return kubernetes.NewInClusterDeployer(config, deployment)
+			return awsk8s.NewInClusterDeployer(config, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}
@@ -61,7 +61,7 @@ func NewDeployer(
 	case "ECS":
 		return awsecs.NewDeployer(config, awsProfile, deployment)
 	case "K8S":
-		return kubernetes.NewDeployer(config, cluster, awsProfile, deployment)
+		return awsk8s.NewDeployer(config, cluster, awsProfile, deployment)
 	case "GCP":
 		return gcpgke.NewDeployer(config, cluster, deployment)
 	default:

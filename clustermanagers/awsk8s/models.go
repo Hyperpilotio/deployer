@@ -1,4 +1,4 @@
-package kubernetes
+package awsk8s
 
 import (
 	"github.com/hyperpilotio/deployer/apis"
