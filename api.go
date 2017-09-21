@@ -20,7 +20,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	awsk8s "github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
@@ -867,7 +867,7 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 			return
 		}
 
-		kubeConfigPath := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetKubeConfigPath()
+		kubeConfigPath := deploymentInfo.Deployer.(*awsk8s.K8SDeployer).GetKubeConfigPath()
 		if kubeConfigPath != "" {
 			if b, err := ioutil.ReadFile(kubeConfigPath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{

@@ -1,4 +1,4 @@
-package kubernetes
+package awsk8s
 
 import (
 	"errors"
@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/hyperpilotio/deployer/apis"
+	k8sUtil "github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/clusters"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
@@ -426,13 +427,13 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
 	log := deployer.DeploymentLog.Logger
-	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
+	existingNamespaces, namespacesErr := k8sUtil.GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	namespace := deployer.getNamespace()
-	if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+	if err := k8sUtil.CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
 	}
 
@@ -820,7 +821,7 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
+	if err := k8sUtil.DeleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
