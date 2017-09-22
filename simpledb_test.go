@@ -7,9 +7,9 @@ import (
 
 	"github.com/hyperpilotio/blobstore"
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	awsk8s "github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 
 	"github.com/magiconair/properties/assert"
 	"github.com/spf13/viper"
@@ -18,7 +18,7 @@ import (
 var config *viper.Viper
 var deploymentStore blobstore.BlobStore
 var profileStore blobstore.BlobStore
-var k8sDeployer *kubernetes.K8SDeployer
+var k8sDeployer *awsk8s.K8SDeployer
 
 const (
 	TEST_USER_ID         = "alan"
