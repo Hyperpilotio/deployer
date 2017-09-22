@@ -6,10 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strconv"
 	"time"
 
-	compute "google.golang.org/api/compute/v1"
+	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
 	"github.com/hyperpilotio/deployer/apis"
@@ -17,12 +16,8 @@ import (
 	"github.com/hyperpilotio/deployer/clusters"
 	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
-	logging "github.com/op/go-logging"
-	"github.com/spf13/viper"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -77,8 +72,9 @@ func (deployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string) (
 	}
 
 	response := &CreateDeploymentResponse{
-		Name:     deployer.Deployment.Name,
-		Services: deployer.Services,
+		Name:      deployer.Deployment.Name,
+		ClusterId: deployer.GCPCluster.ClusterId,
+		Services:  deployer.Services,
 	}
 
 	return response, nil
@@ -128,11 +124,8 @@ func (deployer *GCPDeployer) DeployExtensions(
 
 // DeleteDeployment clean up the cluster from kubenetes.
 func (deployer *GCPDeployer) DeleteDeployment() error {
-	// gcpCluster := deployer.GCPCluster
-	// gcpProfile := gcpCluster.GCPProfile
 	deployment := deployer.Deployment
 	kubeConfig := deployer.KubeConfig
-	// deploymentName := gcpCluster.Name
 	log := deployer.DeploymentLog.Logger
 
 	// Deleting kubernetes deployment
@@ -141,44 +134,40 @@ func (deployer *GCPDeployer) DeleteDeployment() error {
 		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
-	// TODO gcp delete
+	if err := deployer.deleteDeployment(); err != nil {
+		log.Warningf("Unable to deleting %s deployment: %s", deployment.Name, err.Error())
+	}
 
 	return nil
 }
 
-func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error {
-	computeSrv, err := compute.New(client)
+func (deployer *GCPDeployer) deleteDeployment() error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	log := deployer.DeploymentLog.Logger
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
 	if err != nil {
-		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	resp, err := computeSrv.Instances.
-		List(gcpCluster.GCPProfile.ProjectId, gcpCluster.Zone).
+	containerSrv, err := container.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+	_, err = containerSrv.Projects.Zones.Clusters.
+		Delete(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
 		Do()
 	if err != nil {
-		return fmt.Errorf("Unable to %s list instances: %s", gcpCluster.ClusterId, err.Error())
+		return errors.New("Unable to delete cluster: " + err.Error())
 	}
 
-	clusterInstances := []*compute.Instance{}
-	for _, instance := range resp.Items {
-		for _, item := range instance.Metadata.Items {
-			if item.Key == "cluster-name" && *item.Value == gcpCluster.ClusterId {
-				clusterInstances = append(clusterInstances, instance)
-				break
-			}
-		}
+	log.Infof("Waiting until cluster('%s') to be delete completed...", gcpCluster.ClusterId)
+	if err := waitUntilClusterDeleteComplete(containerSrv, gcpProfile.ProjectId, gcpCluster.Zone,
+		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until %s cluster to be delete completed: %s\n",
+			gcpCluster.ClusterId, err.Error())
 	}
-
-	i := 1
-	for _, instance := range clusterInstances {
-		nodeInfo := &hpgcp.NodeInfo{
-			Instance:  instance,
-			PublicIp:  instance.NetworkInterfaces[0].AccessConfigs[0].NatIP,
-			PrivateIp: instance.NetworkInterfaces[0].NetworkIP,
-		}
-		gcpCluster.NodeInfos[i] = nodeInfo
-		i += 1
-	}
+	log.Infof("Delete cluster('%s') ok...", gcpCluster.ClusterId)
 
 	return nil
 }
@@ -213,6 +202,10 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
+	}
+
+	if err := tagNodeNetwork(client, gcpCluster, deployment, []string{"http-server"}, log); err != nil {
+		return errors.New("Unable to tag network Tags: " + err.Error())
 	}
 
 	return nil
@@ -347,32 +340,6 @@ func deleteDeploymentOnFailure(deployer *GCPDeployer) {
 	deployer.DeleteDeployment()
 }
 
-func tagKubeNodes(
-	k8sClient *k8s.Clientset,
-	gcpCluster *hpgcp.GCPCluster,
-	deployment *apis.Deployment,
-	log *logging.Logger) error {
-	nodeInfos := map[string]int{}
-	for _, mapping := range deployment.NodeMapping {
-		instanceName := gcpCluster.NodeInfos[mapping.Id].Instance.Name
-		nodeInfos[instanceName] = mapping.Id
-	}
-
-	for nodeName, id := range nodeInfos {
-		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
-			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
-			node.Labels["hyperpilot/deployment"] = gcpCluster.Name
-			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
-				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
-			}
-		} else {
-			return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
-		}
-	}
-
-	return nil
-}
-
 func (deployer *GCPDeployer) DownloadKubeConfig() error {
 	baseDir := deployer.GCPCluster.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
@@ -384,7 +351,7 @@ func (deployer *GCPDeployer) DownloadKubeConfig() error {
 
 	os.Remove(kubeconfigFilePath)
 
-	// TODO write kubeconfig to kubeconfigFilePath
+	// TODO write kubeconfig yaml to kubeconfigFilePath
 
 	deployer.KubeConfigPath = kubeconfigFilePath
 	return nil
@@ -428,26 +395,4 @@ func (deployer *GCPDeployer) GetStoreInfo() interface{} {
 
 func (deployer *GCPDeployer) NewStoreInfo() interface{} {
 	return nil
-}
-
-func waitUntilClusterCreateComplete(
-	containerSrv *container.Service,
-	projectId string,
-	zone string,
-	clusterId string,
-	timeout time.Duration,
-	log *logging.Logger) error {
-	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		resp, err := containerSrv.Projects.Zones.Clusters.NodePools.
-			List(projectId, zone, clusterId).
-			Do()
-		if err != nil {
-			return false, nil
-		}
-		if resp.NodePools[0].Status == "RUNNING" {
-			log.Info("Create cluster complete")
-			return true, nil
-		}
-		return false, nil
-	})
 }

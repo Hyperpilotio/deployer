@@ -29,6 +29,7 @@ type GCPDeployer struct {
 }
 
 type CreateDeploymentResponse struct {
-	Name     string                    `json:"name"`
-	Services map[string]ServiceMapping `json:"services"`
+	Name      string                    `json:"name"`
+	ClusterId string                    `json:"clusterId"`
+	Services  map[string]ServiceMapping `json:"services"`
 }
