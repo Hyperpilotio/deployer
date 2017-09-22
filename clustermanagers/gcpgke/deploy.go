@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/spf13/viper"
@@ -98,6 +99,7 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
+	deployer.recordPublicEndpoints()
 
 	return nil
 }
@@ -203,6 +205,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.recordPublicEndpoints()
 
 	if err := tagNodeNetwork(client, gcpCluster, deployment, []string{"http-server"}, log); err != nil {
 		return errors.New("Unable to tag network Tags: " + err.Error())
@@ -338,6 +341,32 @@ func deleteDeploymentOnFailure(deployer *GCPDeployer) {
 	}
 
 	deployer.DeleteDeployment()
+}
+
+func (deployer *GCPDeployer) recordPublicEndpoints() {
+	deployment := deployer.Deployment
+	deployer.Services = map[string]ServiceMapping{}
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
+		for _, container := range task.Deployment.Spec.Template.Spec.Containers {
+			hostPort := container.Ports[0].HostPort
+			taskFamilyName := task.Family
+			for _, nodeMapping := range deployment.NodeMapping {
+				if nodeMapping.Task == taskFamilyName {
+					nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
+					if ok {
+						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
+						servicePort := strconv.FormatInt(int64(hostPort), 10)
+						serviceMapping := ServiceMapping{
+							NodeId:    nodeMapping.Id,
+							NodeName:  nodeInfo.Instance.Name,
+							PublicUrl: serviceName + ":" + servicePort,
+						}
+						deployer.Services[taskFamilyName] = serviceMapping
+					}
+				}
+			}
+		}
+	}
 }
 
 func (deployer *GCPDeployer) DownloadKubeConfig() error {
