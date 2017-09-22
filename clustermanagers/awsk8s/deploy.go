@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1089,7 +1088,7 @@ func (deployer *K8SDeployer) GetServiceMappings() (map[string]interface{}, error
 	serviceMappings := make(map[string]interface{})
 	for serviceName, serviceMapping := range deployer.Services {
 		if serviceMapping.NodeId == 0 {
-			serviceNodeId, err := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			serviceNodeId, err := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			if err != nil {
 				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
 			}
@@ -1100,35 +1099,6 @@ func (deployer *K8SDeployer) GetServiceMappings() (map[string]interface{}, error
 	}
 
 	return serviceMappings, nil
-}
-
-// findNodeIdFromServiceName finds the node id that should be running this service
-func findNodeIdFromServiceName(deployment *apis.Deployment, serviceName string) (int, error) {
-	// if a service name contains a number (e.g: benchmark-agent-2), we assume
-	// it's the second benchmark agent from the mapping. Since we should be sorting
-	// the node ids when we deploy them, we should always assign the same service name
-	// for the same app running on the same node.
-	parts := strings.Split(serviceName, "-")
-	count := 1
-	realServiceName := serviceName
-	if len(parts) > 0 {
-		if nth, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
-			count = nth
-			realServiceName = strings.Join(parts[:len(parts)-1], "-")
-		}
-	}
-	sort.Sort(deployment.NodeMapping)
-	current := 0
-	for _, mapping := range deployment.NodeMapping {
-		if mapping.Task == realServiceName {
-			current += 1
-			if current == count {
-				return mapping.Id, nil
-			}
-		}
-	}
-
-	return 0, errors.New("Unable to find service in mappings")
 }
 
 // GetServiceAddress return ServiceAddress object
@@ -1175,7 +1145,7 @@ func (deployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 	for _, service := range services.Items {
 		if (service.ObjectMeta.Name == serviceName || service.ObjectMeta.Name == serviceName+"-publicport0") &&
 			string(service.Spec.Type) == "LoadBalancer" {
-			nodeId, _ := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			nodeId, _ := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			port := service.Spec.Ports[0].Port
 			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
 			serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10)

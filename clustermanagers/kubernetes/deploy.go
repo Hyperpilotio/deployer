@@ -495,3 +495,32 @@ func TagKubeNodes(
 
 	return nil
 }
+
+// FindNodeIdFromServiceName finds the node id that should be running this service
+func FindNodeIdFromServiceName(deployment *apis.Deployment, serviceName string) (int, error) {
+	// if a service name contains a number (e.g: benchmark-agent-2), we assume
+	// it's the second benchmark agent from the mapping. Since we should be sorting
+	// the node ids when we deploy them, we should always assign the same service name
+	// for the same app running on the same node.
+	parts := strings.Split(serviceName, "-")
+	count := 1
+	realServiceName := serviceName
+	if len(parts) > 0 {
+		if nth, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+			count = nth
+			realServiceName = strings.Join(parts[:len(parts)-1], "-")
+		}
+	}
+	sort.Sort(deployment.NodeMapping)
+	current := 0
+	for _, mapping := range deployment.NodeMapping {
+		if mapping.Task == realServiceName {
+			current += 1
+			if current == count {
+				return mapping.Id, nil
+			}
+		}
+	}
+
+	return 0, errors.New("Unable to find service in mappings")
+}

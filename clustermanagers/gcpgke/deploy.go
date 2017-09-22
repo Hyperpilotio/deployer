@@ -19,6 +19,7 @@ import (
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -403,18 +404,89 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 }
 
 func (deployer *GCPDeployer) GetServiceMappings() (map[string]interface{}, error) {
-	// TODO
-	return nil, nil
+	nodeNameInfos := map[string]string{}
+	if len(deployer.GCPCluster.NodeInfos) > 0 {
+		for id, nodeInfo := range deployer.GCPCluster.NodeInfos {
+			nodeNameInfos[strconv.Itoa(id)] = nodeInfo.Instance.Name
+		}
+	} else {
+		k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+		if err != nil {
+			return nil, errors.New("Unable to connect to Kubernetes: " + err.Error())
+		}
+
+		nodes, nodeError := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+		if nodeError != nil {
+			return nil, fmt.Errorf("Unable to list nodes: %s", nodeError.Error())
+		}
+
+		for _, node := range nodes.Items {
+			nodeNameInfos[node.Labels["hyperpilot/node-id"]] = node.Name
+		}
+	}
+
+	serviceMappings := make(map[string]interface{})
+	for serviceName, serviceMapping := range deployer.Services {
+		if serviceMapping.NodeId == 0 {
+			serviceNodeId, err := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
+			if err != nil {
+				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
+			}
+			serviceMapping.NodeId = serviceNodeId
+		}
+		serviceMapping.NodeName = nodeNameInfos[strconv.Itoa(serviceMapping.NodeId)]
+		serviceMappings[serviceName] = serviceMapping
+	}
+
+	return serviceMappings, nil
 }
 
 // GetServiceAddress return ServiceAddress object
 func (deployer *GCPDeployer) GetServiceAddress(serviceName string) (*apis.ServiceAddress, error) {
-	// TODO
+	for _, task := range deployer.Deployment.KubernetesDeployment.Kubernetes {
+		if task.Family == serviceName {
+			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
+				for _, nodeMapping := range deployer.Deployment.NodeMapping {
+					if nodeMapping.Task == serviceName {
+						nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
+						if ok {
+							return &apis.ServiceAddress{
+								Host: nodeInfo.Instance.Name,
+								Port: container.Ports[0].HostPort,
+							}, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return nil, errors.New("Service not found in endpoints")
 }
 
 func (deployer *GCPDeployer) GetServiceUrl(serviceName string) (string, error) {
-	// TODO
+	if info, ok := deployer.Services[serviceName]; ok {
+		return info.PublicUrl, nil
+	}
+
+	for _, task := range deployer.Deployment.KubernetesDeployment.Kubernetes {
+		if task.Family == serviceName {
+			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
+				hostPort := container.Ports[0].HostPort
+				for _, nodeMapping := range deployer.Deployment.NodeMapping {
+					if nodeMapping.Task == serviceName {
+						nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
+						if ok {
+							serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
+							servicePort := strconv.FormatInt(int64(hostPort), 10)
+							return serviceName + ":" + servicePort, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return "", errors.New("Service not found in endpoints")
 }
 
