@@ -1013,7 +1013,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 
 	for _, service := range services.Items {
 		if service.ObjectMeta.Name == serviceName {
-			nodeId, _ := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			nodeId, _ := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			port := service.Spec.Ports[0].Port
 			serviceUrl := serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10)
 			deployer.Services[serviceName] = ServiceMapping{
@@ -1091,7 +1091,7 @@ func (deployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface
 	serviceMappings := make(map[string]interface{})
 	for serviceName, serviceMapping := range deployer.Services {
 		if serviceMapping.NodeId == 0 {
-			serviceNodeId, err := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			serviceNodeId, err := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			if err != nil {
 				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
 			}
