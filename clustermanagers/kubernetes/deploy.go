@@ -40,8 +40,6 @@ func DeployKubernetesObjects(
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
-	// k8sDeployer.recordPublicEndpoints(k8sClient)
-
 	return nil
 }
 
@@ -99,12 +97,6 @@ func DeployServices(
 		if deploySpec.Spec.Selector != nil {
 			deploySpec.Spec.Selector.MatchLabels = deploySpec.Spec.Template.Labels
 		}
-
-		// Public Url will be tagged later in recordPublicEndpoint post deployment
-		// k8sDeployer.Services[family] = ServiceMapping{
-		// 	NodeId: mapping.Id,
-		// }
-
 		taskCount[originalFamily] = count
 
 		// Assigning Pods to Nodes

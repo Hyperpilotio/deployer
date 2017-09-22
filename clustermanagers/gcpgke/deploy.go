@@ -195,7 +195,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	if err := tagKubeNodes(k8sClient, gcpCluster, deployment, log); err != nil {
-		// deleteDeploymentOnFailure(k8sDeployer)
+		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 

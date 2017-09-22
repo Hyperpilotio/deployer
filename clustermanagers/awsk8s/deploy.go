@@ -125,6 +125,7 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
+	deployer.recordPublicEndpoints(k8sClient)
 
 	return nil
 }
@@ -284,6 +285,7 @@ func deployCluster(deployer *K8SDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.recordPublicEndpoints(k8sClient)
 
 	return nil
 }
