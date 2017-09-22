@@ -6,16 +6,24 @@ import:
   - aws
   - aws/credentials
   - aws/session
+  - service/autoscaling
+  - service/cloudformation
   - service/cloudwatchlogs
   - service/ec2
   - service/ecs
+  - service/elb
   - service/iam
 - package: github.com/gin-gonic/gin
   version: ~1.1.4
 - package: github.com/golang/glog
-- package: github.com/spf13/viper
-- package: github.com/pkg/sftp
-- package: k8s.io/apimachinery
-- package: k8s.io/client-go
 - package: github.com/hyperpilotio/blobstore
 - package: github.com/hyperpilotio/go-utils
+- package: github.com/op/go-logging
+- package: github.com/pborman/uuid
+- package: github.com/pkg/sftp
+- package: github.com/spf13/viper
+- package: golang.org/x/crypto
+- package: golang.org/x/oauth2
+- package: google.golang.org/api
+- package: k8s.io/apimachinery
+- package: k8s.io/client-go
