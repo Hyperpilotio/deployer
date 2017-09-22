@@ -819,19 +819,7 @@ func tagKubeNodes(
 		nodeInfos[aws.StringValue(privateDnsName)] = mapping.Id
 	}
 
-	for nodeName, id := range nodeInfos {
-		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
-			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
-			node.Labels["hyperpilot/deployment"] = awsCluster.Name
-			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
-				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
-			}
-		} else {
-			return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
-		}
-	}
-
-	return nil
+	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, nodeInfos, log)
 }
 
 func (deployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {

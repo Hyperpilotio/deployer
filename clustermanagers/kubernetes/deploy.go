@@ -483,3 +483,23 @@ func GetNamespace(objectMeta metav1.ObjectMeta) string {
 
 	return namespace
 }
+
+func TagKubeNodes(
+	k8sClient *k8s.Clientset,
+	deploymentName string,
+	nodeInfos map[string]int,
+	log *logging.Logger) error {
+	for nodeName, id := range nodeInfos {
+		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
+			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
+			node.Labels["hyperpilot/deployment"] = deploymentName
+			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
+				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
+			}
+		} else {
+			return fmt.Errorf("Unable to get Kubernetes node by name %s: %s", nodeName, err.Error())
+		}
+	}
+
+	return nil
+}
