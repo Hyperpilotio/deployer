@@ -211,10 +211,10 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to download ssh key: " + err.Error())
 	}
 
-	// if err := deployer.uploadFiles(uploadedFiles); err != nil {
-	// 	deleteDeploymentOnFailure(deployer)
-	// 	return errors.New("Unable to upload files to cluster: " + err.Error())
-	// }
+	if err := deployer.uploadFiles(uploadedFiles); err != nil {
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable to upload files to cluster: " + err.Error())
+	}
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
@@ -402,14 +402,10 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 		return nil
 	}
 
-	userName := strings.ToLower(gcpCluster.Name)
+	userName := strings.ToLower(gcpCluster.GCPProfile.UserId)
 	clientConfig, clientConfigErr := gcpCluster.SshConfig(userName)
 	if clientConfigErr != nil {
 		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
-	}
-
-	for _, deployFile := range deployment.Files {
-		deployFile.Path = strings.Replace(deployFile.Path, "@deploymentId", userName, -1)
 	}
 
 	for _, nodeInfo := range gcpCluster.NodeInfos {
