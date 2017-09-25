@@ -265,7 +265,7 @@ func deployCluster(deployer *K8SDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
-	if err := common.UploadFiles(awsCluster, deployment, uploadedFiles, deployer.BastionIp, log); err != nil {
+	if err := deployer.uploadFiles(uploadedFiles); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
 	}
@@ -916,6 +916,29 @@ func (deployer *K8SDeployer) DownloadKubeConfig() error {
 	}
 
 	deployer.KubeConfigPath = kubeconfigFilePath
+	return nil
+}
+
+func (deployer *K8SDeployer) uploadFiles(uploadedFiles map[string]string) error {
+	awsCluster := deployer.AWSCluster
+	deployment := deployer.Deployment
+	bastionIp := deployer.BastionIp
+	log := deployer.GetLog().Logger
+	if len(deployment.Files) == 0 {
+		return nil
+	}
+
+	clientConfig, clientConfigErr := awsCluster.SshConfig("ubuntu")
+	if clientConfigErr != nil {
+		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
+	}
+
+	for _, nodeInfo := range awsCluster.NodeInfos {
+		sshClient := common.NewSshClient(nodeInfo.PrivateIp+":22", clientConfig, bastionIp+":22")
+		return common.UploadFiles(sshClient, deployment, uploadedFiles, log)
+	}
+	log.Info("Uploaded all files")
+
 	return nil
 }
 

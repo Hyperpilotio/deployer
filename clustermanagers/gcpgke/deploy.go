@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -16,6 +18,7 @@ import (
 	k8sUtil "github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/clusters"
 	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
+	"github.com/hyperpilotio/deployer/common"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 
@@ -172,6 +175,8 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	}
 	log.Infof("Delete cluster('%s') ok...", gcpCluster.ClusterId)
 
+	// TODO delete project metadata public key
+
 	return nil
 }
 
@@ -184,6 +189,12 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
+	if keyOutput, err := hpgcp.CreateKeypair(gcpCluster.ClusterId); err != nil {
+		return errors.New("Unable to create key pair: " + err.Error())
+	} else {
+		gcpCluster.KeyPair = keyOutput
+	}
+
 	if err := deployKubernetes(client, deployer); err != nil {
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
@@ -191,6 +202,19 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	if err := populateNodeInfos(client, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
+
+	if err := tagPublicKey(client, gcpCluster, log); err != nil {
+		return errors.New("Unable to tag network Tags: " + err.Error())
+	}
+
+	if err := deployer.DownloadSSHKey(); err != nil {
+		return errors.New("Unable to download ssh key: " + err.Error())
+	}
+
+	// if err := deployer.uploadFiles(uploadedFiles); err != nil {
+	// 	deleteDeploymentOnFailure(deployer)
+	// 	return errors.New("Unable to upload files to cluster: " + err.Error())
+	// }
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
@@ -370,6 +394,33 @@ func (deployer *GCPDeployer) recordPublicEndpoints() {
 	}
 }
 
+func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error {
+	gcpCluster := deployer.GCPCluster
+	deployment := deployer.Deployment
+	log := deployer.GetLog().Logger
+	if len(deployment.Files) == 0 {
+		return nil
+	}
+
+	userName := strings.ToLower(gcpCluster.Name)
+	clientConfig, clientConfigErr := gcpCluster.SshConfig(userName)
+	if clientConfigErr != nil {
+		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
+	}
+
+	for _, deployFile := range deployment.Files {
+		deployFile.Path = strings.Replace(deployFile.Path, "@deploymentId", userName, -1)
+	}
+
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		sshClient := common.NewSshClient(nodeInfo.PublicIp+":22", clientConfig, "")
+		return common.UploadFiles(sshClient, deployment, uploadedFiles, log)
+	}
+	log.Info("Uploaded all files")
+
+	return nil
+}
+
 func (deployer *GCPDeployer) DownloadKubeConfig() error {
 	baseDir := deployer.GCPCluster.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
@@ -384,6 +435,24 @@ func (deployer *GCPDeployer) DownloadKubeConfig() error {
 	// TODO write kubeconfig yaml to kubeconfigFilePath
 
 	deployer.KubeConfigPath = kubeconfigFilePath
+	return nil
+}
+
+func (deployer *GCPDeployer) DownloadSSHKey() error {
+	baseDir := deployer.GCPCluster.Name + "_sshkey"
+	basePath := "/tmp/" + baseDir
+	sshKeyFilePath := basePath + "/" + deployer.GCPCluster.KeyName() + ".pem"
+	if _, err := os.Stat(basePath); os.IsNotExist(err) {
+		os.Mkdir(basePath, os.ModePerm)
+	}
+	os.Remove(sshKeyFilePath)
+
+	privateKey := strings.Replace(deployer.GCPCluster.KeyPair.Pem, "\\n", "\n", -1)
+	if err := ioutil.WriteFile(sshKeyFilePath, []byte(privateKey), 0400); err != nil {
+		return fmt.Errorf("Unable to create %s sshKey file: %s",
+			deployer.GCPCluster.KeyPair.KeyName, err.Error())
+	}
+
 	return nil
 }
 
