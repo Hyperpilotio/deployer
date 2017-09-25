@@ -134,9 +134,9 @@ func tagPublicKey(
 	sshKeyVals := []string{}
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		sshKeyVals = append(sshKeyVals, fmt.Sprintf("%s:%s %s@%s",
-			strings.ToLower(gcpCluster.Name),
+			gcpCluster.GCPProfile.UserId,
 			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
-			strings.ToLower(gcpCluster.Name),
+			gcpCluster.GCPProfile.UserId,
 			nodeInfo.Instance.Name))
 	}
 
