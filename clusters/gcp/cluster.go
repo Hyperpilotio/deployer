@@ -1,6 +1,10 @@
 package gcp
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -12,6 +16,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/spf13/viper"
 
+	"golang.org/x/crypto/ssh"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
@@ -23,6 +28,13 @@ type GCPProfile struct {
 	ProjectId          string
 	Scopes             []string
 	ServiceAccountPath string
+}
+
+type GCPKeyPairOutput struct {
+	KeyName    string
+	PrivateKey *rsa.PrivateKey
+	Pem        string
+	Pub        string
 }
 
 type NodeInfo struct {
@@ -38,6 +50,7 @@ type GCPCluster struct {
 	ClusterId      string
 	ClusterVersion string
 	GCPProfile     *GCPProfile
+	KeyPair        *GCPKeyPairOutput
 	NodeInfos      map[int]*NodeInfo
 }
 
@@ -74,8 +87,52 @@ func CreateClient(gcpProfile *GCPProfile, Zone string) (*http.Client, error) {
 	return conf.Client(oauth2.NoContext), nil
 }
 
+func CreateKeypair(keyName string) (*GCPKeyPairOutput, error) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, errors.New("Unable to create private key: " + err.Error())
+	}
+
+	publicKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
+	if err != nil {
+		return nil, errors.New("Unable to create public key: " + err.Error())
+	}
+
+	return &GCPKeyPairOutput{
+		KeyName:    keyName,
+		PrivateKey: privateKey,
+		Pem: string(pem.EncodeToMemory(
+			&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+			})),
+		Pub: string(ssh.MarshalAuthorizedKey(publicKey)),
+	}, nil
+}
+
+func (gcpCluster *GCPCluster) SshConfig(user string) (*ssh.ClientConfig, error) {
+	privateKey := strings.Replace(gcpCluster.KeyPair.Pem, "\\n", "\n", -1)
+	signer, err := ssh.ParsePrivateKey([]byte(privateKey))
+	if err != nil {
+		return nil, errors.New("Unable to parse private key: " + err.Error())
+	}
+
+	clientConfig := &ssh.ClientConfig{
+		User: user,
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(signer),
+		},
+	}
+
+	return clientConfig, nil
+}
+
 func (gcpCluster *GCPCluster) GetClusterType() string {
 	return "GCP"
+}
+
+func (gcpCluster *GCPCluster) KeyName() string {
+	return gcpCluster.Name + "-key"
 }
 
 func CreateUniqueClusterId(deploymentName string) string {

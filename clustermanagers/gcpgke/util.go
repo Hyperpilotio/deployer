@@ -104,6 +104,58 @@ func tagNodeNetwork(
 	return nil
 }
 
+func tagPublicKey(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	log *logging.Logger) error {
+	computeSrv, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	resp, err := computeSrv.Projects.
+		Get(gcpCluster.GCPProfile.ProjectId).
+		Do()
+	if err != nil {
+		return errors.New("Unable to get projects metadata: " + err.Error())
+	}
+
+	metadata := *resp.CommonInstanceMetadata
+	orignalKeyVal := ""
+	sshKeyItemIndex := -1
+	for i, item := range metadata.Items {
+		if item.Key == "sshKeys" {
+			orignalKeyVal = *item.Value
+			sshKeyItemIndex = i
+			break
+		}
+	}
+
+	sshKeyVals := []string{}
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		sshKeyVals = append(sshKeyVals, fmt.Sprintf("%s:%s %s@%s",
+			strings.ToLower(gcpCluster.Name),
+			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
+			strings.ToLower(gcpCluster.Name),
+			nodeInfo.Instance.Name))
+	}
+
+	keyVal := orignalKeyVal
+	for _, nodeSshKeyVal := range sshKeyVals {
+		keyVal = keyVal + "\n" + nodeSshKeyVal
+	}
+	metadata.Items[sshKeyItemIndex].Value = &keyVal
+
+	_, err = computeSrv.Projects.
+		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, &metadata).
+		Do()
+	if err != nil {
+		return errors.New("Unable to set public key to projects metadata: " + err.Error())
+	}
+
+	return nil
+}
+
 func getProjectId(serviceAccountPath string) (string, error) {
 	viper := viper.New()
 	viper.SetConfigType("json")
