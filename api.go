@@ -1270,19 +1270,13 @@ func (server *Server) reloadClusterState() error {
 		// Reload keypair
 		if !inCluster {
 			glog.Infof("Reloading key pair for deployment %s", deployment.Name)
-
-			// TODO abstrct ReloadKeyPair
 			cluster := deploymentInfo.Deployer.GetCluster()
-			clusterType := cluster.GetClusterType()
-			switch clusterType {
-			case "AWS":
-				if err := cluster.(*hpaws.AWSCluster).ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
-					if err := deploymentStore.Delete(deploymentName); err != nil {
-						glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
-					}
-					glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
-					continue
+			if err := cluster.ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+				if err := deploymentStore.Delete(deploymentName); err != nil {
+					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
 				}
+				glog.Warningf("Skipping reloading because unable to load %s keyPair: %s", deploymentName, err.Error())
+				continue
 			}
 		}
 

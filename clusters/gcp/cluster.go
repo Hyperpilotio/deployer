@@ -127,6 +127,15 @@ func (gcpCluster *GCPCluster) SshConfig(user string) (*ssh.ClientConfig, error) 
 	return clientConfig, nil
 }
 
+// ReloadKeyPair reload KeyPair by keyName
+func (gcpCluster *GCPCluster) ReloadKeyPair(keyMaterial string) error {
+	gcpCluster.KeyPair = &GCPKeyPairOutput{
+		KeyName: gcpCluster.KeyName(),
+		Pem:     keyMaterial,
+	}
+	return nil
+}
+
 func (gcpCluster *GCPCluster) GetClusterType() string {
 	return "GCP"
 }
