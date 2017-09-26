@@ -108,50 +108,80 @@ func tagPublicKey(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
 	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
 	computeSrv, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	resp, err := computeSrv.Projects.
-		Get(gcpCluster.GCPProfile.ProjectId).
-		Do()
-	if err != nil {
-		return errors.New("Unable to get projects metadata: " + err.Error())
-	}
-
-	metadata := *resp.CommonInstanceMetadata
-	orignalKeyVal := ""
-	sshKeyItemIndex := -1
-	for i, item := range metadata.Items {
-		if item.Key == "sshKeys" {
-			orignalKeyVal = *item.Value
-			sshKeyItemIndex = i
-			break
+	var errBool bool
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		instanceName := nodeInfo.Instance.Name
+		newMetadata := *nodeInfo.Instance.Metadata
+		keyVal := fmt.Sprintf("%s:%s %s@%s",
+			gcpCluster.GCPProfile.ServiceAccount,
+			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
+			gcpCluster.GCPProfile.ServiceAccount,
+			instanceName)
+		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
+			Key:   "sshKeys",
+			Value: &keyVal,
+		})
+		_, err := computeSrv.Instances.
+			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
+			Do()
+		if err != nil {
+			errBool = true
 		}
 	}
-
-	sshKeyVals := []string{}
-	for _, nodeInfo := range gcpCluster.NodeInfos {
-		sshKeyVals = append(sshKeyVals, fmt.Sprintf("%s:%s %s@%s",
-			gcpCluster.GCPProfile.UserId,
-			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
-			gcpCluster.GCPProfile.UserId,
-			nodeInfo.Instance.Name))
+	if errBool {
+		return errors.New("Unable to tag sshKeys for all node")
 	}
 
-	keyVal := orignalKeyVal
-	for _, nodeSshKeyVal := range sshKeyVals {
-		keyVal = keyVal + "\n" + nodeSshKeyVal
-	}
-	metadata.Items[sshKeyItemIndex].Value = &keyVal
+	// computeSrv, err := compute.New(client)
+	// if err != nil {
+	// 	return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	// }
 
-	_, err = computeSrv.Projects.
-		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, &metadata).
-		Do()
-	if err != nil {
-		return errors.New("Unable to set public key to projects metadata: " + err.Error())
-	}
+	// resp, err := computeSrv.Projects.
+	// 	Get(gcpCluster.GCPProfile.ProjectId).
+	// 	Do()
+	// if err != nil {
+	// 	return errors.New("Unable to get projects metadata: " + err.Error())
+	// }
+
+	// metadata := *resp.CommonInstanceMetadata
+	// orignalKeyVal := ""
+	// sshKeyItemIndex := -1
+	// for i, item := range metadata.Items {
+	// 	if item.Key == "sshKeys" {
+	// 		orignalKeyVal = *item.Value
+	// 		sshKeyItemIndex = i
+	// 		break
+	// 	}
+	// }
+
+	// sshKeyVals := []string{}
+	// for _, nodeInfo := range gcpCluster.NodeInfos {
+	// 	sshKeyVals = append(sshKeyVals, fmt.Sprintf("%s:%s %s@%s",
+	// 		gcpCluster.GCPProfile.ServiceAccount,
+	// 		strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
+	// 		gcpCluster.GCPProfile.ServiceAccount,
+	// 		nodeInfo.Instance.Name))
+	// }
+
+	// keyVal := orignalKeyVal
+	// for _, nodeSshKeyVal := range sshKeyVals {
+	// 	keyVal = keyVal + "\n" + nodeSshKeyVal
+	// }
+	// metadata.Items[sshKeyItemIndex].Value = &keyVal
+
+	// _, err = computeSrv.Projects.
+	// 	SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, &metadata).
+	// 	Do()
+	// if err != nil {
+	// 	return errors.New("Unable to set public key to projects metadata: " + err.Error())
+	// }
 
 	return nil
 }
