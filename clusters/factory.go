@@ -11,6 +11,7 @@ import (
 
 type Cluster interface {
 	GetClusterType() string
+	GetKeyMaterial() string
 }
 
 func NewCluster(

@@ -24,8 +24,8 @@ func UploadFiles(
 		}
 
 		if err := sshClient.CopyLocalFileToRemote(location, deployFile.Path); err != nil {
-			return fmt.Errorf("Unable to upload file %s to server %s: %s",
-				deployFile.FileId, sshClient.Host, err.Error())
+			return fmt.Errorf("Unable to upload file %s to server %s:%s: %s",
+				deployFile.FileId, sshClient.Host, deployFile.Path, err.Error())
 		}
 	}
 

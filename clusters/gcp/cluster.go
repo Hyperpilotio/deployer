@@ -24,10 +24,10 @@ import (
 )
 
 type GCPProfile struct {
-	UserId             string
-	ProjectId          string
-	Scopes             []string
-	ServiceAccountPath string
+	ServiceAccount   string
+	AuthJSONFilePath string
+	ProjectId        string
+	Scopes           []string
 }
 
 type GCPKeyPairOutput struct {
@@ -62,19 +62,19 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 		ClusterId:      clusterId,
 		ClusterVersion: deployment.KubernetesDeployment.GCPDefinition.ClusterVersion,
 		GCPProfile: &GCPProfile{
-			UserId: deployment.UserId,
+			ServiceAccount: deployment.KubernetesDeployment.GCPDefinition.ServiceAccount,
 			Scopes: []string{
 				container.CloudPlatformScope,
 				compute.ComputeScope,
 			},
-			ServiceAccountPath: config.GetString("gpcServiceAccountJSONFile"),
+			AuthJSONFilePath: config.GetString("gpcServiceAccountJSONFile"),
 		},
 		NodeInfos: make(map[int]*NodeInfo),
 	}
 }
 
 func CreateClient(gcpProfile *GCPProfile, Zone string) (*http.Client, error) {
-	dat, err := ioutil.ReadFile(gcpProfile.ServiceAccountPath)
+	dat, err := ioutil.ReadFile(gcpProfile.AuthJSONFilePath)
 	if err != nil {
 		return nil, errors.New("Unable to read service account file: " + err.Error())
 	}
@@ -129,6 +129,10 @@ func (gcpCluster *GCPCluster) SshConfig(user string) (*ssh.ClientConfig, error) 
 
 func (gcpCluster *GCPCluster) GetClusterType() string {
 	return "GCP"
+}
+
+func (gcpCluster *GCPCluster) GetKeyMaterial() string {
+	return gcpCluster.KeyPair.Pem
 }
 
 func (gcpCluster *GCPCluster) KeyName() string {

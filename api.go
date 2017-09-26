@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/blobstore"
@@ -186,8 +185,8 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 	}
 
 	cluster := deploymentInfo.Deployer.GetCluster()
-	if cluster.(*hpaws.AWSCluster).KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(cluster.(*hpaws.AWSCluster).KeyPair.KeyMaterial)
+	if cluster.GetKeyMaterial() != "" {
+		storeDeployment.KeyMaterial = cluster.GetKeyMaterial()
 	}
 
 	return storeDeployment, nil
@@ -1039,12 +1038,6 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
-
-	// TODO need use gcp database store
-	if deploymentInfo.Deployer.GetCluster().GetClusterType() == "GCP" {
-		return nil
-	}
-
 	var deploymentStore blobstore.BlobStore
 	if server.Config.GetBool("inCluster") {
 		deploymentStore = server.InClusterDeploymentStore

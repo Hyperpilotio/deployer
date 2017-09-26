@@ -38,11 +38,15 @@ func NewDeployer(
 	}
 
 	gcpCluster := cluster.(*hpgcp.GCPCluster)
-	projectId, err := getProjectId(gcpCluster.GCPProfile.ServiceAccountPath)
+	projectId, err := getProjectId(gcpCluster.GCPProfile.AuthJSONFilePath)
 	if err != nil {
 		return nil, errors.New("Unable to find projectId: " + err.Error())
 	}
 	gcpCluster.GCPProfile.ProjectId = projectId
+
+	if gcpCluster.GCPProfile.ServiceAccount == "" {
+		return nil, errors.New("Unable to find serviceAccount: " + err.Error())
+	}
 
 	deployer := &GCPDeployer{
 		Config:        config,
@@ -402,15 +406,21 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 		return nil
 	}
 
-	userName := strings.ToLower(gcpCluster.GCPProfile.UserId)
+	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
 	clientConfig, clientConfigErr := gcpCluster.SshConfig(userName)
 	if clientConfigErr != nil {
 		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
+	newDeployment := &apis.Deployment{UserId: deployment.UserId}
+	for _, file := range deployment.Files {
+		file.Path = strings.Replace(file.Path, "$(SERVICE_ACCOUNT)", userName, -1)
+		newDeployment.Files = append(newDeployment.Files, file)
+	}
+
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PublicIp+":22", clientConfig, "")
-		return common.UploadFiles(sshClient, deployment, uploadedFiles, log)
+		return common.UploadFiles(sshClient, newDeployment, uploadedFiles, log)
 	}
 	log.Info("Uploaded all files")
 
