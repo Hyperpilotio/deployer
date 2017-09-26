@@ -323,44 +323,18 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 		return
 	}
 
-	nodeId := -1
-	for _, nodeMapping := range deploymentInfo.Deployment.NodeMapping {
-		if nodeMapping.Task == taskName {
-			nodeId = nodeMapping.Id
-			break
-		}
-	}
-
-	if nodeId == -1 {
+	serviceAddress, err := deploymentInfo.Deployer.GetServiceAddress(taskName)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Unable to find task in deployment node mappings",
+			"data":  "Unable to find task node address:" + err.Error(),
 		})
 		return
 	}
 
-	// TODO abstrct nodeInfos
-	cluster := deploymentInfo.Deployer.GetCluster()
-	clusterType := cluster.GetClusterType()
-	publicDnsName := ""
-	switch clusterType {
-	case "AWS":
-		nodeInfo, nodeOk := cluster.(*hpaws.AWSCluster).NodeInfos[nodeId]
-		if !nodeOk {
-			c.JSON(http.StatusNotFound, gin.H{
-				"error": true,
-				"data":  "Unable to find node in cluster",
-			})
-			return
-		}
-		publicDnsName = nodeInfo.PublicDnsName
-	case "GCP":
-		// TODO
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  publicDnsName,
+		"data":  serviceAddress.Host,
 	})
 }
 
