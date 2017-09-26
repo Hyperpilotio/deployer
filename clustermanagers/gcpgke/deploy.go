@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang/glog"
 	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
@@ -325,31 +326,8 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 	log.Info("Kuberenete cluster completed")
 
 	// Setting KubeConfig
-	resp, _ := containerSrv.Projects.Zones.Clusters.
-		List(gcpProfile.ProjectId, gcpCluster.Zone).
-		Do()
-	for _, cluster := range resp.Clusters {
-		if cluster.Name == gcpCluster.ClusterId {
-			cert, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClientCertificate)
-			if err != nil {
-				return errors.New("Unable to decode clientCertificate: " + err.Error())
-			}
-			key, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClientKey)
-			if err != nil {
-				return errors.New("Unable to decode clientKey: " + err.Error())
-			}
-			ca, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClusterCaCertificate)
-			if err != nil {
-				return errors.New("Unable to decode clusterCaCertificate: " + err.Error())
-			}
-			config := &rest.Config{
-				Host:            cluster.Endpoint,
-				TLSClientConfig: rest.TLSClientConfig{CertData: cert, KeyData: key, CAData: ca},
-				Username:        cluster.MasterAuth.Username,
-				Password:        cluster.MasterAuth.Password,
-			}
-			deployer.KubeConfig = config
-		}
+	if err := deployer.setKubeConfig(); err != nil {
+		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
 	if err := deployer.DownloadKubeConfig(); err != nil {
@@ -472,13 +450,108 @@ func (deployer *GCPDeployer) GetCluster() clusters.Cluster {
 
 // CheckClusterState check kubernetes cluster state is exist
 func (deployer *GCPDeployer) CheckClusterState() error {
-	// TODO
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	client, err := hpgcp.CreateClient(gcpProfile, gcpCluster.Zone)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	containerSrv, err := container.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+
+	glog.Infof("CheckClusterState gcpProfile.ProjectId: %s", gcpProfile.ProjectId)
+	glog.Infof("CheckClusterState gcpCluster.Zone: %s", gcpCluster.Zone)
+	glog.Infof("CheckClusterState gcpCluster.ClusterId: %s", gcpCluster.ClusterId)
+
+	_, err = containerSrv.Projects.Zones.Clusters.NodePools.
+		List(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
+		Do()
+	if err != nil && strings.Contains(err.Error(), "was not found") {
+		return errors.New("Unable to reload stack because cluster is not exist")
+	}
+
+	return nil
+}
+
+func (deployer *GCPDeployer) setKubeConfig() error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	client, err := hpgcp.CreateClient(gcpProfile, gcpCluster.Zone)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	containerSrv, err := container.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+
+	resp, err := containerSrv.Projects.Zones.Clusters.
+		List(gcpProfile.ProjectId, gcpCluster.Zone).
+		Do()
+	if err != nil {
+		return errors.New("Unable to list google cloud platform cluster: " + err.Error())
+	}
+
+	for _, cluster := range resp.Clusters {
+		if cluster.Name == gcpCluster.ClusterId {
+			cert, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClientCertificate)
+			if err != nil {
+				return errors.New("Unable to decode clientCertificate: " + err.Error())
+			}
+			key, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClientKey)
+			if err != nil {
+				return errors.New("Unable to decode clientKey: " + err.Error())
+			}
+			ca, err := base64.StdEncoding.DecodeString(cluster.MasterAuth.ClusterCaCertificate)
+			if err != nil {
+				return errors.New("Unable to decode clusterCaCertificate: " + err.Error())
+			}
+			config := &rest.Config{
+				Host:            cluster.Endpoint,
+				TLSClientConfig: rest.TLSClientConfig{CertData: cert, KeyData: key, CAData: ca},
+				Username:        cluster.MasterAuth.Username,
+				Password:        cluster.MasterAuth.Password,
+			}
+			deployer.KubeConfig = config
+		}
+	}
+
 	return nil
 }
 
 // ReloadClusterState reloads kubernetes cluster state
 func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
-	// TODO
+	gcpStoreInfo := storeInfo.(*StoreInfo)
+	gcpCluster := deployer.GCPCluster
+	gcpCluster.ClusterId = gcpStoreInfo.ClusterId
+	deploymentName := gcpCluster.Name
+	if err := deployer.CheckClusterState(); err != nil {
+		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
+	}
+
+	if err := deployer.setKubeConfig(); err != nil {
+		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
+	}
+
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+	if err := populateNodeInfos(client, gcpCluster); err != nil {
+		return errors.New("Unable to populate node infos: " + err.Error())
+	}
+	deployer.recordPublicEndpoints()
+
+	glog.Infof("Reloading kube config for %s...", deployer.GCPCluster.Name)
+	if err := deployer.DownloadKubeConfig(); err != nil {
+		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
+	}
+	glog.Infof("Reloaded %s kube config at %s", deployer.GCPCluster.Name, deployer.KubeConfigPath)
+
 	return nil
 }
 
@@ -570,9 +643,11 @@ func (deployer *GCPDeployer) GetServiceUrl(serviceName string) (string, error) {
 }
 
 func (deployer *GCPDeployer) GetStoreInfo() interface{} {
-	return nil
+	return &StoreInfo{
+		ClusterId: deployer.GCPCluster.ClusterId,
+	}
 }
 
 func (deployer *GCPDeployer) NewStoreInfo() interface{} {
-	return nil
+	return &StoreInfo{}
 }

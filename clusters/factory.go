@@ -12,6 +12,7 @@ import (
 type Cluster interface {
 	GetClusterType() string
 	GetKeyMaterial() string
+	ReloadKeyPair(keyMaterial string) error
 }
 
 func NewCluster(
