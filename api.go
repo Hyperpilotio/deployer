@@ -813,9 +813,9 @@ func (server *Server) getPemFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		cluster := deploymentInfo.Deployer.GetCluster()
-		if cluster != nil && cluster.(*hpaws.AWSCluster).KeyPair != nil {
-			privateKey := strings.Replace(*cluster.(*hpaws.AWSCluster).KeyPair.KeyMaterial, "\\n", "\n", -1)
+		keyMaterial := deploymentInfo.Deployer.GetCluster().GetKeyMaterial()
+		if keyMaterial != "" {
+			privateKey := strings.Replace(keyMaterial, "\\n", "\n", -1)
 			c.String(http.StatusOK, privateKey)
 			return
 		}
