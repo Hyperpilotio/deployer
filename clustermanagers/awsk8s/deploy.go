@@ -933,9 +933,15 @@ func (deployer *K8SDeployer) uploadFiles(uploadedFiles map[string]string) error 
 		return errors.New("Unable to create ssh config: " + clientConfigErr.Error())
 	}
 
+	var errBool bool
 	for _, nodeInfo := range awsCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PrivateIp+":22", clientConfig, bastionIp+":22")
-		return common.UploadFiles(sshClient, deployment, uploadedFiles, log)
+		if err := common.UploadFiles(sshClient, deployment, uploadedFiles, log); err != nil {
+			errBool = true
+		}
+	}
+	if errBool {
+		return errors.New("Unable to uploaded all files")
 	}
 	log.Info("Uploaded all files")
 

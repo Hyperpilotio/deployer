@@ -416,9 +416,15 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 		newDeployment.Files = append(newDeployment.Files, file)
 	}
 
+	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PublicIp+":22", clientConfig, "")
-		return common.UploadFiles(sshClient, newDeployment, uploadedFiles, log)
+		if err := common.UploadFiles(sshClient, newDeployment, uploadedFiles, log); err != nil {
+			errBool = true
+		}
+	}
+	if errBool {
+		return errors.New("Unable to uploaded all files")
 	}
 	log.Info("Uploaded all files")
 
