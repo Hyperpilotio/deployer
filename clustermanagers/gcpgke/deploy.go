@@ -179,8 +179,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	}
 	log.Infof("Delete cluster('%s') ok...", gcpCluster.ClusterId)
 
-	// TODO delete project metadata public key
-
 	return nil
 }
 
