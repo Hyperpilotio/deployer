@@ -214,6 +214,11 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to download ssh key: " + err.Error())
 	}
 
+	if err := deployer.DownloadKubeConfig(); err != nil {
+		return errors.New("Unable to download kubeconfig: " + err.Error())
+	}
+	log.Infof("Downloaded kube config at %s", deployer.KubeConfigPath)
+
 	if err := deployer.uploadFiles(uploadedFiles); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to upload files to cluster: " + err.Error())
@@ -330,11 +335,6 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
-	if err := deployer.DownloadKubeConfig(); err != nil {
-		return errors.New("Unable to download kubeconfig: " + err.Error())
-	}
-	log.Infof("Downloaded kube config at %s", deployer.KubeConfigPath)
-
 	return nil
 }
 
@@ -410,7 +410,11 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 }
 
 func (deployer *GCPDeployer) DownloadKubeConfig() error {
-	baseDir := deployer.GCPCluster.Name + "_kubeconfig"
+	gcpCluster := deployer.GCPCluster
+	projectId := gcpCluster.GCPProfile.ProjectId
+	zone := gcpCluster.Zone
+	clusterId := gcpCluster.ClusterId
+	baseDir := gcpCluster.Name + "_kubeconfig"
 	basePath := "/tmp/" + baseDir
 	kubeconfigFilePath := basePath + "/kubeconfig"
 
@@ -420,7 +424,37 @@ func (deployer *GCPDeployer) DownloadKubeConfig() error {
 
 	os.Remove(kubeconfigFilePath)
 
-	// TODO write kubeconfig yaml to kubeconfigFilePath
+	kubeconfigYaml := kubeconfigYamlTemplate
+	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$PROJECT_ID", projectId, -1)
+	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$ZONE", zone, -1)
+	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$CLUSTER_ID", clusterId, -1)
+
+	replaceKeyWords := []string{
+		"CA_CERT",
+		"KUBERNETES_MASTER_NAME",
+		"KUBELET_CERT",
+		"KUBELET_KEY",
+	}
+	for _, item := range deployer.GCPCluster.NodeInfos[1].Instance.Metadata.Items {
+		if item.Key == "kube-env" {
+			values := strings.Split(*item.Value, "\n")
+			for _, keyWord := range replaceKeyWords {
+				for _, val := range values {
+					if strings.HasPrefix(val, keyWord+":") {
+						data := val
+						data = strings.Replace(data, keyWord+":", "", -1)
+						data = strings.Replace(data, " ", "", -1)
+						kubeconfigYaml = strings.Replace(kubeconfigYaml, "$"+keyWord, data, -1)
+						break
+					}
+				}
+			}
+		}
+	}
+	if err := ioutil.WriteFile(kubeconfigFilePath, []byte(kubeconfigYaml), 0666); err != nil {
+		return fmt.Errorf("Unable to create %s kubeconfig file: %s",
+			gcpCluster.Name, err.Error())
+	}
 
 	deployer.KubeConfigPath = kubeconfigFilePath
 	return nil
@@ -461,10 +495,6 @@ func (deployer *GCPDeployer) CheckClusterState() error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
-
-	glog.Infof("CheckClusterState gcpProfile.ProjectId: %s", gcpProfile.ProjectId)
-	glog.Infof("CheckClusterState gcpCluster.Zone: %s", gcpCluster.Zone)
-	glog.Infof("CheckClusterState gcpCluster.ClusterId: %s", gcpCluster.ClusterId)
 
 	_, err = containerSrv.Projects.Zones.Clusters.NodePools.
 		List(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
