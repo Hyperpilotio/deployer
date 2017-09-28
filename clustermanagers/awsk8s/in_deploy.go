@@ -994,6 +994,10 @@ func (deployer *InClusterK8SDeployer) GetScheduler() *job.Scheduler {
 func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
 }
 
+func (deployer *InClusterK8SDeployer) GetKubeConfigPath() (string, error) {
+	return deployer.KubeConfigPath, nil
+}
+
 func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 	if info, ok := deployer.Services[serviceName]; ok {
 		deployer.GetLog().Logger.Infof("Found cached service url for service %s: %s", serviceName, info.PrivateUrl)

@@ -34,6 +34,7 @@ type Deployer interface {
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)
+	GetKubeConfigPath() (string, error)
 }
 
 func NewDeployer(
