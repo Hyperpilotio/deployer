@@ -67,8 +67,8 @@ func (deployer *K8SDeployer) SetScheduler(sheduler *job.Scheduler) {
 	deployer.Scheduler = sheduler
 }
 
-func (deployer *K8SDeployer) GetKubeConfigPath() string {
-	return deployer.KubeConfigPath
+func (deployer *K8SDeployer) GetKubeConfigPath() (string, error) {
+	return deployer.KubeConfigPath, nil
 }
 
 // CreateDeployment start a deployment

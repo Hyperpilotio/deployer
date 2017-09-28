@@ -19,7 +19,6 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	awsk8s "github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
@@ -832,15 +831,15 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		if deploymentInfo.GetDeploymentType() != "K8S" {
+		kubeConfigPath, err := deploymentInfo.Deployer.GetKubeConfigPath()
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
-				"data":  "Unsupported deployment type",
+				"data":  "Unable to get kubeConfig file:" + err.Error(),
 			})
 			return
 		}
 
-		kubeConfigPath := deploymentInfo.Deployer.(*awsk8s.K8SDeployer).GetKubeConfigPath()
 		if kubeConfigPath != "" {
 			if b, err := ioutil.ReadFile(kubeConfigPath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{

@@ -105,6 +105,10 @@ func (ecsDeployer *ECSDeployer) SetScheduler(sheduler *job.Scheduler) {
 	ecsDeployer.Scheduler = sheduler
 }
 
+func (ecsDeployer *ECSDeployer) GetKubeConfigPath() (string, error) {
+	return "", errors.New("Unsupported kubernetes")
+}
+
 // CreateDeployment start a deployment
 func (ecsDeployer *ECSDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
 	awsCluster := ecsDeployer.AWSCluster
