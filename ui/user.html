@@ -5,10 +5,13 @@
     <title>Deployer</title>
     <link rel="import" href="/static/common/linkCss.html">
     <link rel="import" href="/static/common/linkJs.html">
+    <script src="/static/js/bootstrap.min.js"></script>
     <script>
         var userInputHtml = '<input type="text"/>';
         var awsIdInputHtml = '<input type="text" size="25"/>';
         var awsSecretInputHtml = '<input type="text" size="50"/>';
+        var gcpProjectIdInputHtml = '<input type="text" size="25"/>';
+        var gcpServiceAccountInputHtml = '<input type="text" size="25"/>';
         var registerBtnHtml =
             '<button type="button" class="btn btn-success"' +
             '    onclick="registerUser($(this).closest(\'tr\'));">' +
@@ -41,7 +44,7 @@
             '</button>';
 
         $(function() {
-            $('#addBtn').click(function() {
+            $('#addAWSUserBtn').click(function() {
                 var rowHtml = '';
                 rowHtml += '<tr>';
                 rowHtml += '    <td>' + userInputHtml + '</td>';
@@ -50,7 +53,18 @@
                 rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
                 rowHtml += '</tr>';
 
-                $('#data:last-child').append(rowHtml);
+                $('#awsUserData:last-child').append(rowHtml);
+            });
+            $('#addGCPUserBtn').click(function() {
+                var rowHtml = '';
+                rowHtml += '<tr>';
+                rowHtml += '    <td>' + userInputHtml + '</td>';
+                rowHtml += '    <td>' + gcpProjectIdInputHtml + '</td>';
+                rowHtml += '    <td>' + gcpServiceAccountInputHtml + '</td>';
+                rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
+                rowHtml += '</tr>';
+
+                $('#gcpUserData:last-child').append(rowHtml);
             });
         });
 
@@ -172,22 +186,22 @@
         main {
             margin-left: 0%;
         }
-
+        
         .user-detail button {
             width: 90px;
         }
-
+        
         table {
             border-collapse: collapse;
             width: 100%;
         }
-
+        
         table, td, th {
             border: 1px solid #ddd;
             text-align: left;
             padding: 15px;
         }
-
+        
         th {
             background-color: #f1f1f1;
         }
@@ -204,9 +218,6 @@
                     <a href="/ui">deployments</a>
                 </li>
                 <li>
-                    <a href="/ui/clusters">clusters</a>
-                </li>
-                <li>
                     <a href="/ui/users" class="active">users</a>
                 </li>
             </ul>
@@ -214,37 +225,64 @@
     </header>
 
     <main>
-        <div class="user-detail-btn">
-            <button id="addBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
-        </div>
-        <div class="user-detail">
-            <table>
-                <tbody>
-                    <tr>
-                        <th width="10%">USER_ID</th>
-                        <th width="25%">AWS_ACCESS_KEY_ID</th>
-                        <th width="40%">AWS_SECRET_ACCESS_KEY</th>
-                        <th width="25%">&nbsp;</th>
-                    </tr>
-                </tbody>
-                <tbody id="data">
-                    {{range $index,$user := .awsProfiles}}
-                    <tr>
-                        <td>{{$user.UserId}}</td>
-                        <td>{{$user.AwsId}}</td>
-                        <td>{{$user.AwsSecret}}</td>
-                        <td style="text-align:center">
-                            <button type="button" class="btn btn-warning" onclick="editUser($(this).closest('tr'));">
-                                <i class="fa fa-pencil-square-o"></i> Edit
-                            </button>
-                            <button type="button" class="btn btn-danger" onclick="deleteUser($(this).closest('tr'));">
-                                <i class="fa fa-trash-o"></i> Delete
-                            </button>
-                        </td>
-                    </tr>
-                    {{end}}
-                </tbody>
-            </table>
+        <ul class="nav nav-tabs" style="margin-top: 10px;">
+            <li class="active"><a data-toggle="tab" href="#AWS">AWS</a></li>
+            <li><a data-toggle="tab" href="#GCP">GCP</a></li>
+        </ul>
+        <div class="tab-content">
+            <div id="AWS" class="tab-pane fade in active">
+                <div class="user-detail-btn">
+                    <button id="addAWSUserBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
+                </div>
+                <div class="user-detail">
+                    <table>
+                        <tbody>
+                            <tr>
+                                <th width="10%">USER_ID</th>
+                                <th width="25%">AWS_ACCESS_KEY_ID</th>
+                                <th width="40%">AWS_SECRET_ACCESS_KEY</th>
+                                <th width="25%">&nbsp;</th>
+                            </tr>
+                        </tbody>
+                        <tbody id="awsUserData">
+                            {{range $index,$user := .awsProfiles}}
+                            <tr>
+                                <td>{{$user.UserId}}</td>
+                                <td>{{$user.AwsId}}</td>
+                                <td>{{$user.AwsSecret}}</td>
+                                <td style="text-align:center">
+                                    <button type="button" class="btn btn-warning" onclick="editUser($(this).closest('tr'));">
+                                        <i class="fa fa-pencil-square-o"></i> Edit
+                                    </button>
+                                    <button type="button" class="btn btn-danger" onclick="deleteUser($(this).closest('tr'));">
+                                        <i class="fa fa-trash-o"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div id="GCP" class="tab-pane fade">
+                <div class="user-detail-btn">
+                    <button id="addGCPUserBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
+                </div>
+                <div class="user-detail">
+                    <table>
+                        <tbody>
+                            <tr>
+                                <th width="10%">USER_ID</th>
+                                <th width="25%">SERVICE_ACCOUNT</th>
+                                <th width="25%">PROJECT_ID</th>
+                                <th width="25%">&nbsp;</th>
+                            </tr>
+                        </tbody>
+                        <tbody id="gcpUserData">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     </main>
 </body>

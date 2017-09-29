@@ -2,7 +2,6 @@ html {
     height: 100%;
     font-family: "monaco", monospace;
     color: #333;
-    margin-left: -8px;
 }
 
 header {
@@ -25,7 +24,7 @@ header .banner {
 
 header nav {
     height: 100%;
-    padding: 0 2em;
+    padding: 0 0em;
 }
 
 header nav > ul > li,

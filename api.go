@@ -253,9 +253,7 @@ func (server *Server) StartServer() error {
 		uiGroup.GET("/users/:userId", server.getUser)
 		uiGroup.DELETE("/users/:userId", server.deleteUser)
 		uiGroup.PUT("/users/:userId", server.storeUser)
-
-		uiGroup.GET("/clusters", server.clusterUI)
-		uiGroup.GET("/clusters/:deploymentType/:clusterName", server.getCluster)
+		uiGroup.POST("/users/:userId/files/:fileId/GCP/Storage", server.uploadFilesToGCPStorage)
 	}
 
 	usersGroup := router.Group("/v1/users")
@@ -521,6 +519,14 @@ func (server *Server) createDeployment(c *gin.Context) {
 		deployment = mergeDeployment
 	}
 
+	deploymentInfo := &DeploymentInfo{
+		TemplateId: templateId,
+		Deployment: deployment,
+		Created:    time.Now(),
+		State:      CREATING,
+	}
+	deploymentType := deploymentInfo.GetDeploymentType()
+
 	var awsProfile *hpaws.AWSProfile
 	if !server.Config.GetBool("inCluster") {
 		server.mutex.Lock()
@@ -537,17 +543,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 		awsProfile = deploymentAwsProfile
 	}
 
-	deploymentInfo := &DeploymentInfo{
-		TemplateId: templateId,
-		Deployment: deployment,
-		Created:    time.Now(),
-		State:      CREATING,
-	}
-
 	deployer, err := clustermanagers.NewDeployer(
 		server.Config,
 		awsProfile,
-		deploymentInfo.GetDeploymentType(),
+		deploymentType,
 		deployment,
 		true)
 	if err != nil {

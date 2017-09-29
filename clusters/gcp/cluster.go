@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"golang.org/x/oauth2/google"
 	compute "google.golang.org/api/compute/v1"
 	container "google.golang.org/api/container/v1"
+	storage "google.golang.org/api/storage/v1"
 )
 
 type GCPProfile struct {
@@ -73,7 +75,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 	}
 }
 
-func CreateClient(gcpProfile *GCPProfile, Zone string) (*http.Client, error) {
+func CreateClient(gcpProfile *GCPProfile) (*http.Client, error) {
 	dat, err := ioutil.ReadFile(gcpProfile.AuthJSONFilePath)
 	if err != nil {
 		return nil, errors.New("Unable to read service account file: " + err.Error())
@@ -151,4 +153,36 @@ func (gcpCluster *GCPCluster) KeyName() string {
 func CreateUniqueClusterId(deploymentName string) string {
 	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
 	return fmt.Sprintf("%s-%s", strings.Split(deploymentName, "-")[0], timeSeq)
+}
+
+func UploadFilesToStorage(
+	config *viper.Viper,
+	gcpProfile *GCPProfile,
+	fileName string,
+	filePath string) (*storage.Object, error) {
+	client, err := CreateClient(gcpProfile)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	storageSrv, err := storage.New(client)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform storage service: " + err.Error())
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return nil, errors.New("unable to open file: " + err.Error())
+	}
+	defer file.Close()
+
+	uploadObj, err := storageSrv.Objects.
+		Insert(config.GetString("gpcUserProfileBucketName"), &storage.Object{Name: fileName}).
+		Media(file).
+		Do()
+	if err != nil {
+		return nil, errors.New("unable to upload file to google cloud platform storage: " + err.Error())
+	}
+
+	return uploadObj, nil
 }

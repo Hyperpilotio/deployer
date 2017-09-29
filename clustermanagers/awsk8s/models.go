@@ -7,8 +7,6 @@ import (
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
 
-	"k8s.io/client-go/pkg/api/v1"
-	"k8s.io/client-go/pkg/apis/extensions/v1beta1"
 	"k8s.io/client-go/rest"
 )
 
@@ -52,12 +50,4 @@ type StoreInfo struct {
 	BastionIp              string
 	MasterIp               string
 	VpcPeeringConnectionId string
-}
-
-type ClusterInfo struct {
-	Nodes      []v1.Node
-	Pods       []v1.Pod
-	Containers []v1beta1.Deployment
-	BastionIp  string
-	MasterIp   string
 }

@@ -8,10 +8,11 @@ import (
 	"sort"
 	"time"
 
+	storage "google.golang.org/api/storage/v1"
+
 	"github.com/gin-gonic/gin"
-	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	awsk8s "github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
+	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 
 	"net/http"
 )
@@ -65,14 +66,6 @@ func (server *Server) userUI(c *gin.Context) {
 	c.HTML(http.StatusOK, "user.html", gin.H{
 		"error":       false,
 		"awsProfiles": server.AWSProfiles,
-	})
-}
-
-func (server *Server) clusterUI(c *gin.Context) {
-	deploymentLogs, _ := server.getDeploymentLogs(c)
-	c.HTML(http.StatusOK, "cluster.html", gin.H{
-		"msg":  "Hyperpilot Clusters!",
-		"logs": deploymentLogs,
 	})
 }
 
@@ -266,82 +259,36 @@ func getAWSProfileParam(c *gin.Context) (*hpaws.AWSProfile, error) {
 	return awsProfile, nil
 }
 
-func (server *Server) getCluster(c *gin.Context) {
-	deploymentType := c.Param("deploymentType")
-	if deploymentType == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find deploymentType param",
-		})
-		return
-	}
-
-	clusterName := c.Param("clusterName")
-	if clusterName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unable to find clusterName param",
-		})
-		return
-	}
-
-	server.mutex.Lock()
-	deploymentInfo, ok := server.DeployedClusters[clusterName]
-	server.mutex.Unlock()
+func (server *Server) uploadFilesToGCPStorage(c *gin.Context) {
+	userId := c.Param("userId")
+	fileId := c.Param("fileId")
+	location, ok := server.UploadedFiles[userId+"_"+fileId]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Deployment not found",
+			"data":  "Unable to find uploaded file " + fileId,
 		})
 		return
 	}
 
-	switch deploymentType {
-	case "ECS":
-		userId := deploymentInfo.Deployment.UserId
-		server.mutex.Lock()
-		awsProfile, ok := server.AWSProfiles[userId]
-		server.mutex.Unlock()
-		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to find aws profile",
-			})
-			return
-		}
-
-		cluster := deploymentInfo.Deployer.GetCluster()
-		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, cluster.(*hpaws.AWSCluster))
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to get ecs cluster:" + err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  clusterInfo,
-		})
-	case "K8S":
-		clusterInfo, err := deploymentInfo.Deployer.(*awsk8s.K8SDeployer).GetClusterInfo()
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": true,
-				"data":  "Unable to get kubernetes cluster:" + err.Error(),
-			})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"error": false,
-			"data":  clusterInfo,
-		})
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": true,
-			"data":  "Unsupported deployment type: " + deploymentType,
-		})
+	gcpProfile := &hpgcp.GCPProfile{
+		Scopes: []string{
+			storage.DevstorageFullControlScope,
+		},
+		AuthJSONFilePath: server.Config.GetString("gpcServiceAccountJSONFile"),
 	}
+	_, err := hpgcp.UploadFilesToStorage(server.Config, gcpProfile,
+		userId+"_"+fileId, location)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to upload file to GCP strorage: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"error": false,
+		"data":  "",
+	})
 }
