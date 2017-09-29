@@ -156,7 +156,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
 	log := deployer.DeploymentLog.Logger
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -187,7 +187,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	gcpCluster := deployer.GCPCluster
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -486,7 +486,7 @@ func (deployer *GCPDeployer) GetCluster() clusters.Cluster {
 func (deployer *GCPDeployer) CheckClusterState() error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
-	client, err := hpgcp.CreateClient(gcpProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -509,7 +509,7 @@ func (deployer *GCPDeployer) CheckClusterState() error {
 func (deployer *GCPDeployer) setKubeConfig() error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
-	client, err := hpgcp.CreateClient(gcpProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -567,7 +567,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile, gcpCluster.Zone)
+	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}

@@ -73,7 +73,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 	}
 }
 
-func CreateClient(gcpProfile *GCPProfile, Zone string) (*http.Client, error) {
+func CreateClient(gcpProfile *GCPProfile) (*http.Client, error) {
 	dat, err := ioutil.ReadFile(gcpProfile.AuthJSONFilePath)
 	if err != nil {
 		return nil, errors.New("Unable to read service account file: " + err.Error())
