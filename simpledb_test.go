@@ -50,7 +50,7 @@ func init() {
 	}
 
 	deployer, _ := clustermanagers.NewDeployer(config, awsProfile, "K8S", kubernetesDeployment, true)
-	k8sDeployer = deployer.(*kubernetes.K8SDeployer)
+	k8sDeployer = deployer.(*awsk8s.K8SDeployer)
 	k8sDeployer.BastionIp = TEST_BASTION_IP
 	k8sDeployer.MasterIp = TEST_MASTER_IP
 }
@@ -90,7 +90,7 @@ func testStoreDeployments(t *testing.T) {
 func testLoadAllDeployments(t *testing.T) {
 	deployments, err := deploymentStore.LoadAll(func() interface{} {
 		return &StoreDeployment{
-			ClusterManager: &kubernetes.StoreInfo{},
+			ClusterManager: &awsk8s.StoreInfo{},
 		}
 	})
 
@@ -102,8 +102,8 @@ func testLoadAllDeployments(t *testing.T) {
 		storeDeployment := deployment.(*StoreDeployment)
 		if storeDeployment.Name == TEST_DEPLOYMENT_NAME {
 			assert.Equal(t, TEST_USER_ID, storeDeployment.UserId)
-			assert.Equal(t, TEST_BASTION_IP, storeDeployment.ClusterManager.(kubernetes.StoreInfo).BastionIp)
-			assert.Equal(t, TEST_MASTER_IP, storeDeployment.ClusterManager.(kubernetes.StoreInfo).MasterIp)
+			assert.Equal(t, TEST_BASTION_IP, storeDeployment.ClusterManager.(awsk8s.StoreInfo).BastionIp)
+			assert.Equal(t, TEST_MASTER_IP, storeDeployment.ClusterManager.(awsk8s.StoreInfo).MasterIp)
 		}
 	}
 }
