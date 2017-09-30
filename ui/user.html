@@ -7,11 +7,38 @@
     <link rel="import" href="/static/common/linkJs.html">
     <script src="/static/js/bootstrap.min.js"></script>
     <script>
+        $.urlParam = function(name) {
+            var results = new RegExp('[\?&]' + name + '=([^&#]*)').exec(window.location.href);
+            return results[1] || 0;
+        }
+        $(function() {
+            $('.nav-tabs a[href="#' + $.urlParam('tab') + '"]').tab('show')
+            $('#addAWSUserBtn').click(function() {
+                var rowHtml = '';
+                rowHtml += '<tr>';
+                rowHtml += '    <td>' + userInputHtml + '</td>';
+                rowHtml += '    <td>' + awsIdInputHtml + '</td>';
+                rowHtml += '    <td>' + awsSecretInputHtml + '</td>';
+                rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
+                rowHtml += '</tr>';
+                $('#awsUserData:last-child').append(rowHtml);
+            });
+            $('#addGCPUserBtn').click(function() {
+                var rowHtml = '';
+                rowHtml += '<tr>';
+                rowHtml += '    <td>' + userInputHtml + '</td>';
+                rowHtml += '    <td>' + gcpServiceAccountInputHtml + '</td>';
+                rowHtml += '    <td>' + gcpJsonFileUploadHtml + '</td>';
+                rowHtml += '    <td style="text-align:center">' + uploadGCPProfileBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
+                rowHtml += '</tr>';
+                $('#gcpUserData:last-child').append(rowHtml);
+            });
+        });
+
+        // AWS
         var userInputHtml = '<input type="text"/>';
         var awsIdInputHtml = '<input type="text" size="25"/>';
         var awsSecretInputHtml = '<input type="text" size="50"/>';
-        var gcpProjectIdInputHtml = '<input type="text" size="25"/>';
-        var gcpServiceAccountInputHtml = '<input type="text" size="25"/>';
         var registerBtnHtml =
             '<button type="button" class="btn btn-success"' +
             '    onclick="registerUser($(this).closest(\'tr\'));">' +
@@ -43,33 +70,8 @@
             '    <i class="fa fa-trash-o"></i> Delete' +
             '</button>';
 
-        $(function() {
-            $('#addAWSUserBtn').click(function() {
-                var rowHtml = '';
-                rowHtml += '<tr>';
-                rowHtml += '    <td>' + userInputHtml + '</td>';
-                rowHtml += '    <td>' + awsIdInputHtml + '</td>';
-                rowHtml += '    <td>' + awsSecretInputHtml + '</td>';
-                rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
-                rowHtml += '</tr>';
-
-                $('#awsUserData:last-child').append(rowHtml);
-            });
-            $('#addGCPUserBtn').click(function() {
-                var rowHtml = '';
-                rowHtml += '<tr>';
-                rowHtml += '    <td>' + userInputHtml + '</td>';
-                rowHtml += '    <td>' + gcpProjectIdInputHtml + '</td>';
-                rowHtml += '    <td>' + gcpServiceAccountInputHtml + '</td>';
-                rowHtml += '    <td style="text-align:center">' + registerBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
-                rowHtml += '</tr>';
-
-                $('#gcpUserData:last-child').append(rowHtml);
-            });
-        });
-
         function registerUser($tr) {
-            if (!checkUserData($tr)) {
+            if (!checkUserData($tr, true)) {
                 return false;
             }
 
@@ -181,6 +183,131 @@
 
             return true;
         }
+
+        // GCP
+        var gcpServiceAccountInputHtml = '<input type="text" size="25"/>';
+        var gcpJsonFileUploadHtml = '<input type="file" id="file" name="file"/>';
+        var uploadGCPProfileBtnHtml =
+            '<button type="button" class="btn btn-success"' +
+            '    onclick="uploadGCPProfile($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-check"></i> Confirm</button>' +
+            '</button>';
+        var editGCPUserBtnHtml =
+            '<button type="button" class="btn btn-warning"' +
+            '    onclick="editGCPUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-pencil-square-o"></i> Edit' +
+            '</button>';
+        var updateGCPUserBtnHtml =
+            '<button type="button" class="btn btn-success"' +
+            '    onclick="updateGCPUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-pencil-square-o"></i> Update' +
+            '</button>';
+        var cancelGCPBtnHtml =
+            '<button type="button" class="btn btn-warning"' +
+            '    onclick="cancelGCPEdit($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-times"></i> Cancel' +
+            '</button>';
+        var delGCPUserBtnHtml =
+            '<button type="button" class="btn btn-danger"' +
+            '    onclick="deletGCPeUser($(this).closest(\'tr\'));">' +
+            '    <i class="fa fa-trash-o"></i> Delete' +
+            '</button>';
+
+        function checkGCPUserData($tr, addMode) {
+            var userId = $tr.find('td:eq(0) > input:text').val();
+            if (addMode && userId == '') {
+                alert('Please enter a userId');
+                return false;
+            }
+
+            var serviceAccount = $tr.find('td:eq(1) > input:text').val();
+            if (serviceAccount == '') {
+                alert('Please enter a serviceAccount');
+                return false;
+            }
+
+            var jsonFilePath = $tr.find('td:eq(1) > input:file').val();
+            if (jsonFilePath == '') {
+                alert('Please upload a json file');
+                return false;
+            }
+
+            return true;
+        }
+
+        function uploadGCPProfile($tr) {
+            if (!checkGCPUserData($tr, true)) {
+                return false;
+            }
+
+            var userId = $tr.find('td:eq(0) > input:text').val();
+            var serviceAccount = $tr.find('td:eq(1) > input:text').val();
+            var fileName = $('#file')[0].files[0].name;
+            var fileId = fileName.replace(/\./g, '_');
+            var url = '/v1/users/' + userId + '/files/' + fileId;
+            var uploadFormData = new FormData();
+            uploadFormData.append('upload', $('#file')[0].files[0])
+
+            $.ajax({
+                url: url,
+                type: 'POST',
+                cache: false,
+                data: uploadFormData,
+                processData: false,
+                contentType: false
+            })
+            .done(function(res) {
+                $.ajax({
+                    url: '/ui/users/' + userId + '/files/' + fileId + '/gcp/storage?serviceAccount=' + serviceAccount,
+                    type: 'POST',
+                    success: function(data) {
+                        alert('Register user ok');
+                        location.href = "/ui/users?tab=GCP";
+                    },
+                    error: function(xhr, textStatus, error) {
+                        alert('Register user fail');
+                    }
+                });
+            })
+            .fail(function(res) {
+                alert("Upload json file fail");
+            });
+        }
+
+        function editGCPUser($tr) {
+            $tr.css('background-color', '#d3efff');
+
+            var userId = $tr.find('td:eq(0)').html();
+            var serviceAccount = $tr.find('td:eq(1)').html();
+            var authJSONFilePath = $tr.find('td:eq(2)').html();
+
+            $tr.find('td:eq(0)').html(userId + '<input type="hidden" value="' + userId + '"/>');
+            $tr.find('td:eq(1)').html('<input type="text" value="' + serviceAccount + '" size="25"/><input type="hidden" value="' + serviceAccount + '"/>');
+            $tr.find('td:eq(2)').html(gcpJsonFileUploadHtml + '<input type="hidden" value="' + authJSONFilePath + '"/>');
+            $tr.find('td:eq(3)').html(updateGCPUserBtnHtml + '&nbsp;' + cancelGCPBtnHtml);
+        }
+
+        function updateGCPUser($tr) {
+            if (!checkGCPUserData($tr, false)) {
+                return false;
+            }
+
+        }
+
+        function deleteGCPUser($tr) {
+
+        }
+
+        function cancelGCPEdit($tr) {
+            var userId = $tr.find('td:eq(0) > input:hidden').val();
+            var serviceAccount = $tr.find('td:eq(1) > input:hidden').val();
+            var authJSONFilePath = $tr.find('td:eq(2) > input:hidden').val();
+            $tr.find('td:eq(0)').html(userId)
+            $tr.find('td:eq(1)').html(serviceAccount)
+            $tr.find('td:eq(2)').html(authJSONFilePath)
+            $tr.find('td:eq(3)').html(editGCPUserBtnHtml + '&nbsp;' + delGCPUserBtnHtml);
+            $tr.css('background-color', '');
+        }
     </script>
     <style>
         main {
@@ -196,7 +323,9 @@
             width: 100%;
         }
         
-        table, td, th {
+        table,
+        td,
+        th {
             border: 1px solid #ddd;
             text-align: left;
             padding: 15px;
@@ -274,11 +403,26 @@
                             <tr>
                                 <th width="10%">USER_ID</th>
                                 <th width="25%">SERVICE_ACCOUNT</th>
-                                <th width="25%">PROJECT_ID</th>
+                                <th width="25%">UPLOAD YOUR JSON FILE</th>
                                 <th width="25%">&nbsp;</th>
                             </tr>
                         </tbody>
                         <tbody id="gcpUserData">
+                            {{range $userId, $profile := .gcpProfiles}}
+                            <tr>
+                                <td>{{$userId}}</td>
+                                <td>{{$profile.ServiceAccount}}</td>
+                                <td>{{$profile.AuthJSONFilePath}}</td>
+                                <td style="text-align:center">
+                                    <button type="button" class="btn btn-warning" onclick="editGCPUser($(this).closest('tr'));">
+                                        <i class="fa fa-pencil-square-o"></i> Edit
+                                    </button>
+                                    <button type="button" class="btn btn-danger" onclick="deleteGCPUser($(this).closest('tr'));">
+                                        <i class="fa fa-trash-o"></i> Delete
+                                    </button>
+                                </td>
+                            </tr>
+                            {{end}}
                         </tbody>
                     </table>
                 </div>

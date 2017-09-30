@@ -20,6 +20,7 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
+	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/spf13/viper"
@@ -139,8 +140,10 @@ type Server struct {
 	ProfileStore             blobstore.BlobStore
 	TemplateStore            blobstore.BlobStore
 
+	// TODO abstrct user profile
 	// Maps all available users
 	AWSProfiles map[string]*hpaws.AWSProfile
+	GCPProfiles map[string]*hpgcp.GCPProfile
 
 	// Maps deployment name to deployed cluster struct
 	DeployedClusters map[string]*DeploymentInfo
@@ -253,7 +256,7 @@ func (server *Server) StartServer() error {
 		uiGroup.GET("/users/:userId", server.getUser)
 		uiGroup.DELETE("/users/:userId", server.deleteUser)
 		uiGroup.PUT("/users/:userId", server.storeUser)
-		uiGroup.POST("/users/:userId/files/:fileId/GCP/Storage", server.uploadFilesToGCPStorage)
+		uiGroup.POST("/users/:userId/files/:fileId/gcp/storage", server.uploadFilesToGCPStorage)
 	}
 
 	usersGroup := router.Group("/v1/users")
@@ -1158,6 +1161,10 @@ func (server *Server) reloadClusterState() error {
 		awsProfileInfos[awsProfile.(*hpaws.AWSProfile).UserId] = awsProfile.(*hpaws.AWSProfile)
 	}
 	server.AWSProfiles = awsProfileInfos
+
+	// TODO reload GCPProfile
+	gcpProfileInfos := map[string]*hpgcp.GCPProfile{}
+	server.GCPProfiles = gcpProfileInfos
 
 	inCluster := server.Config.GetBool("inCluster")
 	var deploymentStore blobstore.BlobStore

@@ -159,20 +159,20 @@ func UploadFilesToStorage(
 	config *viper.Viper,
 	gcpProfile *GCPProfile,
 	fileName string,
-	filePath string) (*storage.Object, error) {
+	filePath string) (string, error) {
 	client, err := CreateClient(gcpProfile)
 	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
+		return "", errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
 	storageSrv, err := storage.New(client)
 	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform storage service: " + err.Error())
+		return "", errors.New("Unable to create google cloud platform storage service: " + err.Error())
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return nil, errors.New("unable to open file: " + err.Error())
+		return "", errors.New("unable to open file: " + err.Error())
 	}
 	defer file.Close()
 
@@ -181,8 +181,8 @@ func UploadFilesToStorage(
 		Media(file).
 		Do()
 	if err != nil {
-		return nil, errors.New("unable to upload file to google cloud platform storage: " + err.Error())
+		return "", errors.New("unable to upload file to google cloud platform storage: " + err.Error())
 	}
 
-	return uploadObj, nil
+	return uploadObj.MediaLink, nil
 }

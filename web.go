@@ -66,6 +66,7 @@ func (server *Server) userUI(c *gin.Context) {
 	c.HTML(http.StatusOK, "user.html", gin.H{
 		"error":       false,
 		"awsProfiles": server.AWSProfiles,
+		"gcpProfiles": server.GCPProfiles,
 	})
 }
 
@@ -262,7 +263,17 @@ func getAWSProfileParam(c *gin.Context) (*hpaws.AWSProfile, error) {
 func (server *Server) uploadFilesToGCPStorage(c *gin.Context) {
 	userId := c.Param("userId")
 	fileId := c.Param("fileId")
-	location, ok := server.UploadedFiles[userId+"_"+fileId]
+	serviceAccount := c.DefaultQuery("serviceAccount", "")
+	if serviceAccount == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": true,
+			"data":  "Unable to find serviceAccount param",
+		})
+		return
+	}
+
+	fileName := userId + "_" + fileId
+	filePath, ok := server.UploadedFiles[fileName]
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -278,7 +289,7 @@ func (server *Server) uploadFilesToGCPStorage(c *gin.Context) {
 		AuthJSONFilePath: server.Config.GetString("gpcServiceAccountJSONFile"),
 	}
 	_, err := hpgcp.UploadFilesToStorage(server.Config, gcpProfile,
-		userId+"_"+fileId, location)
+		fileName, filePath)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
@@ -287,8 +298,15 @@ func (server *Server) uploadFilesToGCPStorage(c *gin.Context) {
 		return
 	}
 
+	server.mutex.Lock()
+	server.GCPProfiles[userId] = &hpgcp.GCPProfile{
+		ServiceAccount:   serviceAccount,
+		AuthJSONFilePath: filePath,
+	}
+	server.mutex.Unlock()
+
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  "",
+		"data":  filePath,
 	})
 }
