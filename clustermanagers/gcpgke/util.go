@@ -13,7 +13,6 @@ import (
 	"github.com/hyperpilotio/go-utils/funcs"
 
 	logging "github.com/op/go-logging"
-	"github.com/spf13/viper"
 	compute "google.golang.org/api/compute/v1"
 	container "google.golang.org/api/container/v1"
 
@@ -139,17 +138,6 @@ func tagPublicKey(
 	}
 
 	return nil
-}
-
-func getProjectId(serviceAccountPath string) (string, error) {
-	viper := viper.New()
-	viper.SetConfigType("json")
-	viper.SetConfigFile(serviceAccountPath)
-	err := viper.ReadInConfig()
-	if err != nil {
-		return "", err
-	}
-	return viper.GetString("project_id"), nil
 }
 
 func waitUntilClusterCreateComplete(

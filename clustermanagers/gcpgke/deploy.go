@@ -39,7 +39,7 @@ func NewDeployer(
 	}
 
 	gcpCluster := cluster.(*hpgcp.GCPCluster)
-	projectId, err := getProjectId(gcpCluster.GCPProfile.AuthJSONFilePath)
+	projectId, err := gcpCluster.GCPProfile.GetProjectId()
 	if err != nil {
 		return nil, errors.New("Unable to find projectId: " + err.Error())
 	}
@@ -178,7 +178,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return fmt.Errorf("Unable to wait until %s cluster to be delete completed: %s\n",
 			gcpCluster.ClusterId, err.Error())
 	}
-	log.Infof("Delete cluster('%s') ok...", gcpCluster.ClusterId)
 
 	return nil
 }
@@ -299,7 +298,6 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 					},
 				},
 			},
-			InitialClusterVersion: gcpCluster.ClusterVersion,
 			MasterAuth: &container.MasterAuth{
 				Username: "admin",
 				ClientCertificateConfig: &container.ClientCertificateConfig{
@@ -315,6 +313,10 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 				CidrBlocks: []*container.CidrBlock{},
 			},
 		},
+	}
+
+	if gcpCluster.ClusterVersion != "" {
+		createClusterRequest.Cluster.InitialClusterVersion = gcpCluster.ClusterVersion
 	}
 
 	_, err = containerSrv.Projects.Zones.Clusters.

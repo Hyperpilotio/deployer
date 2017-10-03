@@ -7,12 +7,15 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/golang/glog"
 
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/spf13/viper"
@@ -25,11 +28,33 @@ import (
 	storage "google.golang.org/api/storage/v1"
 )
 
+var defaultScopes = []string{
+	container.CloudPlatformScope,
+	compute.ComputeScope,
+	storage.DevstorageFullControlScope,
+}
+
 type GCPProfile struct {
+	UserId           string
 	ServiceAccount   string
-	AuthJSONFilePath string
 	ProjectId        string
-	Scopes           []string
+	AuthJSONFilePath string
+}
+
+func (gcpProfile *GCPProfile) GetProjectId() (string, error) {
+	if gcpProfile.ProjectId != "" {
+		return gcpProfile.ProjectId, nil
+	}
+
+	viper := viper.New()
+	viper.SetConfigType("json")
+	viper.SetConfigFile(gcpProfile.AuthJSONFilePath)
+	err := viper.ReadInConfig()
+	if err != nil {
+		return "", err
+	}
+
+	return viper.GetString("project_id"), nil
 }
 
 type GCPKeyPairOutput struct {
@@ -56,23 +81,22 @@ type GCPCluster struct {
 	NodeInfos      map[int]*NodeInfo
 }
 
-func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster {
+func NewGCPCluster(
+	config *viper.Viper,
+	deployment *apis.Deployment) *GCPCluster {
 	clusterId := CreateUniqueClusterId(deployment.Name)
-	return &GCPCluster{
-		Zone:           deployment.Region,
-		Name:           deployment.Name,
-		ClusterId:      clusterId,
-		ClusterVersion: deployment.KubernetesDeployment.GCPDefinition.ClusterVersion,
-		GCPProfile: &GCPProfile{
-			ServiceAccount: deployment.KubernetesDeployment.GCPDefinition.ServiceAccount,
-			Scopes: []string{
-				container.CloudPlatformScope,
-				compute.ComputeScope,
-			},
-			AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
-		},
+	deployment.Name = clusterId
+	gcpCluster := &GCPCluster{
+		Zone:      deployment.Region,
+		ClusterId: clusterId,
 		NodeInfos: make(map[int]*NodeInfo),
 	}
+
+	if deployment.KubernetesDeployment.GCPDefinition != nil {
+		gcpCluster.ClusterVersion = deployment.KubernetesDeployment.GCPDefinition.ClusterVersion
+	}
+
+	return gcpCluster
 }
 
 func CreateClient(gcpProfile *GCPProfile) (*http.Client, error) {
@@ -81,7 +105,7 @@ func CreateClient(gcpProfile *GCPProfile) (*http.Client, error) {
 		return nil, errors.New("Unable to read service account file: " + err.Error())
 	}
 
-	conf, err := google.JWTConfigFromJSON(dat, gcpProfile.Scopes...)
+	conf, err := google.JWTConfigFromJSON(dat, defaultScopes...)
 	if err != nil {
 		return nil, errors.New("Unable to acquire generate config: " + err.Error())
 	}
@@ -157,9 +181,11 @@ func CreateUniqueClusterId(deploymentName string) string {
 
 func UploadFilesToStorage(
 	config *viper.Viper,
-	gcpProfile *GCPProfile,
 	fileName string,
 	filePath string) (string, error) {
+	gcpProfile := &GCPProfile{
+		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
+	}
 	client, err := CreateClient(gcpProfile)
 	if err != nil {
 		return "", errors.New("Unable to create google cloud platform client: " + err.Error())
@@ -176,8 +202,24 @@ func UploadFilesToStorage(
 	}
 	defer file.Close()
 
+	projectId, err := gcpProfile.GetProjectId()
+	if err != nil {
+		return "", errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpProfile.ProjectId = projectId
+
+	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
+	_, err = storageSrv.Buckets.Get(bucketName).Do()
+	if err != nil {
+		glog.Warningf("unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
+		if _, err := storageSrv.Buckets.
+			Insert(projectId, &storage.Bucket{Name: bucketName}).Do(); err != nil {
+			return "", errors.New("unable to create bucketName from google cloud platform storage: " + err.Error())
+		}
+	}
+
 	uploadObj, err := storageSrv.Objects.
-		Insert(config.GetString("gcpUserProfileBucketName"), &storage.Object{Name: fileName}).
+		Insert(bucketName, &storage.Object{Name: fileName}).
 		Media(file).
 		Do()
 	if err != nil {
@@ -185,4 +227,56 @@ func UploadFilesToStorage(
 	}
 
 	return uploadObj.MediaLink, nil
+}
+
+func DownloadUserProfiles(config *viper.Viper) error {
+	gcpProfile := &GCPProfile{
+		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
+	}
+	client, err := CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	storageSrv, err := storage.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
+	}
+
+	projectId, err := gcpProfile.GetProjectId()
+	if err != nil {
+		return errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpProfile.ProjectId = projectId
+
+	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
+	resp, err := storageSrv.Objects.List(bucketName).Do()
+	if err != nil {
+		return errors.New("unable to list bucket files from google cloud platform storage: " + err.Error())
+	}
+
+	basePath := config.GetString("filesPath")
+	for _, obj := range resp.Items {
+		fileName := obj.Name
+		resp, err := storageSrv.Objects.
+			Get(bucketName, fileName).
+			Download()
+		if err != nil {
+			return fmt.Errorf("Unable download %s fileName: %s", fileName, err.Error())
+		}
+		defer resp.Body.Close()
+
+		output, err := os.Create(basePath + "/" + fileName)
+		if err != nil {
+			return errors.New("Error while creating: " + err.Error())
+		}
+		defer output.Close()
+
+		_, err = io.Copy(output, resp.Body)
+		if err != nil {
+			return errors.New("Error while downloading: " + err.Error())
+		}
+	}
+
+	return nil
 }

@@ -27,17 +27,19 @@ import (
 )
 
 // NewDeployer return the EC2 of Deployer
-func NewDeployer(config *viper.Viper, awsProfile *hpaws.AWSProfile, deployment *apis.Deployment) (*ECSDeployer, error) {
+func NewDeployer(
+	config *viper.Viper,
+	cluster clusters.Cluster,
+	deployment *apis.Deployment) (*ECSDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
 	deployer := &ECSDeployer{
 		Deployment:    deployment,
 		Config:        config,
-		AWSCluster:    awsCluster,
+		AWSCluster:    cluster.(*hpaws.AWSCluster),
 		DeploymentLog: log,
 	}
 

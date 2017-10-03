@@ -53,11 +53,11 @@ func NewInClusterDeployer(
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
-	awsProfile := &hpaws.AWSProfile{
+	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region)
+	awsCluster.AWSProfile = &hpaws.AWSProfile{
 		AwsId:     config.GetString("awsId"),
 		AwsSecret: config.GetString("awsSecret"),
 	}
-	awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
 
 	kubeConfig, err := rest.InClusterConfig()
 	if err != nil {

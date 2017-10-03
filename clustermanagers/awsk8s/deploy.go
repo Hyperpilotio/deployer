@@ -37,7 +37,6 @@ import (
 func NewDeployer(
 	config *viper.Viper,
 	cluster clusters.Cluster,
-	awsProfile *hpaws.AWSProfile,
 	deployment *apis.Deployment) (*K8SDeployer, error) {
 	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
 	if err != nil {

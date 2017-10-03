@@ -15,16 +15,26 @@ type Cluster interface {
 	ReloadKeyPair(keyMaterial string) error
 }
 
+type UserProfile interface {
+	GetGCPProfile() *hpgcp.GCPProfile
+	GetAWSProfile() *hpaws.AWSProfile
+}
+
 func NewCluster(
 	config *viper.Viper,
 	deployType string,
-	awsProfile *hpaws.AWSProfile,
+	userProfile UserProfile,
 	deployment *apis.Deployment) Cluster {
 	switch deployType {
 	case "ECS", "K8S":
-		return hpaws.NewAWSCluster(deployment.Name, deployment.Region, awsProfile)
+		awsCluster := hpaws.NewAWSCluster(deployment.Name, deployment.Region)
+		awsCluster.AWSProfile = userProfile.GetAWSProfile()
+		return awsCluster
 	case "GCP":
-		return hpgcp.NewGCPCluster(config, deployment)
+		gcpCluster := hpgcp.NewGCPCluster(config, deployment)
+		gcpProfile := userProfile.GetGCPProfile()
+		gcpCluster.GCPProfile = gcpProfile
+		return gcpCluster
 	default:
 		glog.Errorf("Unsupported deploy type: " + deployType)
 		return nil

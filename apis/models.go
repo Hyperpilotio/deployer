@@ -20,7 +20,6 @@ type ClusterDefinition struct {
 }
 
 type GCPDefinition struct {
-	ServiceAccount string `form:"serviceAccount" json:"serviceAccount"`
 	ClusterVersion string `form:"clusterVersion" json:"clusterVersion"`
 }
 
@@ -58,7 +57,7 @@ type KubernetesDeployment struct {
 	Kubernetes          []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
 	Secrets             []v1.Secret      `form:"secrets" json:"secrets"`
 	SkipDeleteOnFailure bool             `form:"skipdDeleteOnFailure" json:"skipDeleteOnFailure"`
-	GCPDefinition       GCPDefinition    `form:"gcpDefinition" json:"gcpDefinition"`
+	GCPDefinition       *GCPDefinition   `form:"gcpDefinition" json:"gcpDefinition"`
 }
 
 type NodeMappings []NodeMapping
@@ -75,10 +74,11 @@ type VPCPeering struct {
 }
 
 type Deployment struct {
-	UserId string `form:"userId" json:"userId"`
-	Name   string `form:"name" json:"name" binding:"required"`
-	Region string `form:"region" json:"region" binding:"required"`
-	Files  []struct {
+	UserId      string `form:"userId" json:"userId"`
+	Name        string `form:"name" json:"name" binding:"required"`
+	Region      string `form:"region" json:"region" binding:"required"`
+	ClusterType string `form:"clusterType" json:"clusterType" binding:"required"`
+	Files       []struct {
 		FileId string `json:"fileId"`
 		Path   string `json:"path"`
 	} `form:"files" json:"files"`

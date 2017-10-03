@@ -19,6 +19,7 @@ import (
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
+	"github.com/hyperpilotio/deployer/clusters"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/deployer/job"
@@ -52,6 +53,19 @@ type DeploymentInfo struct {
 	Error      string                   `json:"Error"`
 }
 
+type DeploymentUserProfile struct {
+	AWSProfile *hpaws.AWSProfile
+	GCPProfile *hpgcp.GCPProfile
+}
+
+func (userProfile *DeploymentUserProfile) GetAWSProfile() *hpaws.AWSProfile {
+	return userProfile.AWSProfile
+}
+
+func (userProfile *DeploymentUserProfile) GetGCPProfile() *hpgcp.GCPProfile {
+	return userProfile.GCPProfile
+}
+
 func (info *DeploymentInfo) SetState(state DeploymentState) {
 	info.State = state
 	info.Error = ""
@@ -83,15 +97,7 @@ type StoreTemplateDeployment struct {
 }
 
 func (deploymentInfo *DeploymentInfo) GetDeploymentType() string {
-	if deploymentInfo.Deployment.KubernetesDeployment != nil {
-		emptyGCPDefinition := apis.GCPDefinition{}
-		if deploymentInfo.Deployment.KubernetesDeployment.GCPDefinition != emptyGCPDefinition {
-			return "GCP"
-		}
-		return "K8S"
-	} else {
-		return "ECS"
-	}
+	return deploymentInfo.Deployment.ClusterType
 }
 
 func GetStateString(state DeploymentState) string {
@@ -138,12 +144,11 @@ type Server struct {
 	DeploymentStore          blobstore.BlobStore
 	InClusterDeploymentStore blobstore.BlobStore
 	ProfileStore             blobstore.BlobStore
+	GCPProfileStore          blobstore.BlobStore
 	TemplateStore            blobstore.BlobStore
 
-	// TODO abstrct user profile
 	// Maps all available users
-	AWSProfiles map[string]*hpaws.AWSProfile
-	GCPProfiles map[string]*hpgcp.GCPProfile
+	DeploymentUserProfiles map[string]clusters.UserProfile
 
 	// Maps deployment name to deployed cluster struct
 	DeployedClusters map[string]*DeploymentInfo
@@ -224,6 +229,12 @@ func (server *Server) StartServer() error {
 		server.ProfileStore = profileStore
 	}
 
+	if gcpProfileStore, err := blobstore.NewBlobStore("GCPProfiles", server.Config); err != nil {
+		return errors.New("Unable to create awsProfiles store: " + err.Error())
+	} else {
+		server.GCPProfileStore = gcpProfileStore
+	}
+
 	if templateStore, err := blobstore.NewBlobStore("Templates", server.Config); err != nil {
 		return errors.New("Unable to create templates store: " + err.Error())
 	} else {
@@ -252,11 +263,11 @@ func (server *Server) StartServer() error {
 		uiGroup.GET("/list/:status", server.refreshUI)
 
 		uiGroup.GET("/users", server.userUI)
-		uiGroup.POST("/users", server.storeUser)
-		uiGroup.GET("/users/:userId", server.getUser)
-		uiGroup.DELETE("/users/:userId", server.deleteUser)
-		uiGroup.PUT("/users/:userId", server.storeUser)
-		uiGroup.POST("/users/:userId/files/:fileId/gcp/storage", server.uploadFilesToGCPStorage)
+		// uiGroup.POST("/users", server.storeUser)
+		// uiGroup.GET("/users/:userId", server.getUser)
+		// uiGroup.DELETE("/users/:userId", server.deleteUser)
+		// uiGroup.PUT("/users/:userId", server.storeUser)
+		uiGroup.POST("/users/:userId/files/:fileId/gcp", server.storeGCPUser)
 	}
 
 	usersGroup := router.Group("/v1/users")
@@ -530,10 +541,10 @@ func (server *Server) createDeployment(c *gin.Context) {
 	}
 	deploymentType := deploymentInfo.GetDeploymentType()
 
-	var awsProfile *hpaws.AWSProfile
+	var userProfile clusters.UserProfile
 	if !server.Config.GetBool("inCluster") {
 		server.mutex.Lock()
-		deploymentAwsProfile, profileOk := server.AWSProfiles[deployment.UserId]
+		deploymentProfile, profileOk := server.DeploymentUserProfiles[deployment.UserId]
 		server.mutex.Unlock()
 
 		if !profileOk {
@@ -543,12 +554,12 @@ func (server *Server) createDeployment(c *gin.Context) {
 			})
 			return
 		}
-		awsProfile = deploymentAwsProfile
+		userProfile = deploymentProfile
 	}
 
 	deployer, err := clustermanagers.NewDeployer(
 		server.Config,
-		awsProfile,
+		userProfile,
 		deploymentType,
 		deployment,
 		true)
@@ -800,7 +811,9 @@ func (server *Server) deployExtensions(c *gin.Context) {
 			deploymentInfo.SetState(AVAILABLE)
 		}
 
-		server.storeDeployment(deploymentInfo)
+		if err := server.storeDeployment(deploymentInfo); err != nil {
+			log.Logger.Error("Unable to store deployment: " + err.Error())
+		}
 	}()
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1149,22 +1162,54 @@ func checkDuplicateTask(nodeMappings []apis.NodeMapping, checkNodeMapping apis.N
 
 // reloadClusterState reload cluster state when deployer restart
 func (server *Server) reloadClusterState() error {
-	profiles, profileErr := server.ProfileStore.LoadAll(func() interface{} {
+	deploymentUserProfiles := map[string]clusters.UserProfile{}
+	server.DeploymentUserProfiles = deploymentUserProfiles
+
+	profiles, err := server.ProfileStore.LoadAll(func() interface{} {
 		return &hpaws.AWSProfile{}
 	})
-	if profileErr != nil {
-		return fmt.Errorf("Unable to load aws profiles: %s", profileErr.Error())
+	if err != nil {
+		return fmt.Errorf("Unable to load aws profiles: %s", err.Error())
 	}
-
-	awsProfileInfos := map[string]*hpaws.AWSProfile{}
 	for _, awsProfile := range profiles.([]interface{}) {
-		awsProfileInfos[awsProfile.(*hpaws.AWSProfile).UserId] = awsProfile.(*hpaws.AWSProfile)
+		userId := awsProfile.(*hpaws.AWSProfile).UserId
+		userProfile, ok := server.DeploymentUserProfiles[userId]
+		if ok {
+			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+				AWSProfile: awsProfile.(*hpaws.AWSProfile),
+				GCPProfile: userProfile.GetGCPProfile(),
+			}
+		} else {
+			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+				AWSProfile: awsProfile.(*hpaws.AWSProfile),
+			}
+		}
 	}
-	server.AWSProfiles = awsProfileInfos
 
-	// TODO reload GCPProfile
-	gcpProfileInfos := map[string]*hpgcp.GCPProfile{}
-	server.GCPProfiles = gcpProfileInfos
+	if err := hpgcp.DownloadUserProfiles(server.Config); err != nil {
+		return fmt.Errorf("Unable to download all GCP user profiles: %s", err.Error())
+	}
+
+	gcpProfiles, err := server.GCPProfileStore.LoadAll(func() interface{} {
+		return &hpgcp.GCPProfile{}
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to load gcp profiles: %s", err.Error())
+	}
+	for _, gcpProfile := range gcpProfiles.([]interface{}) {
+		userId := gcpProfile.(*hpgcp.GCPProfile).UserId
+		userProfile, ok := server.DeploymentUserProfiles[userId]
+		if ok {
+			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+				AWSProfile: userProfile.GetAWSProfile(),
+				GCPProfile: gcpProfile.(*hpgcp.GCPProfile),
+			}
+		} else {
+			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+				GCPProfile: gcpProfile.(*hpgcp.GCPProfile),
+			}
+		}
+	}
 
 	inCluster := server.Config.GetBool("inCluster")
 	var deploymentStore blobstore.BlobStore
@@ -1222,7 +1267,7 @@ func (server *Server) reloadClusterState() error {
 			continue
 		}
 
-		var awsProfile *hpaws.AWSProfile
+		var userProfile clusters.UserProfile
 		if !inCluster {
 			userId := storeDeployment.UserId
 			if userId == "" {
@@ -1230,12 +1275,12 @@ func (server *Server) reloadClusterState() error {
 				continue
 			}
 
-			deploymentAwsProfile, profileOk := server.AWSProfiles[storeDeployment.UserId]
+			deploymentProfile, profileOk := server.DeploymentUserProfiles[storeDeployment.UserId]
 			if !profileOk {
 				glog.Warning("Skip loading deployment: Unable to find aws profile for user " + storeDeployment.UserId)
 				continue
 			}
-			awsProfile = deploymentAwsProfile
+			userProfile = deploymentProfile
 		}
 
 		deployment := &apis.Deployment{}
@@ -1247,7 +1292,7 @@ func (server *Server) reloadClusterState() error {
 
 		deployer, err := clustermanagers.NewDeployer(
 			server.Config,
-			awsProfile,
+			userProfile,
 			storeDeployment.Type,
 			deployment,
 			false)

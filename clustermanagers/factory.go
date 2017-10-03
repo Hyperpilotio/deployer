@@ -10,7 +10,6 @@ import (
 	"github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
 	"github.com/hyperpilotio/deployer/clustermanagers/gcpgke"
 	"github.com/hyperpilotio/deployer/clusters"
-	"github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/pborman/uuid"
@@ -39,7 +38,7 @@ type Deployer interface {
 
 func NewDeployer(
 	config *viper.Viper,
-	awsProfile *aws.AWSProfile,
+	userProfile clusters.UserProfile,
 	deployType string,
 	deployment *apis.Deployment,
 	createName bool) (Deployer, error) {
@@ -48,7 +47,7 @@ func NewDeployer(
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
-	cluster := clusters.NewCluster(config, deployType, awsProfile, deployment)
+	cluster := clusters.NewCluster(config, deployType, userProfile, deployment)
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
@@ -60,9 +59,9 @@ func NewDeployer(
 
 	switch deployType {
 	case "ECS":
-		return awsecs.NewDeployer(config, awsProfile, deployment)
+		return awsecs.NewDeployer(config, cluster, deployment)
 	case "K8S":
-		return awsk8s.NewDeployer(config, cluster, awsProfile, deployment)
+		return awsk8s.NewDeployer(config, cluster, deployment)
 	case "GCP":
 		return gcpgke.NewDeployer(config, cluster, deployment)
 	default:

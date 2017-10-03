@@ -71,9 +71,8 @@ func CreateKeypair(ec2Svc *ec2.EC2, name string) (*ec2.CreateKeyPairOutput, erro
 	return keyOutput, nil
 }
 
-func NewAWSCluster(name string, region string, awsProfile *AWSProfile) *AWSCluster {
+func NewAWSCluster(name string, region string) *AWSCluster {
 	return &AWSCluster{
-		AWSProfile:  awsProfile,
 		Name:        name,
 		Region:      region,
 		NodeInfos:   make(map[int]*NodeInfo),
