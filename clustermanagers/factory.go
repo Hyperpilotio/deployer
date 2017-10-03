@@ -6,9 +6,11 @@ import (
 	"strings"
 
 	"github.com/hyperpilotio/deployer/apis"
-	"github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
+	"github.com/hyperpilotio/deployer/clustermanagers/gcpgke"
+	"github.com/hyperpilotio/deployer/clusters"
+	"github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/pborman/uuid"
@@ -25,13 +27,14 @@ type Deployer interface {
 	GetStoreInfo() interface{}
 	NewStoreInfo() interface{}
 	// TODO(tnachen): Eventually we should support multiple clouds, then we need to abstract AWSCluster
-	GetAWSCluster() *aws.AWSCluster
+	GetCluster() clusters.Cluster
 	GetLog() *log.FileLog
 	GetScheduler() *job.Scheduler
 	SetScheduler(sheduler *job.Scheduler)
 	GetServiceUrl(serviceName string) (string, error)
 	GetServiceAddress(serviceName string) (*apis.ServiceAddress, error)
 	GetServiceMappings() (map[string]interface{}, error)
+	GetKubeConfigPath() (string, error)
 }
 
 func NewDeployer(
@@ -45,10 +48,11 @@ func NewDeployer(
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
+	cluster := clusters.NewCluster(config, deployType, awsProfile, deployment)
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
-			return kubernetes.NewInClusterDeployer(config, deployment)
+			return awsk8s.NewInClusterDeployer(config, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}
@@ -58,7 +62,9 @@ func NewDeployer(
 	case "ECS":
 		return awsecs.NewDeployer(config, awsProfile, deployment)
 	case "K8S":
-		return kubernetes.NewDeployer(config, awsProfile, deployment)
+		return awsk8s.NewDeployer(config, cluster, awsProfile, deployment)
+	case "GCP":
+		return gcpgke.NewDeployer(config, cluster, deployment)
 	default:
 		return nil, errors.New("Unsupported deploy type: " + deployType)
 	}

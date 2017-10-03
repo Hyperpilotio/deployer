@@ -33,3 +33,6 @@ docker-build-incluster:
 	docker build --no-cache . -t ${ORGANIZATION}/${IMAGE}:${INCLUSTER_TAG}
 docker-push:
 	docker push ${ORGANIZATION}/${IMAGE}:${TAG}
+
+gcp-create-service-account-file:
+	./build_gcp_serviceAccoutFile.sh

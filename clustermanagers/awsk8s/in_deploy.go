@@ -1,4 +1,4 @@
-package kubernetes
+package awsk8s
 
 import (
 	"errors"
@@ -14,7 +14,9 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
+	k8sUtil "github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	"github.com/hyperpilotio/deployer/clusters"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
@@ -425,13 +427,13 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
 	log := deployer.DeploymentLog.Logger
-	existingNamespaces, namespacesErr := getExistingNamespaces(k8sClient)
+	existingNamespaces, namespacesErr := k8sUtil.GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	namespace := deployer.getNamespace()
-	if err := createNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+	if err := k8sUtil.CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
 	}
 
@@ -819,7 +821,7 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := deleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
+	if err := k8sUtil.DeleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
@@ -977,7 +979,7 @@ func (deployer *InClusterK8SDeployer) NewStoreInfo() interface{} {
 	return nil
 }
 
-func (deployer *InClusterK8SDeployer) GetAWSCluster() *hpaws.AWSCluster {
+func (deployer *InClusterK8SDeployer) GetCluster() clusters.Cluster {
 	return deployer.AWSCluster
 }
 
@@ -990,6 +992,10 @@ func (deployer *InClusterK8SDeployer) GetScheduler() *job.Scheduler {
 }
 
 func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
+}
+
+func (deployer *InClusterK8SDeployer) GetKubeConfigPath() (string, error) {
+	return deployer.KubeConfigPath, nil
 }
 
 func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {
@@ -1011,7 +1017,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 
 	for _, service := range services.Items {
 		if service.ObjectMeta.Name == serviceName {
-			nodeId, _ := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			nodeId, _ := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			port := service.Spec.Ports[0].Port
 			serviceUrl := serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10)
 			deployer.Services[serviceName] = ServiceMapping{
@@ -1089,7 +1095,7 @@ func (deployer *InClusterK8SDeployer) GetServiceMappings() (map[string]interface
 	serviceMappings := make(map[string]interface{})
 	for serviceName, serviceMapping := range deployer.Services {
 		if serviceMapping.NodeId == 0 {
-			serviceNodeId, err := findNodeIdFromServiceName(deployer.Deployment, serviceName)
+			serviceNodeId, err := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			if err != nil {
 				return nil, fmt.Errorf("Unable to find %s node id: %s", serviceName, err.Error())
 			}

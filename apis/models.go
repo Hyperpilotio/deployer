@@ -19,6 +19,11 @@ type ClusterDefinition struct {
 	Nodes []ClusterNode `form:"nodes" json:"nodes" binding:"required"`
 }
 
+type GCPDefinition struct {
+	ServiceAccount string `form:"serviceAccount" json:"serviceAccount"`
+	ClusterVersion string `form:"clusterVersion" json:"clusterVersion"`
+}
+
 type NodeMapping struct {
 	Id   int    `json:"id"`
 	Task string `json:"task"`
@@ -53,6 +58,7 @@ type KubernetesDeployment struct {
 	Kubernetes          []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
 	Secrets             []v1.Secret      `form:"secrets" json:"secrets"`
 	SkipDeleteOnFailure bool             `form:"skipdDeleteOnFailure" json:"skipDeleteOnFailure"`
+	GCPDefinition       GCPDefinition    `form:"gcpDefinition" json:"gcpDefinition"`
 }
 
 type NodeMappings []NodeMapping

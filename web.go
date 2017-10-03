@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	awsk8s "github.com/hyperpilotio/deployer/clustermanagers/awsk8s"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 
 	"net/http"
 )
@@ -310,7 +310,8 @@ func (server *Server) getCluster(c *gin.Context) {
 			return
 		}
 
-		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, deploymentInfo.Deployer.GetAWSCluster())
+		cluster := deploymentInfo.Deployer.GetCluster()
+		clusterInfo, err := awsecs.GetClusterInfo(awsProfile, cluster.(*hpaws.AWSCluster))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
@@ -324,7 +325,7 @@ func (server *Server) getCluster(c *gin.Context) {
 			"data":  clusterInfo,
 		})
 	case "K8S":
-		clusterInfo, err := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetClusterInfo()
+		clusterInfo, err := deploymentInfo.Deployer.(*awsk8s.K8SDeployer).GetClusterInfo()
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,

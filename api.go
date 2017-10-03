@@ -13,15 +13,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
 	"github.com/gin-gonic/gin"
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/blobstore"
 	"github.com/hyperpilotio/deployer/apis"
-	hpaws "github.com/hyperpilotio/deployer/aws"
 	"github.com/hyperpilotio/deployer/clustermanagers"
 	"github.com/hyperpilotio/deployer/clustermanagers/awsecs"
-	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
+	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/spf13/viper"
@@ -85,6 +83,10 @@ type StoreTemplateDeployment struct {
 
 func (deploymentInfo *DeploymentInfo) GetDeploymentType() string {
 	if deploymentInfo.Deployment.KubernetesDeployment != nil {
+		emptyGCPDefinition := apis.GCPDefinition{}
+		if deploymentInfo.Deployment.KubernetesDeployment.GCPDefinition != emptyGCPDefinition {
+			return "GCP"
+		}
 		return "K8S"
 	} else {
 		return "ECS"
@@ -181,9 +183,9 @@ func (deploymentInfo *DeploymentInfo) NewStoreDeployment() (*StoreDeployment, er
 		ClusterManager: deploymentInfo.Deployer.GetStoreInfo(),
 	}
 
-	awsCluster := deploymentInfo.Deployer.GetAWSCluster()
-	if awsCluster.KeyPair != nil {
-		storeDeployment.KeyMaterial = aws.StringValue(awsCluster.KeyPair.KeyMaterial)
+	cluster := deploymentInfo.Deployer.GetCluster()
+	if cluster.GetKeyMaterial() != "" {
+		storeDeployment.KeyMaterial = cluster.GetKeyMaterial()
 	}
 
 	return storeDeployment, nil
@@ -320,34 +322,18 @@ func (server *Server) getNodeAddressForTask(c *gin.Context) {
 		return
 	}
 
-	nodeId := -1
-	for _, nodeMapping := range deploymentInfo.Deployment.NodeMapping {
-		if nodeMapping.Task == taskName {
-			nodeId = nodeMapping.Id
-			break
-		}
-	}
-
-	if nodeId == -1 {
+	serviceAddress, err := deploymentInfo.Deployer.GetServiceAddress(taskName)
+	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "Unable to find task in deployment node mappings",
-		})
-		return
-	}
-
-	nodeInfo, nodeOk := deploymentInfo.Deployer.GetAWSCluster().NodeInfos[nodeId]
-	if !nodeOk {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find node in cluster",
+			"data":  "Unable to find task node address:" + err.Error(),
 		})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"error": false,
-		"data":  nodeInfo.PublicDnsName,
+		"data":  serviceAddress.Host,
 	})
 }
 
@@ -826,9 +812,9 @@ func (server *Server) getPemFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		awsCluster := deploymentInfo.Deployer.GetAWSCluster()
-		if awsCluster != nil && awsCluster.KeyPair != nil {
-			privateKey := strings.Replace(*awsCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
+		keyMaterial := deploymentInfo.Deployer.GetCluster().GetKeyMaterial()
+		if keyMaterial != "" {
+			privateKey := strings.Replace(keyMaterial, "\\n", "\n", -1)
 			c.String(http.StatusOK, privateKey)
 			return
 		}
@@ -845,15 +831,15 @@ func (server *Server) getKubeConfigFile(c *gin.Context) {
 	defer server.mutex.Unlock()
 
 	if deploymentInfo, ok := server.DeployedClusters[c.Param("deployment")]; ok {
-		if deploymentInfo.GetDeploymentType() != "K8S" {
+		kubeConfigPath, err := deploymentInfo.Deployer.GetKubeConfigPath()
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": true,
-				"data":  "Unsupported deployment type",
+				"data":  "Unable to get kubeConfig file:" + err.Error(),
 			})
 			return
 		}
 
-		kubeConfigPath := deploymentInfo.Deployer.(*kubernetes.K8SDeployer).GetKubeConfigPath()
 		if kubeConfigPath != "" {
 			if b, err := ioutil.ReadFile(kubeConfigPath); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -1025,7 +1011,6 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 	deploymentName := deploymentInfo.Deployment.Name
-
 	var deploymentStore blobstore.BlobStore
 	if server.Config.GetBool("inCluster") {
 		deploymentStore = server.InClusterDeploymentStore
@@ -1284,7 +1269,8 @@ func (server *Server) reloadClusterState() error {
 		// Reload keypair
 		if !inCluster {
 			glog.Infof("Reloading key pair for deployment %s", deployment.Name)
-			if err := deployer.GetAWSCluster().ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
+			cluster := deploymentInfo.Deployer.GetCluster()
+			if err := cluster.ReloadKeyPair(storeDeployment.KeyMaterial); err != nil {
 				if err := deploymentStore.Delete(deploymentName); err != nil {
 					glog.Warningf("Unable to delete %s deployment after reload keyPair: %s", deploymentName, err.Error())
 				}

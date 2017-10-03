@@ -110,6 +110,14 @@ func (awsCluster AWSCluster) SubnetName() string {
 	return awsCluster.Name + "-subnet"
 }
 
+func (awsCluster AWSCluster) GetClusterType() string {
+	return "AWS"
+}
+
+func (awsCluster AWSCluster) GetKeyMaterial() string {
+	return *awsCluster.KeyPair.KeyMaterial
+}
+
 func (awsCluster AWSCluster) SshConfig(user string) (*ssh.ClientConfig, error) {
 	privateKey := strings.Replace(*awsCluster.KeyPair.KeyMaterial, "\\n", "\n", -1)
 
