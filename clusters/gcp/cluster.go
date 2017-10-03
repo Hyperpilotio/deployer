@@ -69,7 +69,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 				container.CloudPlatformScope,
 				compute.ComputeScope,
 			},
-			AuthJSONFilePath: config.GetString("gpcServiceAccountJSONFile"),
+			AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
 		},
 		NodeInfos: make(map[int]*NodeInfo),
 	}
@@ -177,7 +177,7 @@ func UploadFilesToStorage(
 	defer file.Close()
 
 	uploadObj, err := storageSrv.Objects.
-		Insert(config.GetString("gpcUserProfileBucketName"), &storage.Object{Name: fileName}).
+		Insert(config.GetString("gcpUserProfileBucketName"), &storage.Object{Name: fileName}).
 		Media(file).
 		Do()
 	if err != nil {

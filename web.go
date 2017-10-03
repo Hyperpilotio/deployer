@@ -286,7 +286,7 @@ func (server *Server) uploadFilesToGCPStorage(c *gin.Context) {
 		Scopes: []string{
 			storage.DevstorageFullControlScope,
 		},
-		AuthJSONFilePath: server.Config.GetString("gpcServiceAccountJSONFile"),
+		AuthJSONFilePath: server.Config.GetString("gcpServiceAccountJSONFile"),
 	}
 	_, err := hpgcp.UploadFilesToStorage(server.Config, gcpProfile,
 		fileName, filePath)
