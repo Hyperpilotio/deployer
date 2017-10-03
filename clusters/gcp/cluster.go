@@ -67,7 +67,7 @@ func NewGCPCluster(config *viper.Viper, deployment *apis.Deployment) *GCPCluster
 				container.CloudPlatformScope,
 				compute.ComputeScope,
 			},
-			AuthJSONFilePath: config.GetString("gpcServiceAccountJSONFile"),
+			AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
 		},
 		NodeInfos: make(map[int]*NodeInfo),
 	}
