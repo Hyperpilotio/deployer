@@ -1333,7 +1333,6 @@ func (k8sDeployer *K8SDeployer) deployServices(k8sClient *k8s.Clientset, existin
 func (k8sDeployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	deployment := k8sDeployer.Deployment
 	log := k8sDeployer.DeploymentLog.Logger
-	k8sDeployer.Services = map[string]ServiceMapping{}
 
 	allNamespaces := getAllDeployedNamespaces(deployment)
 	c := make(chan bool, 1)
