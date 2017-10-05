@@ -39,6 +39,10 @@ func NewDeployer(
 	}
 
 	gcpCluster := cluster.(*hpgcp.GCPCluster)
+	if gcpCluster.GCPProfile == nil {
+		return nil, errors.New("Unable to find GCP Profile from user")
+	}
+
 	projectId, err := gcpCluster.GCPProfile.GetProjectId()
 	if err != nil {
 		return nil, errors.New("Unable to find projectId: " + err.Error())

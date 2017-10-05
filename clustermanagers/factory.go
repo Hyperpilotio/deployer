@@ -42,7 +42,6 @@ func NewDeployer(
 	deployType string,
 	deployment *apis.Deployment,
 	createName bool) (Deployer, error) {
-
 	if createName {
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
