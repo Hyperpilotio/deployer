@@ -39,7 +39,13 @@ AWS
 GCP
 -----------
   - Handles launching GKE servers for running a cluster manager  
-      * Create your GCP projectId first
+      * Install gcloud
+      * Create your GCP projectId first (Use GCP web console or gcloud)
+      * System will auto create 'compute Engine default service account' when you first click 'Container Engine' from GCP web console
+      * Enable GAE service support because we need to use 'Storage' to upload serviceAccount JSON file  
+      * Run deployer/build_gcp_serviceAccoutFile.sh to gen your serviceAccount JSON file (You can also change iam-account)
+      * Setting gcpServiceAccountJSONFile path to dev.config (See template.config)
+      * Write deploy-gcp.json to deploy
 
 Clustermanagers
 -----------
