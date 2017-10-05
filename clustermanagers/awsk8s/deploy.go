@@ -825,7 +825,6 @@ func tagKubeNodes(
 func (deployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 	deployment := deployer.Deployment
 	log := deployer.DeploymentLog.Logger
-	deployer.Services = map[string]ServiceMapping{}
 
 	allNamespaces := k8sUtil.GetAllDeployedNamespaces(deployment)
 	c := make(chan bool, 1)
