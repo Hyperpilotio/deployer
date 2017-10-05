@@ -264,7 +264,6 @@ func (server *Server) StartServer() error {
 
 		uiGroup.GET("/users", server.userUI)
 		uiGroup.POST("/users", server.storeUser)
-		uiGroup.GET("/users/:userId", server.getUser)
 		uiGroup.DELETE("/users/:userId", server.deleteUser)
 		uiGroup.PUT("/users/:userId", server.storeUser)
 	}

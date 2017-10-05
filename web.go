@@ -16,7 +16,6 @@ import (
 
 type UserProfileData interface {
 	Store() error
-	Load() (interface{}, error)
 	Delete() error
 }
 
@@ -222,31 +221,6 @@ func (server *Server) storeUser(c *gin.Context) {
 	})
 }
 
-func (server *Server) getUser(c *gin.Context) {
-	userProfileData, err := server.NewUserProfileData(c)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to new user profile data: " + err.Error(),
-		})
-		return
-	}
-
-	userProfile, err := userProfileData.Load()
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": true,
-			"data":  "Unable to find user data:" + err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"error": false,
-		"data":  userProfile,
-	})
-}
-
 func (server *Server) deleteUser(c *gin.Context) {
 	userProfileData, err := server.NewUserProfileData(c)
 	if err != nil {
@@ -292,16 +266,6 @@ func (awsUser *AWSUserProfileData) Store() error {
 	awsUser.Server.mutex.Unlock()
 
 	return nil
-}
-
-func (awsUser *AWSUserProfileData) Load() (interface{}, error) {
-	userId := awsUser.AWSProfile.UserId
-	userProfile, ok := awsUser.Server.DeploymentUserProfiles[userId]
-	if !ok {
-		return nil, errors.New("Unable to find AWS user profile")
-	}
-
-	return userProfile.GetAWSProfile(), nil
 }
 
 func (awsUser *AWSUserProfileData) Delete() error {
@@ -364,16 +328,6 @@ func (gcpUser *GCPUserProfileData) Store() error {
 	gcpUser.Server.mutex.Unlock()
 
 	return nil
-}
-
-func (gcpUser *GCPUserProfileData) Load() (interface{}, error) {
-	userId := gcpUser.GCPProfile.UserId
-	userProfile, ok := gcpUser.Server.DeploymentUserProfiles[userId]
-	if !ok {
-		return nil, errors.New("Unable to find GCP user profile")
-	}
-
-	return userProfile.GetGCPProfile(), nil
 }
 
 func (gcpUser *GCPUserProfileData) Delete() error {
