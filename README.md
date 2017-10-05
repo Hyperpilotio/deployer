@@ -36,6 +36,11 @@ AWS
 -----------
   - Handles launching EC2 servers for running a cluster manager
 
+GCP
+-----------
+  - Handles launching GKE servers for running a cluster manager  
+      * Create your GCP projectId first
+
 Clustermanagers
 -----------
   - Handles all cluster manager specific logic
