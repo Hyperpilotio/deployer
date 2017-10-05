@@ -179,32 +179,29 @@ func CreateUniqueClusterId(deploymentName string) string {
 	return fmt.Sprintf("%s-%s", strings.Split(deploymentName, "-")[0], timeSeq)
 }
 
-func UploadFilesToStorage(
-	config *viper.Viper,
-	fileName string,
-	filePath string) (string, error) {
+func UploadFilesToStorage(config *viper.Viper, fileName string, filePath string) error {
 	gcpProfile := &GCPProfile{
 		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
 	}
 	client, err := CreateClient(gcpProfile)
 	if err != nil {
-		return "", errors.New("Unable to create google cloud platform client: " + err.Error())
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
 	storageSrv, err := storage.New(client)
 	if err != nil {
-		return "", errors.New("Unable to create google cloud platform storage service: " + err.Error())
+		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return "", errors.New("unable to open file: " + err.Error())
+		return errors.New("unable to open file: " + err.Error())
 	}
 	defer file.Close()
 
 	projectId, err := gcpProfile.GetProjectId()
 	if err != nil {
-		return "", errors.New("Unable to find projectId: " + err.Error())
+		return errors.New("Unable to find projectId: " + err.Error())
 	}
 	gcpProfile.ProjectId = projectId
 
@@ -214,19 +211,19 @@ func UploadFilesToStorage(
 		glog.Warningf("unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
 		if _, err := storageSrv.Buckets.
 			Insert(projectId, &storage.Bucket{Name: bucketName}).Do(); err != nil {
-			return "", errors.New("unable to create bucketName from google cloud platform storage: " + err.Error())
+			return errors.New("unable to create bucketName from google cloud platform storage: " + err.Error())
 		}
 	}
 
-	uploadObj, err := storageSrv.Objects.
+	_, err = storageSrv.Objects.
 		Insert(bucketName, &storage.Object{Name: fileName}).
 		Media(file).
 		Do()
 	if err != nil {
-		return "", errors.New("unable to upload file to google cloud platform storage: " + err.Error())
+		return errors.New("unable to upload file to google cloud platform storage: " + err.Error())
 	}
 
-	return uploadObj.MediaLink, nil
+	return nil
 }
 
 func DownloadUserProfiles(config *viper.Viper) error {

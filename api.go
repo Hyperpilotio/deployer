@@ -143,7 +143,7 @@ type Server struct {
 	Config                   *viper.Viper
 	DeploymentStore          blobstore.BlobStore
 	InClusterDeploymentStore blobstore.BlobStore
-	ProfileStore             blobstore.BlobStore
+	AWSProfileStore          blobstore.BlobStore
 	GCPProfileStore          blobstore.BlobStore
 	TemplateStore            blobstore.BlobStore
 
@@ -223,10 +223,10 @@ func (server *Server) StartServer() error {
 		server.InClusterDeploymentStore = inClusterDeploymentStore
 	}
 
-	if profileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
+	if awsProfileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
 		return errors.New("Unable to create awsProfiles store: " + err.Error())
 	} else {
-		server.ProfileStore = profileStore
+		server.AWSProfileStore = awsProfileStore
 	}
 
 	if gcpProfileStore, err := blobstore.NewBlobStore("GCPProfiles", server.Config); err != nil {
@@ -263,11 +263,10 @@ func (server *Server) StartServer() error {
 		uiGroup.GET("/list/:status", server.refreshUI)
 
 		uiGroup.GET("/users", server.userUI)
-		// uiGroup.POST("/users", server.storeUser)
-		// uiGroup.GET("/users/:userId", server.getUser)
-		// uiGroup.DELETE("/users/:userId", server.deleteUser)
-		// uiGroup.PUT("/users/:userId", server.storeUser)
-		uiGroup.POST("/users/:userId/files/:fileId/gcp", server.storeGCPUser)
+		uiGroup.POST("/users", server.storeUser)
+		uiGroup.GET("/users/:userId", server.getUser)
+		uiGroup.DELETE("/users/:userId", server.deleteUser)
+		uiGroup.PUT("/users/:userId", server.storeUser)
 	}
 
 	usersGroup := router.Group("/v1/users")
@@ -1165,7 +1164,7 @@ func (server *Server) reloadClusterState() error {
 	deploymentUserProfiles := map[string]clusters.UserProfile{}
 	server.DeploymentUserProfiles = deploymentUserProfiles
 
-	profiles, err := server.ProfileStore.LoadAll(func() interface{} {
+	profiles, err := server.AWSProfileStore.LoadAll(func() interface{} {
 		return &hpaws.AWSProfile{}
 	})
 	if err != nil {
