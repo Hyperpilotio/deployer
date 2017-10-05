@@ -87,6 +87,7 @@ func NewGCPCluster(
 	clusterId := CreateUniqueClusterId(deployment.Name)
 	deployment.Name = clusterId
 	gcpCluster := &GCPCluster{
+		Name:      clusterId,
 		Zone:      deployment.Region,
 		ClusterId: clusterId,
 		NodeInfos: make(map[int]*NodeInfo),
