@@ -226,6 +226,40 @@ func UploadFilesToStorage(config *viper.Viper, fileName string, filePath string)
 	return nil
 }
 
+func RemoveFileFromStorage(config *viper.Viper, bucketName string, fileName string) error {
+	gcpProfile := &GCPProfile{
+		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
+	}
+	client, err := CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	storageSrv, err := storage.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
+	}
+
+	projectId, err := gcpProfile.GetProjectId()
+	if err != nil {
+		return errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpProfile.ProjectId = projectId
+
+	_, err = storageSrv.Buckets.Get(bucketName).Do()
+	if err != nil {
+		return fmt.Errorf("unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
+	}
+
+	err = storageSrv.Objects.Delete(bucketName, fileName).Do()
+	if err != nil {
+		return fmt.Errorf("unable to delete %s file from %s bucket: %s",
+			fileName, bucketName, err.Error())
+	}
+
+	return nil
+}
+
 func DownloadUserProfiles(config *viper.Viper) error {
 	gcpProfile := &GCPProfile{
 		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),

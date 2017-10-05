@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -49,28 +51,29 @@ func (d DeploymentLogs) Swap(i, j int) { d[i], d[j] = d[j], d[i] }
 
 func (server *Server) NewUserProfileData(c *gin.Context) (UserProfileData, error) {
 	clusterType := c.DefaultQuery("clusterType", "")
-	userId := c.DefaultQuery("userId", "")
+	userId := c.DefaultPostForm("userId", "")
+	if userId == "" {
+		userId = c.Param("userId")
+	}
+
 	switch clusterType {
 	case "AWS":
 		return &AWSUserProfileData{
 			AWSProfile: &hpaws.AWSProfile{
 				UserId:    userId,
-				AwsId:     c.DefaultQuery("awsId", ""),
-				AwsSecret: c.DefaultQuery("awsSecret", ""),
+				AwsId:     c.DefaultPostForm("awsId", ""),
+				AwsSecret: c.DefaultPostForm("awsSecret", ""),
 			},
 			Server: server,
 		}, nil
 	case "GCP":
-		gcpProfile := &hpgcp.GCPProfile{
-			UserId:           userId,
-			ServiceAccount:   c.DefaultQuery("serviceAccount", ""),
-			AuthJSONFilePath: c.DefaultQuery("filePath", ""),
-		}
-
 		return &GCPUserProfileData{
-			FileId:     c.DefaultQuery("fileId", ""),
-			GCPProfile: gcpProfile,
-			Server:     server,
+			FileId: c.DefaultPostForm("fileId", ""),
+			GCPProfile: &hpgcp.GCPProfile{
+				UserId:         userId,
+				ServiceAccount: c.DefaultPostForm("serviceAccount", ""),
+			},
+			Server: server,
 		}, nil
 	default:
 		return nil, errors.New("Unsupported cluster type: " + clusterType)
@@ -234,7 +237,7 @@ func (server *Server) deleteUser(c *gin.Context) {
 	if err := userProfileData.Delete(); err != nil {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
-			"data":  "UUnable to delete user data:" + err.Error(),
+			"data":  "Unable to delete user data:" + err.Error(),
 		})
 		return
 	}
@@ -260,8 +263,16 @@ func (awsUser *AWSUserProfileData) Store() error {
 	}
 
 	awsUser.Server.mutex.Lock()
-	awsUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-		AWSProfile: awsProfile,
+	userProfile, ok := awsUser.Server.DeploymentUserProfiles[userId]
+	if ok {
+		awsUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+			AWSProfile: awsProfile,
+			GCPProfile: userProfile.GetGCPProfile(),
+		}
+	} else {
+		awsUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+			AWSProfile: awsProfile,
+		}
 	}
 	awsUser.Server.mutex.Unlock()
 
@@ -297,33 +308,39 @@ func (gcpUser *GCPUserProfileData) Store() error {
 	}
 
 	userId := gcpProfile.UserId
-	if gcpProfile.AuthJSONFilePath == "" {
-		fileId := gcpUser.FileId
-		fileName := userId + "_" + fileId
-		filePath, ok := gcpUser.Server.UploadedFiles[fileName]
-		if !ok {
-			return errors.New("Unable to find uploaded file " + fileId)
-		}
-
-		if err := hpgcp.UploadFilesToStorage(gcpUser.Server.Config, fileName, filePath); err != nil {
-			return errors.New("Unable to upload file to GCP strorage: " + err.Error())
-		}
-		gcpProfile.AuthJSONFilePath = filePath
-
-		projectId, err := gcpProfile.GetProjectId()
-		if err != nil {
-			return errors.New("Unable to find projectId: " + err.Error())
-		}
-		gcpProfile.ProjectId = projectId
+	fileId := gcpUser.FileId
+	fileName := userId + "_" + fileId
+	filePath, ok := gcpUser.Server.UploadedFiles[fileName]
+	if !ok {
+		return errors.New("Unable to find uploaded file " + fileId)
 	}
+
+	if err := hpgcp.UploadFilesToStorage(gcpUser.Server.Config, fileName, filePath); err != nil {
+		return errors.New("Unable to upload file to GCP strorage: " + err.Error())
+	}
+	gcpProfile.AuthJSONFilePath = filePath
+
+	projectId, err := gcpProfile.GetProjectId()
+	if err != nil {
+		return errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpProfile.ProjectId = projectId
 
 	if err := gcpUser.Server.GCPProfileStore.Store(userId, gcpProfile); err != nil {
 		return errors.New("Unable to store user data: " + err.Error())
 	}
 
 	gcpUser.Server.mutex.Lock()
-	gcpUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-		GCPProfile: gcpProfile,
+	userProfile, ok := gcpUser.Server.DeploymentUserProfiles[userId]
+	if ok {
+		gcpUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+			AWSProfile: userProfile.GetAWSProfile(),
+			GCPProfile: gcpProfile,
+		}
+	} else {
+		gcpUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+			GCPProfile: gcpProfile,
+		}
 	}
 	gcpUser.Server.mutex.Unlock()
 
@@ -331,25 +348,38 @@ func (gcpUser *GCPUserProfileData) Store() error {
 }
 
 func (gcpUser *GCPUserProfileData) Delete() error {
-	userId := gcpUser.GCPProfile.UserId
+	gcpProfile := gcpUser.GCPProfile
+	userId := gcpProfile.UserId
+	userProfile, ok := gcpUser.Server.DeploymentUserProfiles[userId]
+	if !ok {
+		return errors.New("Unable to find user data")
+	}
+
 	if err := gcpUser.Server.GCPProfileStore.Delete(userId); err != nil {
 		return errors.New("Unable to delete user data: " + err.Error())
 	}
 
-	// TODO delete GCP storage service account
-
-	userProfile, ok := gcpUser.Server.DeploymentUserProfiles[userId]
-	if ok {
-		gcpUser.Server.mutex.Lock()
-		if userProfile.GetAWSProfile() != nil {
-			gcpUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-				AWSProfile: userProfile.GetAWSProfile(),
-			}
-		} else {
-			delete(gcpUser.Server.DeploymentUserProfiles, userId)
-		}
-		gcpUser.Server.mutex.Unlock()
+	// Remove service account file from GCP storage
+	projectId := userProfile.GetGCPProfile().ProjectId
+	config := gcpUser.Server.Config
+	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
+	basePath := config.GetString("filesPath")
+	filePath := userProfile.GetGCPProfile().AuthJSONFilePath
+	fileName := strings.Replace(filePath, basePath+"/", "", -1)
+	fmt.Println("remove filename:", fileName)
+	if err := hpgcp.RemoveFileFromStorage(config, bucketName, fileName); err != nil {
+		return errors.New("Unable to remove user auth json file: " + err.Error())
 	}
+
+	gcpUser.Server.mutex.Lock()
+	if userProfile.GetAWSProfile() != nil {
+		gcpUser.Server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
+			AWSProfile: userProfile.GetAWSProfile(),
+		}
+	} else {
+		delete(gcpUser.Server.DeploymentUserProfiles, userId)
+	}
+	gcpUser.Server.mutex.Unlock()
 
 	return nil
 }
