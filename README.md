@@ -46,6 +46,8 @@ GCP
       * gcloud init (Set to be used projectId)
       * Run deployer/build_gcp_serviceAccoutFile.sh to gen your serviceAccount JSON file (You can also change iam-account)
       * Setting gcpServiceAccountJSONFile path to dev.config (See template.config)
+      * Run deployer
+      * Use $DEPLOYER_URL:7777/ui/users?tab=GCP to upload your serviceAccount JSON file 
       * Write deploy-gcp.json to deploy
 
 Clustermanagers
