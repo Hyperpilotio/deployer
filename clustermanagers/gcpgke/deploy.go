@@ -239,6 +239,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 	deployer.recordPublicEndpoints()
 
+	// TODO Add default-allow-http to Firewall rules
 	if err := tagNodeNetwork(client, gcpCluster, deployment, []string{"http-server"}, log); err != nil {
 		return errors.New("Unable to tag network Tags: " + err.Error())
 	}
