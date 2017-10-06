@@ -1,5 +1,5 @@
 hash: e12c8d744d40ceac97d76ba348f42bf408702b0b9e8209076caa34e2e0e4af61
-updated: 2017-09-22T13:44:04.631001968+08:00
+updated: 2017-10-06T22:12:55.849050207+08:00
 imports:
 - name: cloud.google.com/go
   version: 3b1ae45394a234c385be014e9a488f2bb6eef821
@@ -104,7 +104,7 @@ imports:
 - name: github.com/howeyc/gopass
   version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
 - name: github.com/hyperpilotio/blobstore
-  version: 1d8686626448c5d44b63ca2afcc05b2e05db3acb
+  version: 64f6bea581be46eb305186ffc52c07c9f12b3711
 - name: github.com/hyperpilotio/go-utils
   version: f3d0f91a772385bddcc78bfc4a9cbf6bea4829d2
   subpackages:
@@ -211,9 +211,11 @@ imports:
   subpackages:
   - compute/v1
   - container/v1
+  - datastore/v1
   - gensupport
   - googleapi
   - googleapi/internal/uritemplates
+  - storage/v1
 - name: google.golang.org/appengine
   version: 4f7eeb5305a4ba1966344836ba4af9996b7b4e05
   subpackages:
