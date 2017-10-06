@@ -98,7 +98,7 @@
             $(this).addClass('active');
             if ($('ul.nav-tabs li').first().hasClass('active')) {
                 $('.deployment-btn').show();
-                if ($(this).data('type') == 'K8S') {
+                if ($(this).data('type') == 'K8S' || $(this).data('type') == 'GCP') {
                     $('#downloadKubeconfigBtn').show();
                 } else if ($(this).data('type') == 'ECS') {
                     $('#downloadKubeconfigBtn').hide();

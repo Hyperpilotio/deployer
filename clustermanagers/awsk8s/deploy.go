@@ -120,7 +120,7 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
+	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
 	deployer.recordPublicEndpoints(k8sClient)
@@ -138,8 +138,12 @@ func (deployer *K8SDeployer) DeployExtensions(
 
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient,
-		deployer.Deployment, deployer.GetLog().Logger); err != nil {
+	if err := k8sUtil.DeployKubernetesObjects(
+		deployer.Config,
+		k8sClient,
+		deployer.Deployment,
+		"ubuntu",
+		deployer.GetLog().Logger); err != nil {
 		deployer.Deployment = originalDeployment
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
@@ -279,7 +283,7 @@ func deployCluster(deployer *K8SDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
+	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}

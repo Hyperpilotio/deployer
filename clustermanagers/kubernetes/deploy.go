@@ -26,6 +26,7 @@ func DeployKubernetesObjects(
 	config *viper.Viper,
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
+	userName string,
 	log *logging.Logger) error {
 	namespaces, namespacesErr := GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
@@ -36,7 +37,7 @@ func DeployKubernetesObjects(
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := DeployServices(k8sClient, deployment, namespaces, log); err != nil {
+	if err := DeployServices(k8sClient, deployment, namespaces, userName, log); err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -47,6 +48,7 @@ func DeployServices(
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	existingNamespaces map[string]bool,
+	userName string,
 	log *logging.Logger) error {
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
@@ -113,6 +115,12 @@ func DeployServices(
 			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log, skipCreatePublicService)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
+			}
+		}
+
+		for _, mount := range deploySpec.Spec.Template.Spec.Volumes {
+			if mount.HostPath != nil && strings.HasPrefix(mount.HostPath.Path, "~/") {
+				mount.HostPath.Path = strings.Replace(mount.HostPath.Path, "~/", "/home/"+userName+"/", 1)
 			}
 		}
 

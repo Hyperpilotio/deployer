@@ -109,7 +109,9 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
+	gcpCluster := deployer.GCPCluster
+	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
+	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
 	deployer.recordPublicEndpoints()
@@ -127,8 +129,14 @@ func (deployer *GCPDeployer) DeployExtensions(
 
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient,
-		deployer.Deployment, deployer.GetLog().Logger); err != nil {
+	gcpCluster := deployer.GCPCluster
+	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
+	if err := k8sUtil.DeployKubernetesObjects(
+		deployer.Config,
+		k8sClient,
+		deployer.Deployment,
+		userName,
+		deployer.GetLog().Logger); err != nil {
 		deployer.Deployment = originalDeployment
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
@@ -242,7 +250,8 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, log); err != nil {
+	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
+	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
@@ -413,22 +422,20 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 
 	newDeployment := &apis.Deployment{UserId: deployment.UserId}
 	for _, file := range deployment.Files {
-		file.Path = strings.Replace(file.Path, "$(SERVICE_ACCOUNT)", userName, -1)
+		if strings.HasPrefix(file.Path, "~/") {
+			file.Path = strings.Replace(file.Path, "~/", "/home/"+userName+"/", 1)
+		}
 		newDeployment.Files = append(newDeployment.Files, file)
 	}
 
-	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PublicIp+":22", clientConfig, "")
 		if err := common.UploadFiles(sshClient, newDeployment, uploadedFiles, log); err != nil {
-			errBool = true
+			return fmt.Errorf("Unable to upload file to node %s: %s", nodeInfo.PublicIp, err.Error())
 		}
 	}
-	if errBool {
-		return errors.New("Unable to uploaded all files")
-	}
-	log.Info("Uploaded all files")
 
+	log.Info("Uploaded all files")
 	return nil
 }
 
