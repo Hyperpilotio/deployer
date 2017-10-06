@@ -179,6 +179,11 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 			gcpCluster.ClusterId, err.Error())
 	}
 
+	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	if err := deleteFirewallRules(client, gcpProfile.ProjectId, firewallRuleName); err != nil {
+		log.Warningf("Unable to delete firewall rules: " + err.Error())
+	}
+
 	return nil
 }
 
@@ -237,12 +242,12 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
-	deployer.recordPublicEndpoints()
 
-	// TODO Add default-allow-http to Firewall rules
-	if err := tagNodeNetwork(client, gcpCluster, deployment, []string{"http-server"}, log); err != nil {
-		return errors.New("Unable to tag network Tags: " + err.Error())
+	if err := tagFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable to tag firewall ingress rules: " + err.Error())
 	}
+	deployer.recordPublicEndpoints()
 
 	return nil
 }
@@ -355,21 +360,32 @@ func (deployer *GCPDeployer) recordPublicEndpoints() {
 	deployment := deployer.Deployment
 	deployer.Services = map[string]ServiceMapping{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
-		for _, container := range task.Deployment.Spec.Template.Spec.Containers {
-			hostPort := container.Ports[0].HostPort
-			taskFamilyName := task.Family
-			for _, nodeMapping := range deployment.NodeMapping {
-				if nodeMapping.Task == taskFamilyName {
-					nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
-					if ok {
-						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
-						servicePort := strconv.FormatInt(int64(hostPort), 10)
-						serviceMapping := ServiceMapping{
-							NodeId:    nodeMapping.Id,
-							NodeName:  nodeInfo.Instance.Name,
-							PublicUrl: serviceName + ":" + servicePort,
+		if task.PortTypes == nil || len(task.PortTypes) == 0 {
+			continue
+		}
+		for i, portType := range task.PortTypes {
+			if portType != publicPortType {
+				continue
+			}
+			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
+				if len(container.Ports) == 0 {
+					continue
+				}
+				hostPort := container.Ports[i].HostPort
+				taskFamilyName := task.Family
+				for _, nodeMapping := range deployment.NodeMapping {
+					if nodeMapping.Task == taskFamilyName {
+						nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
+						if ok {
+							serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
+							servicePort := strconv.FormatInt(int64(hostPort), 10)
+							serviceMapping := ServiceMapping{
+								NodeId:    nodeMapping.Id,
+								NodeName:  nodeInfo.Instance.Name,
+								PublicUrl: serviceName + ":" + servicePort,
+							}
+							deployer.Services[taskFamilyName] = serviceMapping
 						}
-						deployer.Services[taskFamilyName] = serviceMapping
 					}
 				}
 			}

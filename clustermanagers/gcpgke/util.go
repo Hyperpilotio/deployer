@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 
 	k8s "k8s.io/client-go/kubernetes"
 )
+
+var publicPortType = 1
 
 func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error {
 	computeSrv, err := compute.New(client)
@@ -70,11 +73,10 @@ func tagKubeNodes(
 	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, nodeInfos, log)
 }
 
-func tagNodeNetwork(
+func tagFirewallIngressRules(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
 	deployment *apis.Deployment,
-	tagItems []string,
 	log *logging.Logger) error {
 	projectId := gcpCluster.GCPProfile.ProjectId
 	computeSrv, err := compute.New(client)
@@ -82,13 +84,60 @@ func tagNodeNetwork(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
+	// TODO need to allowed ports by node deploy task
+	allowedPorts := []string{}
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
+		if task.PortTypes == nil || len(task.PortTypes) == 0 {
+			continue
+		}
+		for i, portType := range task.PortTypes {
+			if portType != publicPortType {
+				log.Infof("Skipping creating public endpoint for service %s as it's marked as private", task.Family)
+				continue
+			}
+			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
+				if len(container.Ports) == 0 {
+					continue
+				}
+				port := strconv.Itoa(int(container.Ports[i].HostPort))
+
+				allowedPortExist := false
+				for _, allowedPort := range allowedPorts {
+					if allowedPort == port {
+						allowedPortExist = true
+						break
+					}
+				}
+
+				if !allowedPortExist {
+					allowedPorts = append(allowedPorts, port)
+				}
+			}
+		}
+	}
+
+	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
+	_, err = computeSrv.Firewalls.Insert(projectId, &compute.Firewall{
+		Allowed: []*compute.FirewallAllowed{
+			&compute.FirewallAllowed{
+				IPProtocol: "tcp",
+				Ports:      allowedPorts,
+			},
+		},
+		Description: "INGRESS",
+		Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
+		Priority:    int64(1000),
+		TargetTags:  []string{targetTagName},
+	}).Do()
+	if err != nil {
+		return errors.New("Unable to create firewall ingress rules: " + err.Error())
+	}
+
 	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		instanceName := nodeInfo.Instance.Name
 		newTags := *nodeInfo.Instance.Tags
-		for _, tagItem := range tagItems {
-			newTags.Items = append(newTags.Items, tagItem)
-		}
+		newTags.Items = append(newTags.Items, targetTagName)
 		_, err := computeSrv.Instances.
 			SetTags(projectId, gcpCluster.Zone, instanceName, &newTags).
 			Do()
@@ -98,6 +147,20 @@ func tagNodeNetwork(
 	}
 	if errBool {
 		return errors.New("Unable to tag network for all node")
+	}
+
+	return nil
+}
+
+func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
+	computeSrv, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	_, err = computeSrv.Firewalls.Delete(projectId, firewallName).Do()
+	if err != nil {
+		return errors.New("Unable to delete firewall rules: " + err.Error())
 	}
 
 	return nil

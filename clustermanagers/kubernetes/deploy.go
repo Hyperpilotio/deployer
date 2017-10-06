@@ -109,7 +109,8 @@ func DeployServices(
 
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log)
+			skipCreatePublicService := (deployment.ClusterType == "GCP")
+			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log, skipCreatePublicService)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -257,7 +258,8 @@ func CreateServiceForDeployment(
 	k8sClient *k8s.Clientset,
 	task apis.KubernetesTask,
 	container v1.Container,
-	log *logging.Logger) error {
+	log *logging.Logger,
+	skipCreatePublicService bool) error {
 	if len(container.Ports) == 0 {
 		return nil
 	}
@@ -297,7 +299,7 @@ func CreateServiceForDeployment(
 	log.Infof("Created %s internal service", serviceName)
 
 	// Check the type of each port opened by the container; create a loadbalancer service to expose the public port
-	if task.PortTypes == nil || len(task.PortTypes) == 0 {
+	if skipCreatePublicService || task.PortTypes == nil || len(task.PortTypes) == 0 {
 		return nil
 	}
 
