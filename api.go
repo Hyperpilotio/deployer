@@ -1184,10 +1184,6 @@ func (server *Server) reloadClusterState() error {
 		}
 	}
 
-	if err := hpgcp.DownloadUserProfiles(server.Config); err != nil {
-		return fmt.Errorf("Unable to download all GCP user profiles: %s", err.Error())
-	}
-
 	gcpProfiles, err := server.GCPProfileStore.LoadAll(func() interface{} {
 		return &hpgcp.GCPProfile{}
 	})
