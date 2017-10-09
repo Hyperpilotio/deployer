@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang/glog"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
 	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 )
@@ -203,6 +204,7 @@ func (server *Server) getDeploymentUsers(c *gin.Context) []string {
 func (server *Server) storeUser(c *gin.Context) {
 	userProfileData, err := server.NewUserProfileData(c)
 	if err != nil {
+		glog.Warning("Unable to create user profile data: " + err.Error())
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
 			"data":  "Unable to new user profile data: " + err.Error(),
@@ -211,6 +213,7 @@ func (server *Server) storeUser(c *gin.Context) {
 	}
 
 	if err := userProfileData.Store(); err != nil {
+		glog.Warning("Unable to store profile data: " + err.Error())
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": true,
 			"data":  "Unable to store user data: " + err.Error(),
