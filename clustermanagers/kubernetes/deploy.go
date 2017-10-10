@@ -132,13 +132,10 @@ func DeployServices(
 		log.Infof("%s deployment created", family)
 	}
 
+	// Run daemonsets
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.DaemonSet == nil {
 			continue
-		}
-
-		if task.Deployment != nil {
-			return fmt.Errorf("Cannot assign both daemonset and deployment to the same task: %s", task.Family)
 		}
 
 		daemonSet := task.DaemonSet
@@ -151,6 +148,25 @@ func DeployServices(
 		log.Infof("Creating daemonset %s", task.Family)
 		if _, err := daemonSets.Create(daemonSet); err != nil {
 			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
+		}
+	}
+
+	// Run statefulsets
+	for _, task := range deployment.KubernetesDeployment.Kubernetes {
+		if task.StatefulSet == nil {
+			continue
+		}
+
+		statefulSet := task.StatefulSet
+		namespace := GetNamespace(statefulSet.ObjectMeta)
+		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+			return err
+		}
+
+		statefulSets := k8sClient.StatefulSets(namespace)
+		log.Infof("Creating statefulset %s", task.Family)
+		if _, err := statefulSets.Create(statefulSet); err != nil {
+			return fmt.Errorf("Unable to create statefulset %s: %s", task.Family, err.Error())
 		}
 	}
 
