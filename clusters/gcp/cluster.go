@@ -177,7 +177,8 @@ func (gcpCluster *GCPCluster) KeyName() string {
 
 func CreateUniqueClusterId(deploymentName string) string {
 	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
-	return fmt.Sprintf("%s-%s", strings.Split(deploymentName, "-")[0], timeSeq)
+	deploymentNames := strings.Split(deploymentName, "-")
+	return fmt.Sprintf("%s-%s", strings.Join(deploymentNames[:len(deploymentNames)-1], "-"), timeSeq)
 }
 
 func UploadFilesToStorage(config *viper.Viper, fileName string, filePath string) error {
