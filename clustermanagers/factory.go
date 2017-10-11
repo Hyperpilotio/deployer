@@ -46,16 +46,18 @@ func NewDeployer(
 		deployment.Name = CreateUniqueDeploymentName(deployment.Name)
 	}
 
-	cluster := clusters.NewCluster(config, deployType, userProfile, deployment)
 	if config.GetBool("inCluster") {
 		switch deployType {
 		case "K8S":
 			return awsk8s.NewInClusterDeployer(config, deployment)
+		case "GCP":
+			return gcpgke.NewInClusterDeployer(config, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}
 	}
 
+	cluster := clusters.NewCluster(config, deployType, userProfile, deployment)
 	switch deployType {
 	case "ECS":
 		return awsecs.NewDeployer(config, cluster, deployment)
