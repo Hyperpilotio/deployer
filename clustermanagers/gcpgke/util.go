@@ -90,28 +90,26 @@ func tagFirewallIngressRules(
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
 			continue
 		}
+
+		ports := task.GetPorts()
 		for i, portType := range task.PortTypes {
 			if portType != publicPortType {
 				log.Infof("Skipping creating public endpoint for service %s as it's marked as private", task.Family)
 				continue
 			}
-			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
-				if len(container.Ports) == 0 {
-					continue
-				}
-				port := strconv.Itoa(int(container.Ports[i].HostPort))
 
-				allowedPortExist := false
-				for _, allowedPort := range allowedPorts {
-					if allowedPort == port {
-						allowedPortExist = true
-						break
-					}
-				}
+			hostPort := strconv.Itoa(int(ports[i].HostPort))
 
-				if !allowedPortExist {
-					allowedPorts = append(allowedPorts, port)
+			allowedPortExist := false
+			for _, allowedPort := range allowedPorts {
+				if allowedPort == hostPort {
+					allowedPortExist = true
+					break
 				}
+			}
+
+			if !allowedPortExist {
+				allowedPorts = append(allowedPorts, hostPort)
 			}
 		}
 	}

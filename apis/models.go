@@ -54,6 +54,28 @@ type KubernetesTask struct {
 	PortTypes []int `form:"portTypes" json:"portTypes"`
 }
 
+func (task *KubernetesTask) GetPorts() []v1.ContainerPort {
+	ports := []v1.ContainerPort{}
+	var containers []v1.Container
+	if task.DaemonSet != nil {
+		containers = task.DaemonSet.Spec.Template.Spec.Containers
+	} else if task.StatefulSet != nil {
+		containers = task.StatefulSet.Spec.Template.Spec.Containers
+	} else if task.Deployment != nil {
+		containers = task.Deployment.Spec.Template.Spec.Containers
+	}
+
+	if containers != nil {
+		for _, container := range containers {
+			for _, port := range container.Ports {
+				ports = append(ports, port)
+			}
+		}
+	}
+
+	return ports
+}
+
 // KubernetesDeployment storing the information of a Kubernetes deployment
 type KubernetesDeployment struct {
 	Kubernetes          []KubernetesTask `form:"taskDefinitions" json:"taskDefinitions" binding:"required"`
