@@ -376,32 +376,29 @@ func (deployer *GCPDeployer) recordPublicEndpoints() {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
 			continue
 		}
+		ports := task.GetPorts()
 		for i, portType := range task.PortTypes {
 			if portType != publicPortType {
 				continue
 			}
-			for _, container := range task.Deployment.Spec.Template.Spec.Containers {
-				if len(container.Ports) == 0 {
-					continue
-				}
-				hostPort := container.Ports[i].HostPort
-				taskFamilyName := task.Family
-				for _, nodeMapping := range deployment.NodeMapping {
-					if nodeMapping.Task == taskFamilyName {
-						nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
-						if ok {
-							serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
-							servicePort := strconv.FormatInt(int64(hostPort), 10)
-							serviceMapping := ServiceMapping{
-								NodeId:    nodeMapping.Id,
-								NodeName:  nodeInfo.Instance.Name,
-								PublicUrl: serviceName + ":" + servicePort,
-							}
-							deployer.Services[taskFamilyName] = serviceMapping
+			hostPort := ports[i].HostPort
+			taskFamilyName := task.Family
+			for _, nodeMapping := range deployment.NodeMapping {
+				if nodeMapping.Task == taskFamilyName {
+					nodeInfo, ok := deployer.GCPCluster.NodeInfos[nodeMapping.Id]
+					if ok {
+						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
+						servicePort := strconv.FormatInt(int64(hostPort), 10)
+						serviceMapping := ServiceMapping{
+							NodeId:    nodeMapping.Id,
+							NodeName:  nodeInfo.Instance.Name,
+							PublicUrl: serviceName + ":" + servicePort,
 						}
+						deployer.Services[taskFamilyName] = serviceMapping
 					}
 				}
 			}
+
 		}
 	}
 }
