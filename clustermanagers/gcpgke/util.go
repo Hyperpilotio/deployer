@@ -22,6 +22,41 @@ import (
 
 var publicPortType = 1
 
+func NewNodePoolRequest(
+	nodePoolName string,
+	machineType string,
+	nodePoolSize int) *container.CreateNodePoolRequest {
+	return &container.CreateNodePoolRequest{
+		NodePool: &container.NodePool{
+			Name:             nodePoolName,
+			InitialNodeCount: int64(nodePoolSize),
+			Config: &container.NodeConfig{
+				MachineType: machineType,
+				ImageType:   "COS",
+				DiskSizeGb:  int64(100),
+				Preemptible: false,
+				OauthScopes: []string{
+					"https://www.googleapis.com/auth/compute",
+					"https://www.googleapis.com/auth/devstorage.read_only",
+					"https://www.googleapis.com/auth/logging.write",
+					"https://www.googleapis.com/auth/monitoring.write",
+					"https://www.googleapis.com/auth/servicecontrol",
+					"https://www.googleapis.com/auth/service.management.readonly",
+					"https://www.googleapis.com/auth/trace.append",
+				},
+			},
+			Autoscaling: &container.NodePoolAutoscaling{
+				Enabled: false,
+			},
+			Management: &container.NodeManagement{
+				AutoUpgrade:    false,
+				AutoRepair:     false,
+				UpgradeOptions: &container.AutoUpgradeOptions{},
+			},
+		},
+	}
+}
+
 func createUniqueNodePoolName() string {
 	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
 	return fmt.Sprintf("default-pool-%s", timeSeq)
@@ -77,39 +112,18 @@ func createNodePools(
 	return nodePoolIds, nil
 }
 
-func NewNodePoolRequest(
-	nodePoolName string,
-	machineType string,
-	nodePoolSize int) *container.CreateNodePoolRequest {
-	return &container.CreateNodePoolRequest{
-		NodePool: &container.NodePool{
-			Name:             nodePoolName,
-			InitialNodeCount: int64(nodePoolSize),
-			Config: &container.NodeConfig{
-				MachineType: machineType,
-				ImageType:   "COS",
-				DiskSizeGb:  int64(100),
-				Preemptible: false,
-				OauthScopes: []string{
-					"https://www.googleapis.com/auth/compute",
-					"https://www.googleapis.com/auth/devstorage.read_only",
-					"https://www.googleapis.com/auth/logging.write",
-					"https://www.googleapis.com/auth/monitoring.write",
-					"https://www.googleapis.com/auth/servicecontrol",
-					"https://www.googleapis.com/auth/service.management.readonly",
-					"https://www.googleapis.com/auth/trace.append",
-				},
-			},
-			Autoscaling: &container.NodePoolAutoscaling{
-				Enabled: false,
-			},
-			Management: &container.NodeManagement{
-				AutoUpgrade:    false,
-				AutoRepair:     false,
-				UpgradeOptions: &container.AutoUpgradeOptions{},
-			},
-		},
+func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
+
+	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
+	if err != nil {
+		return errors.New("Unable to delete firewall rules: " + err.Error())
+	}
+
+	return nil
 }
 
 func populateNodeInfos(
@@ -270,20 +284,6 @@ func tagFirewallIngressRules(
 	return nil
 }
 
-func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
-	computeSvc, err := compute.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
-	if err != nil {
-		return errors.New("Unable to delete firewall rules: " + err.Error())
-	}
-
-	return nil
-}
-
 func tagPublicKey(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
@@ -306,6 +306,10 @@ func tagPublicKey(
 		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
 			Key:   "sshKeys",
 			Value: &keyVal,
+		})
+		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
+			Key:   "serviceAccount",
+			Value: &gcpCluster.GCPProfile.ServiceAccount,
 		})
 		_, err := computeSvc.Instances.
 			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
