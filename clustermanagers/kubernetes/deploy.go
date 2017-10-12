@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"bitbucket.org/jpra1113/alango/funcs"
 
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
@@ -38,7 +41,7 @@ func DeployKubernetesObjects(
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := DeployServices(k8sClient, deployment, namespaces, userName, log); err != nil {
+	if err := DeployServices(k8sClient, deployment, "", namespaces, userName, log); err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -48,6 +51,7 @@ func DeployKubernetesObjects(
 func DeployServices(
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
+	deployNamespace string,
 	existingNamespaces map[string]bool,
 	userName string,
 	log *logging.Logger) error {
@@ -75,7 +79,11 @@ func DeployServices(
 			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
 		}
 		family := task.Family
+
 		namespace := GetNamespace(deploySpec.ObjectMeta)
+		if deployNamespace != "" {
+			namespace = deployNamespace
+		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 			return err
 		}
@@ -141,6 +149,9 @@ func DeployServices(
 
 		daemonSet := task.DaemonSet
 		namespace := GetNamespace(daemonSet.ObjectMeta)
+		if deployNamespace != "" {
+			namespace = deployNamespace
+		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 			return err
 		}
@@ -160,6 +171,9 @@ func DeployServices(
 
 		statefulSet := task.StatefulSet
 		namespace := GetNamespace(statefulSet.ObjectMeta)
+		if deployNamespace != "" {
+			namespace = deployNamespace
+		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
 			return err
 		}
@@ -274,6 +288,25 @@ func CreateSecrets(
 			return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
 		}
 
+		k8sSecret := k8sClient.CoreV1().Secrets(namespace)
+		if _, err := k8sSecret.Create(&secret); err != nil {
+			return fmt.Errorf("Unable to create secret %s: %s", secret.Name, err.Error())
+		}
+	}
+
+	return nil
+}
+
+func CreateSecretsByNamespace(
+	k8sClient *k8s.Clientset,
+	namespace string,
+	deployment *apis.Deployment) error {
+	secrets := deployment.KubernetesDeployment.Secrets
+	if len(secrets) == 0 {
+		return nil
+	}
+
+	for _, secret := range secrets {
 		k8sSecret := k8sClient.CoreV1().Secrets(namespace)
 		if _, err := k8sSecret.Create(&secret); err != nil {
 			return fmt.Errorf("Unable to create secret %s: %s", secret.Name, err.Error())
@@ -563,4 +596,30 @@ func FindNodeIdFromServiceName(deployment *apis.Deployment, serviceName string) 
 	}
 
 	return 0, errors.New("Unable to find service in mappings")
+}
+
+func WaitUntilKubernetesNodeExists(
+	k8sClient *k8s.Clientset,
+	nodeNames []string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	// nodeNames := []string{}
+	// for _, nodeInfo := range awsCluster.NodeInfos {
+	// 	nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
+	// }
+
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		allExists := true
+		for _, nodeName := range nodeNames {
+			if _, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err != nil {
+				allExists = false
+				break
+			}
+		}
+		if allExists {
+			log.Infof("Kubernetes nodes are available now")
+			return true, nil
+		}
+		return false, nil
+	})
 }

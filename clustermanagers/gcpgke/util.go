@@ -35,7 +35,7 @@ func createNodePools(
 	deployment *apis.Deployment,
 	log *logging.Logger,
 	custEachNodeInstanceType bool) ([]string, error) {
-	containerSrv, err := container.New(client)
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return nil, errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
@@ -46,7 +46,7 @@ func createNodePools(
 		for _, node := range deployment.ClusterDefinition.Nodes {
 			nodePoolName := createUniqueNodePoolName()
 			nodePoolRequest := NewNodePoolRequest(nodePoolName, node.InstanceType, 1)
-			_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 				Create(projectId, zone, clusterId, nodePoolRequest).
 				Do()
 			if err != nil {
@@ -59,7 +59,7 @@ func createNodePools(
 		instanceType := deployment.ClusterDefinition.Nodes[0].InstanceType
 		nodePoolName := createUniqueNodePoolName()
 		nodePoolRequest := NewNodePoolRequest(nodePoolName, instanceType, nodePoolSize)
-		_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+		_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 			Create(projectId, zone, clusterId, nodePoolRequest).
 			Do()
 		if err != nil {
@@ -69,11 +69,10 @@ func createNodePools(
 	}
 
 	log.Info("Waiting until node pool is completed...")
-	if err := waitUntilNodePoolCreateComplete(containerSrv, projectId, zone,
+	if err := waitUntilNodePoolCreateComplete(containerSvc, projectId, zone,
 		clusterId, nodePoolIds, time.Duration(10)*time.Minute, log); err != nil {
 		return nil, fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
-	log.Info("Node pool create completed")
 
 	return nodePoolIds, nil
 }
@@ -113,27 +112,57 @@ func NewNodePoolRequest(
 	}
 }
 
-func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error {
-	computeSrv, err := compute.New(client)
+func populateNodeInfos(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string,
+	nodePoolIds []string,
+	gcpCluster *hpgcp.GCPCluster) error {
+	instanceGroupNames := []string{}
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
+	for _, nodePoolId := range nodePoolIds {
+		resp, err := containerSvc.Projects.Zones.Clusters.NodePools.
+			Get(projectId, zone, clusterId, nodePoolId).
+			Do()
+		if err != nil {
+			return fmt.Errorf("Unable to get %s node pool: ", nodePoolId, err.Error())
+		}
+		for _, instanceGroupUrl := range resp.InstanceGroupUrls {
+			urls := strings.Split(instanceGroupUrl, "/")
+			instanceGroupNames = append(instanceGroupNames, urls[len(urls)-1])
+		}
+	}
 
-	resp, err := computeSrv.Instances.
-		List(gcpCluster.GCPProfile.ProjectId, gcpCluster.Zone).
-		Do()
+	instanceNames := []string{}
+	computeSvc, err := compute.New(client)
 	if err != nil {
-		return fmt.Errorf("Unable to %s list instances: %s", gcpCluster.ClusterId, err.Error())
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+	for _, instanceGroupName := range instanceGroupNames {
+		resp, err := computeSvc.InstanceGroups.ListInstances(projectId, zone, instanceGroupName,
+			&compute.InstanceGroupsListInstancesRequest{
+				InstanceState: "RUNNING",
+			}).Do()
+		if err != nil {
+			return errors.New("Unable to list instance: " + err.Error())
+		}
+		for _, item := range resp.Items {
+			urls := strings.Split(item.Instance, "/")
+			instanceNames = append(instanceNames, urls[len(urls)-1])
+		}
 	}
 
 	clusterInstances := []*compute.Instance{}
-	for _, instance := range resp.Items {
-		for _, item := range instance.Metadata.Items {
-			if item.Key == "cluster-name" && *item.Value == gcpCluster.ClusterId {
-				clusterInstances = append(clusterInstances, instance)
-				break
-			}
+	for _, instanceName := range instanceNames {
+		instance, err := computeSvc.Instances.Get(projectId, zone, instanceName).Do()
+		if err != nil {
+			return fmt.Errorf("Unable to get %s instances: %s", instanceName, err.Error())
 		}
+		clusterInstances = append(clusterInstances, instance)
 	}
 
 	i := 1
@@ -170,7 +199,7 @@ func tagFirewallIngressRules(
 	deployment *apis.Deployment,
 	log *logging.Logger) error {
 	projectId := gcpCluster.GCPProfile.ProjectId
-	computeSrv, err := compute.New(client)
+	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
@@ -206,7 +235,7 @@ func tagFirewallIngressRules(
 	}
 
 	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
-	_, err = computeSrv.Firewalls.Insert(projectId, &compute.Firewall{
+	_, err = computeSvc.Firewalls.Insert(projectId, &compute.Firewall{
 		Allowed: []*compute.FirewallAllowed{
 			&compute.FirewallAllowed{
 				IPProtocol: "tcp",
@@ -227,7 +256,7 @@ func tagFirewallIngressRules(
 		instanceName := nodeInfo.Instance.Name
 		newTags := *nodeInfo.Instance.Tags
 		newTags.Items = append(newTags.Items, targetTagName)
-		_, err := computeSrv.Instances.
+		_, err := computeSvc.Instances.
 			SetTags(projectId, gcpCluster.Zone, instanceName, &newTags).
 			Do()
 		if err != nil {
@@ -242,12 +271,12 @@ func tagFirewallIngressRules(
 }
 
 func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
-	computeSrv, err := compute.New(client)
+	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	_, err = computeSrv.Firewalls.Delete(projectId, firewallName).Do()
+	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
 	if err != nil {
 		return errors.New("Unable to delete firewall rules: " + err.Error())
 	}
@@ -260,7 +289,7 @@ func tagPublicKey(
 	gcpCluster *hpgcp.GCPCluster,
 	log *logging.Logger) error {
 	projectId := gcpCluster.GCPProfile.ProjectId
-	computeSrv, err := compute.New(client)
+	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
@@ -278,7 +307,7 @@ func tagPublicKey(
 			Key:   "sshKeys",
 			Value: &keyVal,
 		})
-		_, err := computeSrv.Instances.
+		_, err := computeSvc.Instances.
 			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
 			Do()
 		if err != nil {
@@ -293,14 +322,14 @@ func tagPublicKey(
 }
 
 func waitUntilClusterCreateComplete(
-	containerSrv *container.Service,
+	containerSvc *container.Service,
 	projectId string,
 	zone string,
 	clusterId string,
 	timeout time.Duration,
 	log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		resp, err := containerSrv.Projects.Zones.Clusters.NodePools.
+		resp, err := containerSvc.Projects.Zones.Clusters.NodePools.
 			List(projectId, zone, clusterId).
 			Do()
 		if err != nil {
@@ -315,14 +344,14 @@ func waitUntilClusterCreateComplete(
 }
 
 func waitUntilClusterDeleteComplete(
-	containerSrv *container.Service,
+	containerSvc *container.Service,
 	projectId string,
 	zone string,
 	clusterId string,
 	timeout time.Duration,
 	log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+		_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 			List(projectId, zone, clusterId).
 			Do()
 		if err != nil && strings.Contains(err.Error(), "was not found") {
@@ -334,7 +363,7 @@ func waitUntilClusterDeleteComplete(
 }
 
 func waitUntilNodePoolCreateComplete(
-	containerSrv *container.Service,
+	containerSvc *container.Service,
 	projectId string,
 	zone string,
 	clusterId string,
@@ -343,7 +372,7 @@ func waitUntilNodePoolCreateComplete(
 	log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
 		for _, nodePoolId := range nodePoolIds {
-			_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 				Get(projectId, zone, clusterId, nodePoolId).
 				Do()
 			if err != nil {
