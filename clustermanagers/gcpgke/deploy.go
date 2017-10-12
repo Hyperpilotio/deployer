@@ -174,11 +174,11 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	containerSrv, err := container.New(client)
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
-	_, err = containerSrv.Projects.Zones.Clusters.
+	_, err = containerSvc.Projects.Zones.Clusters.
 		Delete(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
 		Do()
 	if err != nil {
@@ -186,7 +186,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	}
 
 	log.Infof("Waiting until cluster('%s') to be delete completed...", gcpCluster.ClusterId)
-	if err := waitUntilClusterDeleteComplete(containerSrv, gcpProfile.ProjectId, gcpCluster.Zone,
+	if err := waitUntilClusterDeleteComplete(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until %s cluster to be delete completed: %s\n",
 			gcpCluster.ClusterId, err.Error())
@@ -202,9 +202,10 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 
 func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error {
 	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -219,7 +220,10 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
 
-	if err := populateNodeInfos(client, gcpCluster); err != nil {
+	nodePoolName := []string{gcpCluster.ClusterId + "-pool"}
+	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
+		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
+		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
@@ -271,7 +275,7 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 	gcpProfile := gcpCluster.GCPProfile
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
-	containerSrv, err := container.New(client)
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
@@ -291,7 +295,7 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 			MonitoringService: "none",
 			NodePools: []*container.NodePool{
 				&container.NodePool{
-					Name:             "default-pool",
+					Name:             gcpCluster.ClusterId + "-pool",
 					InitialNodeCount: int64(initialNodeCount),
 					Config: &container.NodeConfig{
 						MachineType: deployment.ClusterDefinition.Nodes[0].InstanceType,
@@ -339,14 +343,14 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 		createClusterRequest.Cluster.InitialClusterVersion = gcpCluster.ClusterVersion
 	}
 
-	_, err = containerSrv.Projects.Zones.Clusters.
+	_, err = containerSvc.Projects.Zones.Clusters.
 		Create(gcpProfile.ProjectId, gcpCluster.Zone, createClusterRequest).Do()
 	if err != nil {
 		return errors.New("Unable to create deployment: " + err.Error())
 	}
 
 	log.Info("Waiting until cluster is completed...")
-	if err := waitUntilClusterCreateComplete(containerSrv, gcpProfile.ProjectId, gcpCluster.Zone,
+	if err := waitUntilClusterCreateComplete(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
@@ -518,12 +522,12 @@ func (deployer *GCPDeployer) CheckClusterState() error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	containerSrv, err := container.New(client)
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 
-	_, err = containerSrv.Projects.Zones.Clusters.NodePools.
+	_, err = containerSvc.Projects.Zones.Clusters.NodePools.
 		List(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
 		Do()
 	if err != nil && strings.Contains(err.Error(), "was not found") {
@@ -541,12 +545,12 @@ func (deployer *GCPDeployer) setKubeConfig() error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	containerSrv, err := container.New(client)
+	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 
-	resp, err := containerSrv.Projects.Zones.Clusters.
+	resp, err := containerSvc.Projects.Zones.Clusters.
 		List(gcpProfile.ProjectId, gcpCluster.Zone).
 		Do()
 	if err != nil {
@@ -584,6 +588,7 @@ func (deployer *GCPDeployer) setKubeConfig() error {
 func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	gcpStoreInfo := storeInfo.(*StoreInfo)
 	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
 	gcpCluster.ClusterId = gcpStoreInfo.ClusterId
 	deploymentName := gcpCluster.Name
 	if err := deployer.CheckClusterState(); err != nil {
@@ -598,7 +603,10 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
-	if err := populateNodeInfos(client, gcpCluster); err != nil {
+	// TODO need to find deployment use node pool name
+	nodePoolName := []string{gcpCluster.ClusterId + "-pool"}
+	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
+		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 	deployer.recordEndpoints()

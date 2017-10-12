@@ -107,32 +107,6 @@ func NewInClusterDeployer(
 	return deployer, nil
 }
 
-func waitUntilKubernetesNodeExists(
-	k8sClient *k8s.Clientset,
-	awsCluster *hpaws.AWSCluster,
-	timeout time.Duration,
-	log *logging.Logger) error {
-	nodeNames := []string{}
-	for _, nodeInfo := range awsCluster.NodeInfos {
-		nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
-	}
-
-	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		allExists := true
-		for _, nodeName := range nodeNames {
-			if _, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err != nil {
-				allExists = false
-				break
-			}
-		}
-		if allExists {
-			log.Infof("%s Kubernetes nodes are available now", awsCluster.Name)
-			return true, nil
-		}
-		return false, nil
-	})
-}
-
 func (deployer *InClusterK8SDeployer) findAutoscalingGroup(autoscalingSvc *autoscaling.AutoScaling) error {
 	result, err := autoscalingSvc.DescribeAutoScalingGroups(&autoscaling.DescribeAutoScalingGroupsInput{})
 	if err != nil {
@@ -383,7 +357,11 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 		return nil, errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
 
-	if err := waitUntilKubernetesNodeExists(k8sClient, awsCluster, time.Duration(2)*time.Minute, log); err != nil {
+	nodeNames := []string{}
+	for _, nodeInfo := range awsCluster.NodeInfos {
+		nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
+	}
+	if err := k8sUtil.WaitUntilKubernetesNodeExists(k8sClient, nodeNames, time.Duration(2)*time.Minute, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return nil, errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
 	}
