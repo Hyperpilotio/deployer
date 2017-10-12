@@ -22,6 +22,97 @@ import (
 
 var publicPortType = 1
 
+func createUniqueNodePoolName() string {
+	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
+	return fmt.Sprintf("default-pool-%s", timeSeq)
+}
+
+func createNodePools(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string,
+	deployment *apis.Deployment,
+	log *logging.Logger,
+	custEachNodeInstanceType bool) ([]string, error) {
+	containerSrv, err := container.New(client)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+
+	nodePoolIds := []string{}
+	if custEachNodeInstanceType {
+		// TODO group by instance type to create node pool
+		for _, node := range deployment.ClusterDefinition.Nodes {
+			nodePoolName := createUniqueNodePoolName()
+			nodePoolRequest := NewNodePoolRequest(nodePoolName, node.InstanceType, 1)
+			_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+				Create(projectId, zone, clusterId, nodePoolRequest).
+				Do()
+			if err != nil {
+				return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
+			}
+			nodePoolIds = append(nodePoolIds, nodePoolName)
+		}
+	} else {
+		nodePoolSize := len(deployment.ClusterDefinition.Nodes)
+		instanceType := deployment.ClusterDefinition.Nodes[0].InstanceType
+		nodePoolName := createUniqueNodePoolName()
+		nodePoolRequest := NewNodePoolRequest(nodePoolName, instanceType, nodePoolSize)
+		_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+			Create(projectId, zone, clusterId, nodePoolRequest).
+			Do()
+		if err != nil {
+			return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
+		}
+		nodePoolIds = append(nodePoolIds, nodePoolName)
+	}
+
+	log.Info("Waiting until node pool is completed...")
+	if err := waitUntilNodePoolCreateComplete(containerSrv, projectId, zone,
+		clusterId, nodePoolIds, time.Duration(10)*time.Minute, log); err != nil {
+		return nil, fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
+	log.Info("Node pool create completed")
+
+	return nodePoolIds, nil
+}
+
+func NewNodePoolRequest(
+	nodePoolName string,
+	machineType string,
+	nodePoolSize int) *container.CreateNodePoolRequest {
+	return &container.CreateNodePoolRequest{
+		NodePool: &container.NodePool{
+			Name:             nodePoolName,
+			InitialNodeCount: int64(nodePoolSize),
+			Config: &container.NodeConfig{
+				MachineType: machineType,
+				ImageType:   "COS",
+				DiskSizeGb:  int64(100),
+				Preemptible: false,
+				OauthScopes: []string{
+					"https://www.googleapis.com/auth/compute",
+					"https://www.googleapis.com/auth/devstorage.read_only",
+					"https://www.googleapis.com/auth/logging.write",
+					"https://www.googleapis.com/auth/monitoring.write",
+					"https://www.googleapis.com/auth/servicecontrol",
+					"https://www.googleapis.com/auth/service.management.readonly",
+					"https://www.googleapis.com/auth/trace.append",
+				},
+			},
+			Autoscaling: &container.NodePoolAutoscaling{
+				Enabled: false,
+			},
+			Management: &container.NodeManagement{
+				AutoUpgrade:    false,
+				AutoRepair:     false,
+				UpgradeOptions: &container.AutoUpgradeOptions{},
+			},
+		},
+	}
+}
+
 func populateNodeInfos(client *http.Client, gcpCluster *hpgcp.GCPCluster) error {
 	computeSrv, err := compute.New(client)
 	if err != nil {
@@ -239,5 +330,27 @@ func waitUntilClusterDeleteComplete(
 			return true, nil
 		}
 		return false, nil
+	})
+}
+
+func waitUntilNodePoolCreateComplete(
+	containerSrv *container.Service,
+	projectId string,
+	zone string,
+	clusterId string,
+	nodePoolIds []string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		for _, nodePoolId := range nodePoolIds {
+			_, err := containerSrv.Projects.Zones.Clusters.NodePools.
+				Get(projectId, zone, clusterId, nodePoolId).
+				Do()
+			if err != nil {
+				return false, nil
+			}
+		}
+		log.Info("Node pool create complete")
+		return true, nil
 	})
 }

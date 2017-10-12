@@ -168,7 +168,11 @@ func (gcpCluster *GCPCluster) GetClusterType() string {
 }
 
 func (gcpCluster *GCPCluster) GetKeyMaterial() string {
-	return gcpCluster.KeyPair.Pem
+	keyMaterial := ""
+	if gcpCluster.KeyPair != nil {
+		keyMaterial = gcpCluster.KeyPair.Pem
+	}
+	return keyMaterial
 }
 
 func (gcpCluster *GCPCluster) KeyName() string {

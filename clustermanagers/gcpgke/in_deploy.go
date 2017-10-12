@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/hyperpilotio/deployer/apis"
+	"github.com/hyperpilotio/deployer/clusters"
 	hpgcp "github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/go-utils/log"
 
@@ -26,6 +27,7 @@ func (c ClusterNodes) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
 
 type InClusterGCPDeployer struct {
 	GCPDeployer
+	ParentClusterId string
 }
 
 func NewInClusterDeployer(
@@ -57,35 +59,45 @@ func NewInClusterDeployer(
 	}
 	sort.Sort(k8sNodes)
 
-	clusterId := ""
+	parentClusterId := ""
 	for _, node := range k8sNodes {
 		if deployment, ok := node.Labels["hyperpilot/deployment"]; ok {
-			clusterId = deployment
+			parentClusterId = deployment
 			break
 		}
 	}
 
-	if clusterId == "" {
+	if parentClusterId == "" {
 		return nil, errors.New("Unable to find deployment name in node labels")
 	}
 
+	gcpProfile := &hpgcp.GCPProfile{
+		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
+	}
+	projectId, err := gcpProfile.GetProjectId()
+	if err != nil {
+		return nil, errors.New("Unable to find projectId: " + err.Error())
+	}
+	gcpProfile.ProjectId = projectId
+
+	clusterId := hpgcp.CreateUniqueClusterId(deployment.Name)
+	deployment.Name = clusterId
 	deployer := &InClusterGCPDeployer{
 		GCPDeployer: GCPDeployer{
 			Config: config,
 			GCPCluster: &hpgcp.GCPCluster{
-				Name:      clusterId,
-				Zone:      deployment.Region,
-				ClusterId: clusterId,
-				GCPProfile: &hpgcp.GCPProfile{
-					AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
-				},
-				NodeInfos: make(map[int]*hpgcp.NodeInfo),
+				Name:       clusterId,
+				Zone:       deployment.Region,
+				ClusterId:  clusterId,
+				GCPProfile: gcpProfile,
+				NodeInfos:  make(map[int]*hpgcp.NodeInfo),
 			},
 			Deployment:    deployment,
 			DeploymentLog: log,
 			Services:      make(map[string]ServiceMapping),
 			KubeConfig:    kubeConfig,
 		},
+		ParentClusterId: parentClusterId,
 	}
 
 	return deployer, nil
@@ -93,15 +105,27 @@ func NewInClusterDeployer(
 
 // CreateDeployment start a deployment
 func (deployer *InClusterGCPDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
-	log := deployer.GetLog().Logger
 	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	deployment := deployer.Deployment
+	log := deployer.GetLog().Logger
 
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	log.Infof("GCP CreateDeployment test...", client)
+	nodePoolIds, err := createNodePools(client, gcpProfile.ProjectId, gcpCluster.Zone,
+		deployer.ParentClusterId, deployment, log, true)
+	if err != nil {
+		return nil, errors.New("Unable to create node pools: " + err.Error())
+	}
+
+	log.Infof("GCP CreateDeployment test...%s", nodePoolIds)
 
 	return nil, nil
+}
+
+func (deployer *InClusterGCPDeployer) GetCluster() clusters.Cluster {
+	return deployer.GCPCluster
 }
