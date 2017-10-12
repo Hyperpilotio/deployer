@@ -228,14 +228,22 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	if err := tagPublicKey(client, gcpCluster, log); err != nil {
-		return errors.New("Unable to tag network Tags: " + err.Error())
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable to tag publicKey to node instance metadata: " + err.Error())
+	}
+
+	if err := tagServiceAccount(client, gcpCluster, log); err != nil {
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable to tag serviceAccount to node instance metadata: " + err.Error())
 	}
 
 	if err := deployer.DownloadSSHKey(); err != nil {
+		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to download ssh key: " + err.Error())
 	}
 
 	if err := deployer.DownloadKubeConfig(); err != nil {
+		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to download kubeconfig: " + err.Error())
 	}
 	log.Infof("Downloaded kube config at %s", deployer.KubeConfigPath)
