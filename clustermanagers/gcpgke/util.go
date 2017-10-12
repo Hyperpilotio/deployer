@@ -307,6 +307,34 @@ func tagPublicKey(
 			Key:   "sshKeys",
 			Value: &keyVal,
 		})
+		_, err := computeSvc.Instances.
+			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
+			Do()
+		if err != nil {
+			errBool = true
+		}
+	}
+	if errBool {
+		return errors.New("Unable to tag sshKeys for all node")
+	}
+
+	return nil
+}
+
+func tagServiceAccount(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	var errBool bool
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		instanceName := nodeInfo.Instance.Name
+		newMetadata := *nodeInfo.Instance.Metadata
 		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
 			Key:   "serviceAccount",
 			Value: &gcpCluster.GCPProfile.ServiceAccount,
@@ -319,7 +347,7 @@ func tagPublicKey(
 		}
 	}
 	if errBool {
-		return errors.New("Unable to tag sshKeys for all node")
+		return errors.New("Unable to tag serviceAccount for all node")
 	}
 
 	return nil
