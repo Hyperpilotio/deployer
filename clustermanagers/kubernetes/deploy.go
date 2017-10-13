@@ -168,6 +168,12 @@ func DeployServices(
 		if _, err := statefulSets.Create(statefulSet); err != nil {
 			return fmt.Errorf("Unable to create statefulset %s: %s", task.Family, err.Error())
 		}
+
+		for _, container := range task.StatefulSet.Spec.Template.Spec.Containers {
+			if err := CreateServiceForDeployment(namespace, task.Family, k8sClient, task, container, log, false); err != nil {
+				return fmt.Errorf("Unable to create service for stateful set: " + err.Error())
+			}
+		}
 	}
 
 	clusterRole := k8sClient.RbacV1beta1().ClusterRoles()
