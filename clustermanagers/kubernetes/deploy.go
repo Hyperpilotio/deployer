@@ -41,14 +41,16 @@ func DeployKubernetesObjects(
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := DeployServices(k8sClient, deployment, "", namespaces, userName, log); err != nil {
+	if err := DeployServices(config, k8sClient, deployment, "", namespaces, userName, log); err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
+	deployClusterRoleAndBindings(k8sClient, log)
 
 	return nil
 }
 
 func DeployServices(
+	config *viper.Viper,
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	deployNamespace string,
@@ -65,6 +67,11 @@ func DeployServices(
 	// We sort before we create services because we want to have a deterministic way to assign
 	// service ids
 	sort.Sort(deployment.NodeMapping)
+
+	skipCreatePublicService := false
+	if deployment.ClusterType == "GCP" || config.GetBool("inCluster") {
+		skipCreatePublicService = true
+	}
 
 	for _, mapping := range deployment.NodeMapping {
 		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
@@ -90,7 +97,6 @@ func DeployServices(
 
 		originalFamily := family
 		count, ok := taskCount[family]
-
 		if !ok {
 			count = 1
 			deploySpec.Name = originalFamily
@@ -120,8 +126,8 @@ func DeployServices(
 
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			skipCreatePublicService := (deployment.ClusterType == "GCP")
-			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log, skipCreatePublicService, false)
+			err := CreateServiceForDeployment(namespace, family, k8sClient,
+				task, container, log, skipCreatePublicService)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -139,6 +145,12 @@ func DeployServices(
 			return fmt.Errorf("Unable to create k8s deployment: %s", err)
 		}
 		log.Infof("%s deployment created", family)
+	}
+
+	if deployNamespace != "" {
+		if err := checkDeploymentReadyReplicas(config, k8sClient, deployment, deployNamespace); err != nil {
+			return fmt.Errorf("Unable to check deployment ready replicas status: %s", err)
+		}
 	}
 
 	// Run daemonsets
@@ -191,6 +203,71 @@ func DeployServices(
 		}
 	}
 
+	return nil
+}
+
+func checkDeploymentReadyReplicas(
+	config *viper.Viper,
+	k8sClient *k8s.Clientset,
+	deployment *apis.Deployment,
+	namespace string) error {
+	restartCount := config.GetInt("restartCount")
+	deploy := k8sClient.Extensions().Deployments(namespace)
+	err := funcs.LoopUntil(time.Minute*60, time.Second*20, func() (bool, error) {
+		deployments, listErr := deploy.List(metav1.ListOptions{})
+		if listErr != nil {
+			return false, errors.New("Unable to list deployments: " + listErr.Error())
+		}
+
+		if len(deployments.Items) != len(deployment.NodeMapping) {
+			return false, fmt.Errorf("Unexpected list of deployments: %d", len(deployments.Items))
+		}
+
+		pods, listErr := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{})
+		if listErr != nil {
+			return false, errors.New("Unable to list pods: " + listErr.Error())
+		}
+		for _, pod := range pods.Items {
+			switch pod.Status.Phase {
+			case "Pending":
+				for _, condition := range pod.Status.Conditions {
+					if condition.Reason == "Unschedulable" {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, condition.Message)
+					}
+				}
+				for _, containerStatus := range pod.Status.ContainerStatuses {
+					if containerStatus.State.Waiting.Reason == "ImagePullBackOff" {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, containerStatus.State.Waiting.Message)
+					}
+				}
+			case "Running":
+				for _, containerStatus := range pod.Status.ContainerStatuses {
+					if containerStatus.RestartCount >= int32(restartCount) {
+						return false, fmt.Errorf("Unable to create %s deployment: %s",
+							pod.Name, containerStatus.State.Waiting.Message)
+					}
+				}
+			}
+		}
+
+		for _, deployment := range deployments.Items {
+			if deployment.Status.ReadyReplicas == 0 {
+				return false, nil
+			}
+		}
+
+		return true, nil
+	})
+	if err != nil {
+		return fmt.Errorf("Unable to wait for deployments to be available: %s", err.Error())
+	}
+
+	return nil
+}
+
+func deployClusterRoleAndBindings(k8sClient *k8s.Clientset, log *logging.Logger) {
 	clusterRole := k8sClient.RbacV1beta1().ClusterRoles()
 	nodeReader := &rbac.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: "node-reader"},
@@ -248,8 +325,6 @@ func DeployServices(
 	if _, err := clusterRoleBindings.Create(defaultRoleBinding); err != nil {
 		log.Warningf("Unable to create default role binding: " + err.Error())
 	}
-
-	return nil
 }
 
 func CreateNamespaceIfNotExist(
@@ -304,6 +379,15 @@ func CreateSecretsByNamespace(
 	secrets := deployment.KubernetesDeployment.Secrets
 	if len(secrets) == 0 {
 		return nil
+	}
+
+	existingNamespaces, namespacesErr := GetExistingNamespaces(k8sClient)
+	if namespacesErr != nil {
+		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+	}
+
+	if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
+		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
 	}
 
 	for _, secret := range secrets {
@@ -596,6 +680,79 @@ func FindNodeIdFromServiceName(deployment *apis.Deployment, serviceName string) 
 	}
 
 	return 0, errors.New("Unable to find service in mappings")
+}
+
+func DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient *k8s.Clientset, namespace string, log *logging.Logger) {
+	roleName := "node-reader"
+	roleBinding := roleName + "-binding-" + namespace
+
+	log.Infof("Deleting cluster role binding %s for namespace %s", roleBinding, namespace)
+	clusterRoleBinding := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	if err := clusterRoleBinding.Delete(roleBinding, &metav1.DeleteOptions{}); err != nil {
+		log.Warningf("Unable to delete cluster role binding %s for namespace %s", roleName, roleBinding)
+	}
+	log.Infof("Successfully delete cluster role binding %s", roleBinding)
+}
+
+// GrantNodeReaderPermissionToNamespace grant read permission to the default user belongs to specified namespace
+func GrantNodeReaderPermissionToNamespace(k8sClient *k8s.Clientset, namespace string, log *logging.Logger) error {
+	roleName := "node-reader"
+	roleBinding := roleName + "-binding-" + namespace
+
+	// check whether role-binding exists
+	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
+	clusterRoleBindingList, err := clusterRoleBindings.List(metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("Unable to list role-binding in cluster scope: %s", err.Error())
+	}
+	for _, val := range clusterRoleBindingList.Items {
+		if val.GetName() == roleBinding {
+			log.Infof("Found role binding %s in cluster scope", roleBinding)
+			return nil
+		}
+	}
+
+	// check whether role exists or not
+	clusterRoles := k8sClient.RbacV1beta1().ClusterRoles()
+	roleList, err := clusterRoles.List(metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf(`Unable to list roles in cluster scope: %s`, err.Error())
+	}
+	var roleExists bool
+	for _, val := range roleList.Items {
+		if val.GetName() == roleName {
+			roleExists = true
+		}
+	}
+	if !roleExists {
+		return fmt.Errorf("Role %s doesn't exist in cluster scope", roleName)
+	}
+
+	log.Infof("Binding cluster role '%s' to namespace %s", roleName, namespace)
+	roleBindingObject := &rbac.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: roleBinding,
+		},
+		Subjects: []rbac.Subject{
+			rbac.Subject{
+				Kind:      rbac.ServiceAccountKind,
+				Name:      "default",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbac.RoleRef{
+			APIGroup: "",
+			Kind:     "ClusterRole",
+			Name:     roleName,
+		},
+	}
+
+	if _, err = clusterRoleBindings.Create(roleBindingObject); err != nil {
+		return fmt.Errorf("Unable to create role binding for namespace %s in cluster scope: %s", namespace, err.Error())
+	}
+	log.Infof("Successfully binds cluster role '%s' to namespace '%s'", roleName, namespace)
+
+	return nil
 }
 
 func WaitUntilKubernetesNodeExists(

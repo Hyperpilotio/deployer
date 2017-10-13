@@ -30,6 +30,7 @@ func (c ClusterNodes) Swap(i, j int) { c[i], c[j] = c[j], c[i] }
 
 type InClusterGCPDeployer struct {
 	GCPDeployer
+
 	ParentClusterId string
 }
 
@@ -130,6 +131,7 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 	if err != nil {
 		return errors.New("Unable to create node pools: " + err.Error())
 	}
+	gcpCluster.NodePoolIds = nodePoolIds
 
 	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
 		deployer.ParentClusterId, nodePoolIds, gcpCluster); err != nil {
@@ -146,22 +148,22 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		nodeNames = append(nodeNames, nodeInfo.Instance.Name)
 	}
 	if err := k8sUtil.WaitUntilKubernetesNodeExists(k8sClient, nodeNames, time.Duration(2)*time.Minute, log); err != nil {
-		// deleteInClusterDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
 	}
 
 	if err := tagKubeNodes(k8sClient, gcpCluster, deployment, log); err != nil {
-		// deleteInClusterDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
 	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
-		// deleteInClusterDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
 	if err := tagFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
-		// deleteInClusterDeploymentOnFailure(deployer)
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag firewall ingress rules: " + err.Error())
 	}
 	deployer.recordPublicEndpoints()
@@ -171,26 +173,29 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 
 func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
 	log := deployer.GetLog().Logger
+	namespace := deployer.getNamespace()
+	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
+		return errors.New("Unable to create secrets in k8s: " + err.Error())
+	}
+
+	log.Infof("Granting node-reader permission to namespace %s", namespace)
+	if err := k8sUtil.GrantNodeReaderPermissionToNamespace(k8sClient, namespace, log); err != nil {
+		// Assumption: if the action of grant failed, it wouldn't affect the whole deployment process which
+		// is why we don't return an error here.
+		log.Warningf("Unable to grant node-reader permission to namespace %s: %s", namespace, err.Error())
+	}
+
 	existingNamespaces, namespacesErr := k8sUtil.GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
-	}
-
-	namespace := deployer.getNamespace()
-	if err := k8sUtil.CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
-	}
-
-	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
-		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	// TODO incluster ServiceAccount now is nil, need to restore
 	// 1)tag serviceAccount to compute metadata
 	// 2)get serviceAccount from compute metadata
 	userName := strings.ToLower(deployer.GCPCluster.GCPProfile.ServiceAccount)
-	if err := k8sUtil.DeployServices(k8sClient, deployer.Deployment, namespace,
-		existingNamespaces, userName, log); err != nil {
+	if err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
+		namespace, existingNamespaces, userName, log); err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 
@@ -199,4 +204,85 @@ func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 
 func (deployer *InClusterGCPDeployer) getNamespace() string {
 	return strings.ToLower(deployer.GCPCluster.Name)
+}
+
+func deleteInClusterDeploymentOnFailure(deployer *InClusterGCPDeployer) {
+	log := deployer.GetLog().Logger
+	if deployer.Deployment.KubernetesDeployment.SkipDeleteOnFailure {
+		log.Warning("Skipping delete deployment on failure")
+		return
+	}
+
+	deployer.DeleteDeployment()
+}
+
+// DeleteDeployment clean up the cluster from kubenetes.
+func (deployer *InClusterGCPDeployer) DeleteDeployment() error {
+	if len(deployer.GCPCluster.NodePoolIds) == 0 {
+		return nil
+	}
+
+	deployment := deployer.Deployment
+	kubeConfig := deployer.KubeConfig
+	log := deployer.GetLog().Logger
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return errors.New("Unable to create k8s client: " + err.Error())
+	}
+
+	log.Infof("Deleting %s kubernetes deployment...", deployment.Name)
+	namespace := deployer.getNamespace()
+	if err := k8sUtil.DeleteK8S([]string{namespace}, kubeConfig, log); err != nil {
+		log.Warningf("Unable to deleting %s kubernetes deployment: %s", deployment.Name, err.Error())
+	}
+
+	k8sUtil.DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient, namespace, log)
+
+	if err := k8sClient.CoreV1().Namespaces().Delete(namespace, &metav1.DeleteOptions{}); err != nil {
+		log.Warningf("Unable to delete kubernetes namespace %s: %s", namespace, err.Error())
+	}
+
+	if err := deployer.deleteDeployment(); err != nil {
+		log.Warningf("Unable to deleting %s deployment: %s", deployment.Name, err.Error())
+	}
+
+	return nil
+}
+
+func (deployer *InClusterGCPDeployer) deleteDeployment() error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	projectId := gcpProfile.ProjectId
+	zone := gcpCluster.Zone
+	log := deployer.GetLog().Logger
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	if err := deleteNodePools(client, projectId, zone, deployer.ParentClusterId, gcpCluster.NodePoolIds); err != nil {
+		return errors.New("Unable to delete node pools: %s" + err.Error())
+	}
+
+	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	if err := deleteFirewallRules(client, projectId, firewallRuleName); err != nil {
+		log.Warningf("Unable to delete firewall rules: " + err.Error())
+	}
+
+	log.Infof("Waiting until node pool to be delete completed...")
+	if err := waitUntilNodePoolDeleteComplete(client, projectId, zone,
+		deployer.ParentClusterId, gcpCluster.NodePoolIds, time.Duration(10)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until %s node pool to be delete completed: %s\n",
+			deployer.ParentClusterId, err.Error())
+	}
+
+	return nil
+}
+
+func (deployer *InClusterGCPDeployer) GetStoreInfo() interface{} {
+	return nil
+}
+
+func (deployer *InClusterGCPDeployer) NewStoreInfo() interface{} {
+	return nil
 }

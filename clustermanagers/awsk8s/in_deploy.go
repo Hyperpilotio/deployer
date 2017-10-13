@@ -15,18 +15,12 @@ import (
 
 	"github.com/hyperpilotio/deployer/apis"
 	k8sUtil "github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
-	"github.com/hyperpilotio/deployer/clusters"
 	hpaws "github.com/hyperpilotio/deployer/clusters/aws"
-	"github.com/hyperpilotio/deployer/job"
-	"github.com/hyperpilotio/go-utils/funcs"
 	"github.com/hyperpilotio/go-utils/log"
-	logging "github.com/op/go-logging"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/pkg/api/v1"
-	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
 	"k8s.io/client-go/rest"
 )
 
@@ -334,13 +328,21 @@ func (deployer *InClusterK8SDeployer) tagEC2Instance(ec2Svc *ec2.EC2) error {
 
 // CreateDeployment start a deployment
 func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]string) (interface{}, error) {
+	if err := deployInCluster(deployer, uploadedFiles); err != nil {
+		return nil, errors.New("Unable to deploy kubernetes: " + err.Error())
+	}
+
+	return nil, nil
+}
+
+func deployInCluster(deployer *InClusterK8SDeployer, uploadedFiles map[string]string) error {
 	awsCluster := deployer.AWSCluster
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 
 	sess, sessionErr := hpaws.CreateSession(awsCluster.AWSProfile, awsCluster.Region)
 	if sessionErr != nil {
-		return nil, fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
+		return fmt.Errorf("Unable to create session: %s" + sessionErr.Error())
 	}
 
 	autoscalingSvc := autoscaling.New(sess)
@@ -349,12 +351,12 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	log.Infof("Launching EC2 instances")
 	if err := deployer.setupEC2(ec2Svc, autoscalingSvc); err != nil {
 		deployer.DeleteDeployment()
-		return nil, errors.New("Unable to setup EC2: " + err.Error())
+		return errors.New("Unable to setup EC2: " + err.Error())
 	}
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
-		return nil, errors.New("Unable to connect to kubernetes during create: " + err.Error())
+		return errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
 
 	nodeNames := []string{}
@@ -363,22 +365,21 @@ func (deployer *InClusterK8SDeployer) CreateDeployment(uploadedFiles map[string]
 	}
 	if err := k8sUtil.WaitUntilKubernetesNodeExists(k8sClient, nodeNames, time.Duration(2)*time.Minute, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
-		return nil, errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
+		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
 	}
 
 	if err := tagKubeNodes(k8sClient, awsCluster, deployment, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
-		return nil, errors.New("Unable to tag Kubernetes nodes: " + err.Error())
+		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
-		return nil, errors.New("Unable to deploy kubernetes objects: " + err.Error())
+		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
-
 	recordPrivateEndpoints(deployer, k8sClient)
 
-	return nil, nil
+	return nil
 }
 
 func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clientset) {
@@ -403,189 +404,28 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 	}
 }
 
-func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset) error {
 	log := deployer.DeploymentLog.Logger
-	existingNamespaces, namespacesErr := k8sUtil.GetExistingNamespaces(k8sClient)
-	if namespacesErr != nil {
-		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
-	}
-
 	namespace := deployer.getNamespace()
-	if err := k8sUtil.CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
-	}
-
 	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
 	log.Infof("Granting node-reader permission to namespace %s", namespace)
-	if err := deployer.grantNodeReaderPermissionToNamespace(k8sClient, namespace); err != nil {
+	if err := k8sUtil.GrantNodeReaderPermissionToNamespace(k8sClient, namespace, log); err != nil {
 		// Assumption: if the action of grant failed, it wouldn't affect the whole deployment process which
-		//is why we don't return an error here.
+		// is why we don't return an error here.
 		log.Warningf("Unable to grant node-reader permission to namespace %s: %s", namespace, err.Error())
 	}
 
-	if err := deployer.deployServices(k8sClient); err != nil {
+	existingNamespaces, namespacesErr := k8sUtil.GetExistingNamespaces(k8sClient)
+	if namespacesErr != nil {
+		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+	}
+
+	if err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
+		namespace, existingNamespaces, "ubuntu", log); err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
-	}
-
-	return nil
-}
-
-func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) error {
-	deployment := deployer.Deployment
-	kubeConfig := deployer.KubeConfig
-	log := deployer.GetLog().Logger
-
-	if kubeConfig == nil {
-		return errors.New("Unable to find kube config in deployment")
-	}
-
-	tasks := map[string]apis.KubernetesTask{}
-	for _, task := range deployment.KubernetesDeployment.Kubernetes {
-		tasks[task.Family] = task
-	}
-
-	taskCount := map[string]int{}
-
-	// We sort before we create services because we want to have a deterministic way to assign
-	// service ids
-	sort.Sort(deployment.NodeMapping)
-	namespace := deployer.getNamespace()
-	deploy := k8sClient.Extensions().Deployments(namespace)
-	for _, mapping := range deployment.NodeMapping {
-		log.Infof("Deploying task %s with mapping %d", mapping.Task, mapping.Id)
-		task, ok := tasks[mapping.Task]
-		if !ok {
-			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
-		}
-
-		deploySpec := task.Deployment
-		if deploySpec == nil {
-			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
-		}
-
-		if deploySpec.Labels == nil {
-			deploySpec.Labels = make(map[string]string)
-		}
-		if deploySpec.Spec.Template.Labels == nil {
-			deploySpec.Spec.Template.Labels = make(map[string]string)
-		}
-
-		family := task.Family
-		originalFamily := family
-		count, ok := taskCount[family]
-		if !ok {
-			count = 1
-			deploySpec.Name = originalFamily
-			deploySpec.Labels["app"] = originalFamily
-			deploySpec.Spec.Template.Labels["app"] = originalFamily
-		} else {
-			// Update deploy spec to reflect multiple count of the same task
-			count += 1
-			family = family + "-" + strconv.Itoa(count)
-			deploySpec.Name = family
-			deploySpec.Labels["app"] = family
-			deploySpec.Spec.Template.Labels["app"] = family
-		}
-
-		if deploySpec.Spec.Selector != nil {
-			deploySpec.Spec.Selector.MatchLabels = deploySpec.Spec.Template.Labels
-		}
-
-		taskCount[originalFamily] = count
-
-		// Assigning Pods to Nodes
-		nodeSelector := map[string]string{}
-		log.Infof("Selecting node %d for deployment %s", mapping.Id, family)
-		nodeSelector["hyperpilot/node-id"] = strconv.Itoa(mapping.Id)
-		nodeSelector["hyperpilot/deployment"] = deployment.Name
-
-		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
-
-		// Create service for each container that opens a port
-		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			err := deployer.createServiceForInClusterDeployment(k8sClient, family, task, container, log)
-			if err != nil {
-				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
-			}
-		}
-
-		_, err := deploy.Create(deploySpec)
-		if err != nil {
-			return fmt.Errorf("Unable to create k8s deployment: %s", err)
-		}
-		log.Infof("%s deployment created", family)
-	}
-
-	restartCount := deployer.Config.GetInt("restartCount")
-	err := funcs.LoopUntil(time.Minute*60, time.Second*20, func() (bool, error) {
-		deployments, listErr := deploy.List(metav1.ListOptions{})
-		if listErr != nil {
-			return false, errors.New("Unable to list deployments: " + listErr.Error())
-		}
-
-		if len(deployments.Items) != len(deployment.NodeMapping) {
-			return false, fmt.Errorf("Unexpected list of deployments: %d", len(deployments.Items))
-		}
-
-		pods, listErr := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{})
-		if listErr != nil {
-			return false, errors.New("Unable to list pods: " + listErr.Error())
-		}
-		for _, pod := range pods.Items {
-			switch pod.Status.Phase {
-			case "Pending":
-				for _, condition := range pod.Status.Conditions {
-					if condition.Reason == "Unschedulable" {
-						return false, fmt.Errorf("Unable to create %s deployment: %s",
-							pod.Name, condition.Message)
-					}
-				}
-				for _, containerStatus := range pod.Status.ContainerStatuses {
-					if containerStatus.State.Waiting.Reason == "ImagePullBackOff" {
-						return false, fmt.Errorf("Unable to create %s deployment: %s",
-							pod.Name, containerStatus.State.Waiting.Message)
-					}
-				}
-			case "Running":
-				for _, containerStatus := range pod.Status.ContainerStatuses {
-					if containerStatus.RestartCount >= int32(restartCount) {
-						return false, fmt.Errorf("Unable to create %s deployment: %s",
-							pod.Name, containerStatus.State.Waiting.Message)
-					}
-				}
-			}
-		}
-
-		for _, deployment := range deployments.Items {
-			if deployment.Status.ReadyReplicas == 0 {
-				return false, nil
-			}
-		}
-
-		return true, nil
-	})
-	if err != nil {
-		return fmt.Errorf("Unable to wait for deployments to be available: %s", err.Error())
-	}
-
-	for _, task := range deployment.KubernetesDeployment.Kubernetes {
-		if task.DaemonSet == nil {
-			continue
-		}
-
-		if task.Deployment != nil {
-			return fmt.Errorf("Cannot assign both daemonset and deployment to the same task: %s", task.Family)
-		}
-
-		daemonSet := task.DaemonSet
-		daemonSets := k8sClient.Extensions().DaemonSets(namespace)
-		log.Infof("Creating daemonset %s", task.Family)
-		if _, err := daemonSets.Create(daemonSet); err != nil {
-			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
-		}
 	}
 
 	return nil
@@ -593,131 +433,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 
 func (deployer *InClusterK8SDeployer) getNamespace() string {
 	return strings.ToLower(deployer.AWSCluster.Name)
-}
-
-func deleteNodeReaderClusterRoleBindingToNamespace(k8sClient *k8s.Clientset, namespace string, log *logging.Logger) {
-	roleName := "node-reader"
-	roleBinding := roleName + "-binding-" + namespace
-
-	log.Infof("Deleting cluster role binding %s for namespace %s", roleBinding, namespace)
-	clusterRoleBinding := k8sClient.RbacV1beta1().ClusterRoleBindings()
-	if err := clusterRoleBinding.Delete(roleBinding, &metav1.DeleteOptions{}); err != nil {
-		log.Warningf("Unable to delete cluster role binding %s for namespace %s", roleName, roleBinding)
-	}
-	log.Infof("Successfully delete cluster role binding %s", roleBinding)
-}
-
-// grantNodeReaderPermissionToNamespace grant read permission to the default user belongs to specified namespace
-
-func (deployer *InClusterK8SDeployer) grantNodeReaderPermissionToNamespace(k8sClient *k8s.Clientset, namespace string) error {
-	log := deployer.DeploymentLog.Logger
-	roleName := "node-reader"
-	roleBinding := roleName + "-binding-" + namespace
-
-	// check whether role-binding exists
-	clusterRoleBindings := k8sClient.RbacV1beta1().ClusterRoleBindings()
-	clusterRoleBindingList, err := clusterRoleBindings.List(metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("Unable to list role-binding in cluster scope: %s", err.Error())
-
-	}
-	for _, val := range clusterRoleBindingList.Items {
-		if val.GetName() == roleBinding {
-			log.Infof("Found role binding %s in cluster scope", roleBinding)
-			return nil
-		}
-	}
-
-	// check whether role exists or not
-	clusterRoles := k8sClient.RbacV1beta1().ClusterRoles()
-	roleList, err := clusterRoles.List(metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf(`Unable to list roles in cluster scope: %s`, err.Error())
-	}
-	var roleExists bool
-	for _, val := range roleList.Items {
-		if val.GetName() == roleName {
-			roleExists = true
-		}
-	}
-	if !roleExists {
-		return fmt.Errorf("Role %s doesn't exist in cluster scope", roleName)
-	}
-
-	log.Infof("Binding cluster role '%s' to namespace %s", roleName, namespace)
-	roleBindingObject := &rbac.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: roleBinding,
-		},
-		Subjects: []rbac.Subject{
-			rbac.Subject{
-				Kind:      rbac.ServiceAccountKind,
-				Name:      "default",
-				Namespace: namespace,
-			},
-		},
-		RoleRef: rbac.RoleRef{
-			APIGroup: "",
-			Kind:     "ClusterRole",
-			Name:     roleName,
-		},
-	}
-
-	if _, err = clusterRoleBindings.Create(roleBindingObject); err != nil {
-		return fmt.Errorf("Unable to create role binding for namespace %s in cluster scope: %s", namespace, err.Error())
-	}
-	log.Infof("Successfully binds cluster role '%s' to namespace '%s'", roleName, namespace)
-
-	return nil
-}
-
-func (deployer *InClusterK8SDeployer) createServiceForInClusterDeployment(
-	k8sClient *k8s.Clientset,
-	family string,
-	task apis.KubernetesTask,
-	container v1.Container,
-	log *logging.Logger) error {
-	if len(container.Ports) == 0 {
-		return nil
-	}
-
-	namespace := deployer.getNamespace()
-	service := k8sClient.CoreV1().Services(namespace)
-	serviceName := family
-	if !strings.HasPrefix(family, serviceName) {
-		serviceName = serviceName + "-" + container.Name
-	}
-
-	labels := map[string]string{"app": family}
-	servicePorts := []v1.ServicePort{}
-	for i, port := range container.Ports {
-		newPort := v1.ServicePort{
-			Port:       port.HostPort,
-			TargetPort: intstr.FromInt(int(port.ContainerPort)),
-			Name:       "port" + strconv.Itoa(i),
-		}
-		servicePorts = append(servicePorts, newPort)
-	}
-
-	internalService := &v1.Service{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      serviceName,
-			Labels:    labels,
-			Namespace: namespace,
-		},
-		Spec: v1.ServiceSpec{
-			Type:     v1.ServiceTypeClusterIP,
-			Ports:    servicePorts,
-			Selector: labels,
-		},
-	}
-	_, err := service.Create(internalService)
-	if err != nil {
-		return fmt.Errorf("Unable to create service %s: %s", serviceName, err)
-	}
-
-	log.Infof("Created %s internal service", serviceName)
-	return nil
 }
 
 func populateInClusterNodeInfos(ec2Svc *ec2.EC2, awsCluster *hpaws.AWSCluster) error {
@@ -782,13 +497,14 @@ func (deployer *InClusterK8SDeployer) UpdateDeployment(deployment *apis.Deployme
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	if err := k8sUtil.DeleteK8S([]string{deployer.getNamespace()}, deployer.KubeConfig, log); err != nil {
+	namespace := deployer.getNamespace()
+	if err := k8sUtil.DeleteK8S([]string{namespace}, deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
-	deleteNodeReaderClusterRoleBindingToNamespace(k8sClient, deployer.getNamespace(), deployer.DeploymentLog.Logger)
+	k8sUtil.DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient, namespace, log)
 
-	if err := deployer.deployKubernetesObjects(k8sClient, true); err != nil {
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
 
@@ -805,7 +521,7 @@ func (deployer *InClusterK8SDeployer) DeployExtensions(
 
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
-	if err := deployer.deployKubernetesObjects(k8sClient, true); err != nil {
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
 		deployer.Deployment = originalDeployment
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
@@ -836,11 +552,12 @@ func (deployer *InClusterK8SDeployer) DeleteDeployment() error {
 		return errors.New("Unable to create k8s client: " + err.Error())
 	}
 
-	deleteNodeReaderClusterRoleBindingToNamespace(k8sClient, deployer.getNamespace(), deployer.DeploymentLog.Logger)
+	namespace := deployer.getNamespace()
+	k8sUtil.DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient, namespace, log)
 
 	namespaces := k8sClient.CoreV1().Namespaces()
-	if err := namespaces.Delete(deployer.getNamespace(), &metav1.DeleteOptions{}); err != nil {
-		log.Warningf("Unable to delete kubernetes namespace %s: %s", deployer.getNamespace(), err.Error())
+	if err := namespaces.Delete(namespace, &metav1.DeleteOptions{}); err != nil {
+		log.Warningf("Unable to delete kubernetes namespace %s: %s", namespace, err.Error())
 	}
 
 	sess, sessionErr := hpaws.CreateSession(deployer.AWSCluster.AWSProfile, deployer.AWSCluster.Region)
@@ -938,25 +655,6 @@ func (deployer *InClusterK8SDeployer) GetStoreInfo() interface{} {
 
 func (deployer *InClusterK8SDeployer) NewStoreInfo() interface{} {
 	return nil
-}
-
-func (deployer *InClusterK8SDeployer) GetCluster() clusters.Cluster {
-	return deployer.AWSCluster
-}
-
-func (deployer *InClusterK8SDeployer) GetLog() *log.FileLog {
-	return deployer.DeploymentLog
-}
-
-func (deployer *InClusterK8SDeployer) GetScheduler() *job.Scheduler {
-	return nil
-}
-
-func (deployer *InClusterK8SDeployer) SetScheduler(sheduler *job.Scheduler) {
-}
-
-func (deployer *InClusterK8SDeployer) GetKubeConfigPath() (string, error) {
-	return deployer.KubeConfigPath, nil
 }
 
 func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string, error) {

@@ -112,6 +112,33 @@ func createNodePools(
 	return nodePoolIds, nil
 }
 
+func deleteNodePools(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string,
+	nodePoolIds []string) error {
+	containerSvc, err := container.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+
+	var errBool bool
+	for _, nodePoolId := range nodePoolIds {
+		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
+			Delete(projectId, zone, clusterId, nodePoolId).
+			Do()
+		if err != nil {
+			errBool = true
+		}
+	}
+	if errBool {
+		return fmt.Errorf("Unable to delete %s node pools", clusterId)
+	}
+
+	return nil
+}
+
 func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
 	computeSvc, err := compute.New(client)
 	if err != nil {
@@ -268,12 +295,19 @@ func tagFirewallIngressRules(
 	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		instanceName := nodeInfo.Instance.Name
-		newTags := *nodeInfo.Instance.Tags
-		newTags.Items = append(newTags.Items, targetTagName)
-		_, err := computeSvc.Instances.
-			SetTags(projectId, gcpCluster.Zone, instanceName, &newTags).
+		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
+		if err != nil {
+			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
+			errBool = true
+			break
+		}
+
+		instance.Tags.Items = append(instance.Tags.Items, targetTagName)
+		_, err = computeSvc.Instances.
+			SetTags(projectId, gcpCluster.Zone, instanceName, instance.Tags).
 			Do()
 		if err != nil {
+			log.Warningf("Unable to tag network: " + err.Error())
 			errBool = true
 		}
 	}
@@ -297,20 +331,27 @@ func tagPublicKey(
 	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		instanceName := nodeInfo.Instance.Name
-		newMetadata := *nodeInfo.Instance.Metadata
+		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
+		if err != nil {
+			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
+			errBool = true
+			break
+		}
+
 		keyVal := fmt.Sprintf("%s:%s %s@%s",
 			gcpCluster.GCPProfile.ServiceAccount,
 			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
 			gcpCluster.GCPProfile.ServiceAccount,
 			instanceName)
-		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
+		instance.Metadata.Items = append(instance.Metadata.Items, &compute.MetadataItems{
 			Key:   "sshKeys",
 			Value: &keyVal,
 		})
-		_, err := computeSvc.Instances.
-			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
+		_, err = computeSvc.Instances.
+			SetMetadata(projectId, gcpCluster.Zone, instanceName, instance.Metadata).
 			Do()
 		if err != nil {
+			log.Warningf("Unable to tag publicKey: " + err.Error())
 			errBool = true
 		}
 	}
@@ -334,15 +375,22 @@ func tagServiceAccount(
 	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		instanceName := nodeInfo.Instance.Name
-		newMetadata := *nodeInfo.Instance.Metadata
-		newMetadata.Items = append(newMetadata.Items, &compute.MetadataItems{
+		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
+		if err != nil {
+			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
+			errBool = true
+			break
+		}
+
+		instance.Metadata.Items = append(instance.Metadata.Items, &compute.MetadataItems{
 			Key:   "serviceAccount",
 			Value: &gcpCluster.GCPProfile.ServiceAccount,
 		})
-		_, err := computeSvc.Instances.
-			SetMetadata(projectId, gcpCluster.Zone, instanceName, &newMetadata).
+		_, err = computeSvc.Instances.
+			SetMetadata(projectId, gcpCluster.Zone, instanceName, instance.Metadata).
 			Do()
 		if err != nil {
+			log.Warningf("Unable to tag serviceAccount: " + err.Error())
 			errBool = true
 		}
 	}
@@ -412,6 +460,32 @@ func waitUntilNodePoolCreateComplete(
 			}
 		}
 		log.Info("Node pool create complete")
+		return true, nil
+	})
+}
+
+func waitUntilNodePoolDeleteComplete(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string,
+	nodePoolIds []string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	containerSvc, err := container.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform container service: " + err.Error())
+	}
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		for _, nodePoolId := range nodePoolIds {
+			nodePoll, _ := containerSvc.Projects.Zones.Clusters.NodePools.
+				Get(projectId, zone, clusterId, nodePoolId).
+				Do()
+			if nodePoll != nil {
+				return false, nil
+			}
+		}
+		log.Info("Delete node pool complete")
 		return true, nil
 	})
 }
