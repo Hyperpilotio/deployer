@@ -760,11 +760,6 @@ func WaitUntilKubernetesNodeExists(
 	nodeNames []string,
 	timeout time.Duration,
 	log *logging.Logger) error {
-	// nodeNames := []string{}
-	// for _, nodeInfo := range awsCluster.NodeInfos {
-	// 	nodeNames = append(nodeNames, aws.StringValue(nodeInfo.Instance.PrivateDnsName))
-	// }
-
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
 		allExists := true
 		for _, nodeName := range nodeNames {
