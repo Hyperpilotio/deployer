@@ -415,7 +415,7 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 		return fmt.Errorf("Unable to create namespace %s: %s", namespace, err.Error())
 	}
 
-	if err := deployer.createInClusterSecrets(k8sClient); err != nil {
+	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
@@ -593,23 +593,6 @@ func (deployer *InClusterK8SDeployer) deployServices(k8sClient *k8s.Clientset) e
 
 func (deployer *InClusterK8SDeployer) getNamespace() string {
 	return strings.ToLower(deployer.AWSCluster.Name)
-}
-
-func (deployer *InClusterK8SDeployer) createInClusterSecrets(k8sClient *k8s.Clientset) error {
-	secrets := deployer.Deployment.KubernetesDeployment.Secrets
-	if len(secrets) == 0 {
-		return nil
-	}
-
-	namespace := deployer.getNamespace()
-	for _, secret := range secrets {
-		k8sSecret := k8sClient.CoreV1().Secrets(namespace)
-		if _, err := k8sSecret.Create(&secret); err != nil {
-			return fmt.Errorf("Unable to create secret %s: %s", secret.Name, err.Error())
-		}
-	}
-
-	return nil
 }
 
 func deleteNodeReaderClusterRoleBindingToNamespace(k8sClient *k8s.Clientset, namespace string, log *logging.Logger) {
