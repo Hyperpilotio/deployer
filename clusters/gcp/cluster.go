@@ -79,6 +79,7 @@ type GCPCluster struct {
 	GCPProfile     *GCPProfile
 	KeyPair        *GCPKeyPairOutput
 	NodeInfos      map[int]*NodeInfo
+	NodePoolIds    []string
 }
 
 func NewGCPCluster(
@@ -87,10 +88,11 @@ func NewGCPCluster(
 	clusterId := CreateUniqueClusterId(deployment.Name)
 	deployment.Name = clusterId
 	gcpCluster := &GCPCluster{
-		Name:      clusterId,
-		Zone:      deployment.Region,
-		ClusterId: clusterId,
-		NodeInfos: make(map[int]*NodeInfo),
+		Name:        clusterId,
+		Zone:        deployment.Region,
+		ClusterId:   clusterId,
+		NodeInfos:   make(map[int]*NodeInfo),
+		NodePoolIds: make([]string, 0),
 	}
 
 	if deployment.KubernetesDeployment.GCPDefinition != nil {
