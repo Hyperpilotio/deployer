@@ -347,6 +347,20 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 }
 
 func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	client, err := hpgcp.CreateClient(gcpProfile)
+	log := deployer.GetLog().Logger
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	serviceAccount, err := findServiceAccount(client, gcpProfile.ProjectId, log)
+	if err != nil {
+		return errors.New("Unable to find serviceAccount: " + err.Error())
+	}
+	gcpProfile.ServiceAccount = serviceAccount
+
 	return nil
 }
 

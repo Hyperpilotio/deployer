@@ -614,7 +614,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
-	// TODO need to find deployment use node pool name
+
 	nodePoolName := []string{gcpCluster.ClusterId + "-pool"}
 	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
