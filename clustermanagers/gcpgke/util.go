@@ -456,6 +456,31 @@ func tagServiceAccount(
 	return nil
 }
 
+func findServiceAccount(client *http.Client, projectId string, log *logging.Logger) (string, error) {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return "", errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	resp, err := computeSvc.Projects.Get(projectId).Do()
+	if err != nil {
+		return "", errors.New("Unable to get project metadata: " + err.Error())
+	}
+
+	serviceAccount := ""
+	for _, item := range resp.CommonInstanceMetadata.Items {
+		if item.Key == "serviceAccount" {
+			serviceAccount = *item.Value
+			break
+		}
+	}
+	if serviceAccount == "" {
+		return "", errors.New("Unable to find serviceAccount from project metadata: " + err.Error())
+	}
+
+	return serviceAccount, nil
+}
+
 func waitUntilClusterCreateComplete(
 	containerSvc *container.Service,
 	projectId string,
