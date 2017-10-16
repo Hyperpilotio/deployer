@@ -185,7 +185,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to delete cluster: " + err.Error())
 	}
 
-	log.Infof("Waiting until cluster('%s') to be delete completed...", gcpCluster.ClusterId)
+	log.Infof("Waiting until cluster to be delete completed...")
 	if err := waitUntilClusterDeleteComplete(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until %s cluster to be delete completed: %s\n",
@@ -193,7 +193,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	}
 
 	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	if err := deleteFirewallRules(client, gcpProfile.ProjectId, firewallRuleName); err != nil {
+	if err := deleteFirewallRules(client, gcpProfile.ProjectId, firewallRuleName, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 

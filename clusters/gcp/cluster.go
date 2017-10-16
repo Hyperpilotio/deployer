@@ -216,10 +216,11 @@ func UploadFilesToStorage(config *viper.Viper, fileName string, filePath string)
 	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
 	_, err = storageSrv.Buckets.Get(bucketName).Do()
 	if err != nil {
-		glog.Warningf("unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
+		glog.Warningf("Unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
+		glog.Infof("Create %s bucketName to google cloud platform storage", bucketName)
 		if _, err := storageSrv.Buckets.
 			Insert(projectId, &storage.Bucket{Name: bucketName}).Do(); err != nil {
-			return errors.New("unable to create bucketName from google cloud platform storage: " + err.Error())
+			return errors.New("Unable to create bucketName from google cloud platform storage: " + err.Error())
 		}
 	}
 
@@ -256,12 +257,12 @@ func RemoveFileFromStorage(config *viper.Viper, bucketName string, fileName stri
 
 	_, err = storageSrv.Buckets.Get(bucketName).Do()
 	if err != nil {
-		return fmt.Errorf("unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
+		return fmt.Errorf("Unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
 	}
 
 	err = storageSrv.Objects.Delete(bucketName, fileName).Do()
 	if err != nil {
-		return fmt.Errorf("unable to delete %s file from %s bucket: %s",
+		return fmt.Errorf("Unable to delete %s file from %s bucket: %s",
 			fileName, bucketName, err.Error())
 	}
 
@@ -291,7 +292,7 @@ func DownloadUserProfiles(config *viper.Viper) error {
 	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
 	resp, err := storageSrv.Objects.List(bucketName).Do()
 	if err != nil {
-		return errors.New("unable to list bucket files from google cloud platform storage: " + err.Error())
+		return errors.New("Unable to list bucket files from google cloud platform storage: " + err.Error())
 	}
 
 	basePath := config.GetString("filesPath")
