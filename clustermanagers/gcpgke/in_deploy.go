@@ -332,7 +332,7 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 	}
 
 	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	if err := deleteFirewallRules(client, projectId, firewallRuleName); err != nil {
+	if err := deleteFirewallRules(client, projectId, firewallRuleName, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -343,6 +343,10 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 			deployer.ParentClusterId, err.Error())
 	}
 
+	return nil
+}
+
+func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	return nil
 }
 

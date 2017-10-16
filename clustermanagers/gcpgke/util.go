@@ -139,14 +139,22 @@ func deleteNodePools(
 	return nil
 }
 
-func deleteFirewallRules(client *http.Client, projectId string, firewallName string) error {
+func deleteFirewallRules(
+	client *http.Client,
+	projectId string,
+	firewallName string,
+	log *logging.Logger) error {
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
 	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
-	if err != nil {
+	if err != nil && strings.Contains(err.Error(), "was not found") {
+		if strings.Contains(err.Error(), "was not found") {
+			log.Warningf("Unable to find %s to be delete", firewallName)
+			return nil
+		}
 		return errors.New("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -424,30 +432,25 @@ func tagServiceAccount(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	var errBool bool
-	for _, nodeInfo := range gcpCluster.NodeInfos {
-		instanceName := nodeInfo.Instance.Name
-		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
-		if err != nil {
-			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
-			errBool = true
-			break
-		}
+	resp, err := computeSvc.Projects.Get(projectId).Do()
+	if err != nil {
+		return errors.New("Unable to get project metadata: " + err.Error())
+	}
 
-		instance.Metadata.Items = append(instance.Metadata.Items, &compute.MetadataItems{
-			Key:   "serviceAccount",
-			Value: &gcpCluster.GCPProfile.ServiceAccount,
-		})
-		_, err = computeSvc.Instances.
-			SetMetadata(projectId, gcpCluster.Zone, instanceName, instance.Metadata).
-			Do()
-		if err != nil {
-			log.Warningf("Unable to tag serviceAccount: " + err.Error())
-			errBool = true
+	metadata := resp.CommonInstanceMetadata
+	for _, item := range metadata.Items {
+		if item.Key == "serviceAccount" {
+			log.Warningf("ServiceAccount has been tagged")
+			return nil
 		}
 	}
-	if errBool {
-		return errors.New("Unable to tag serviceAccount for all node")
+	metadata.Items = append(metadata.Items, &compute.MetadataItems{
+		Key:   "serviceAccount",
+		Value: &gcpCluster.GCPProfile.ServiceAccount,
+	})
+	_, err = computeSvc.Projects.SetCommonInstanceMetadata(projectId, metadata).Do()
+	if err != nil {
+		return errors.New("Unable to tag serviceAccount to projects metadata")
 	}
 
 	return nil
