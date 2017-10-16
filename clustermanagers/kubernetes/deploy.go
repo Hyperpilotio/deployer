@@ -119,8 +119,8 @@ func DeployServices(
 		// Assigning Pods to Nodes
 		nodeSelector := map[string]string{}
 		log.Infof("Selecting node %d for deployment %s", mapping.Id, family)
-
 		nodeSelector["hyperpilot/node-id"] = strconv.Itoa(mapping.Id)
+		nodeSelector["hyperpilot/deployment"] = deployment.Name
 
 		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
