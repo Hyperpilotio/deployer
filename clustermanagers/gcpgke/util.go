@@ -234,7 +234,7 @@ func tagKubeNodes(
 	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, nodeInfos, log)
 }
 
-func tagFirewallIngressRules(
+func insertFirewallIngressRules(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
 	deployment *apis.Deployment,
@@ -245,6 +245,66 @@ func tagFirewallIngressRules(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
+	allowedPorts := getDeploymentAllowedPorts(deployment, log)
+	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
+	tagFirewall := &compute.Firewall{
+		Allowed: []*compute.FirewallAllowed{
+			&compute.FirewallAllowed{
+				IPProtocol: "tcp",
+				Ports:      allowedPorts,
+			},
+		},
+		Description: "INGRESS",
+		Name:        firewallName,
+		Priority:    int64(1000),
+		TargetTags:  []string{targetTagName},
+	}
+	if _, err := computeSvc.Firewalls.Insert(projectId, tagFirewall).Do(); err != nil {
+		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
+	}
+
+	if err := tagFirewallTarget(computeSvc, gcpCluster, targetTagName, log); err != nil {
+		return errors.New("Unable to tag firewall target to node instance: " + err.Error())
+	}
+
+	return nil
+}
+
+func updateFirewallIngressRules(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	deployment *apis.Deployment,
+	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	allowedPorts := getDeploymentAllowedPorts(deployment, log)
+	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
+	tagFirewall := &compute.Firewall{
+		Allowed: []*compute.FirewallAllowed{
+			&compute.FirewallAllowed{
+				IPProtocol: "tcp",
+				Ports:      allowedPorts,
+			},
+		},
+		Description: "INGRESS",
+		Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
+		Priority:    int64(1000),
+		TargetTags:  []string{targetTagName},
+	}
+	if _, err := computeSvc.Firewalls.Update(projectId, firewallName, tagFirewall).Do(); err != nil {
+		return errors.New("Unable to update firewall ingress rules: " + err.Error())
+	}
+
+	return nil
+}
+
+func getDeploymentAllowedPorts(deployment *apis.Deployment, log *logging.Logger) []string {
 	// TODO need to allowed ports by node deploy task
 	allowedPorts := []string{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
@@ -275,23 +335,15 @@ func tagFirewallIngressRules(
 		}
 	}
 
-	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
-	_, err = computeSvc.Firewalls.Insert(projectId, &compute.Firewall{
-		Allowed: []*compute.FirewallAllowed{
-			&compute.FirewallAllowed{
-				IPProtocol: "tcp",
-				Ports:      allowedPorts,
-			},
-		},
-		Description: "INGRESS",
-		Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
-		Priority:    int64(1000),
-		TargetTags:  []string{targetTagName},
-	}).Do()
-	if err != nil {
-		return errors.New("Unable to create firewall ingress rules: " + err.Error())
-	}
+	return allowedPorts
+}
 
+func tagFirewallTarget(
+	computeSvc *compute.Service,
+	gcpCluster *hpgcp.GCPCluster,
+	targetTagName string,
+	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
 	var errBool bool
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		instanceName := nodeInfo.Instance.Name

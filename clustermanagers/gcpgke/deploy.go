@@ -115,7 +115,7 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
-	deployer.recordEndpoints()
+	deployer.recordEndpoints(true)
 
 	return nil
 }
@@ -269,11 +269,11 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
-	if err := tagFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
+	if err := insertFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
-		return errors.New("Unable to tag firewall ingress rules: " + err.Error())
+		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.recordEndpoints()
+	deployer.recordEndpoints(false)
 
 	return nil
 }
@@ -382,7 +382,10 @@ func deleteDeploymentOnFailure(deployer *GCPDeployer) {
 	deployer.DeleteDeployment()
 }
 
-func (deployer *GCPDeployer) recordEndpoints() {
+func (deployer *GCPDeployer) recordEndpoints(reset bool) {
+	if reset {
+		deployer.Services = map[string]ServiceMapping{}
+	}
 	deployment := deployer.Deployment
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
@@ -617,7 +620,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
-	deployer.recordEndpoints()
+	deployer.recordEndpoints(false)
 
 	glog.Infof("Reloading kube config for %s...", deployer.GCPCluster.Name)
 	if err := deployer.DownloadKubeConfig(); err != nil {

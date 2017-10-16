@@ -157,21 +157,21 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := deployer.deployKubernetesObjects(k8sClient, false); err != nil {
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
 
-	if err := tagFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
+	if err := insertFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
-		return errors.New("Unable to tag firewall ingress rules: " + err.Error())
+		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.recordPublicEndpoints()
+	deployer.recordPublicEndpoints(false)
 
 	return nil
 }
 
-func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset, skipDelete bool) error {
+func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset) error {
 	log := deployer.GetLog().Logger
 	namespace := deployer.getNamespace()
 	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
@@ -204,6 +204,73 @@ func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 
 func (deployer *InClusterGCPDeployer) getNamespace() string {
 	return strings.ToLower(deployer.GCPCluster.Name)
+}
+
+// UpdateDeployment start a deployment on GKE cluster is ready
+func (deployer *InClusterGCPDeployer) UpdateDeployment(deployment *apis.Deployment) error {
+	deployer.Deployment = deployment
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	log := deployer.GetLog().Logger
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
+
+	namespace := deployer.getNamespace()
+	if err := k8sUtil.DeleteK8S([]string{namespace}, deployer.KubeConfig, log); err != nil {
+		return errors.New("Unable to delete k8s objects in update: " + err.Error())
+	}
+
+	k8sUtil.DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient, namespace, log)
+
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
+		return errors.New("Unable to deploy k8s objects in update: " + err.Error())
+	}
+
+	if err := updateFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
+		return errors.New("Unable to update firewall ingress rules: " + err.Error())
+	}
+	deployer.recordPublicEndpoints(true)
+
+	return nil
+}
+
+func (deployer *InClusterGCPDeployer) DeployExtensions(
+	extensions *apis.Deployment,
+	newDeployment *apis.Deployment) error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	log := deployer.GetLog().Logger
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
+	}
+
+	originalDeployment := deployer.Deployment
+	deployer.Deployment = extensions
+	if err := deployer.deployKubernetesObjects(k8sClient); err != nil {
+		deployer.Deployment = originalDeployment
+		return errors.New("Unable to deploy k8s objects: " + err.Error())
+	}
+	deployer.Deployment = newDeployment
+
+	if err := updateFirewallIngressRules(client, gcpCluster, deployer.Deployment, log); err != nil {
+		return errors.New("Unable to update firewall ingress rules: " + err.Error())
+	}
+	deployer.recordPublicEndpoints(true)
+
+	return nil
 }
 
 func deleteInClusterDeploymentOnFailure(deployer *InClusterGCPDeployer) {
