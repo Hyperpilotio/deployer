@@ -270,6 +270,11 @@ func RemoveFileFromStorage(config *viper.Viper, bucketName string, fileName stri
 }
 
 func DownloadUserProfiles(config *viper.Viper) error {
+	if config.GetBool("inCluster") {
+		glog.Warningf("Depolyer in-cluster, no need to download GCP userProfiles")
+		return nil
+	}
+
 	gcpProfile := &GCPProfile{
 		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
 	}
