@@ -69,18 +69,27 @@ func createNodePools(
 	clusterId string,
 	deployment *apis.Deployment,
 	log *logging.Logger,
-	custEachNodeInstanceType bool) ([]string, error) {
+	groupByNodeInstanceType bool) ([]string, error) {
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return nil, errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 
 	nodePoolIds := []string{}
-	if custEachNodeInstanceType {
-		// TODO group by instance type to create node pool
+	if groupByNodeInstanceType {
+		instanceTypesMap := map[string]int{}
 		for _, node := range deployment.ClusterDefinition.Nodes {
+			cnt, ok := instanceTypesMap[node.InstanceType]
+			if ok {
+				instanceTypesMap[node.InstanceType] = (cnt + 1)
+			} else {
+				instanceTypesMap[node.InstanceType] = 1
+			}
+		}
+
+		for instanceType, cnt := range instanceTypesMap {
 			nodePoolName := createUniqueNodePoolName()
-			nodePoolRequest := NewNodePoolRequest(nodePoolName, node.InstanceType, 1)
+			nodePoolRequest := NewNodePoolRequest(nodePoolName, instanceType, cnt)
 			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 				Create(projectId, zone, clusterId, nodePoolRequest).
 				Do()
