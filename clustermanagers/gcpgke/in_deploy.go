@@ -119,6 +119,7 @@ func (deployer *InClusterGCPDeployer) CreateDeployment(uploadedFiles map[string]
 func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]string) error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
+	serviceAccount := gcpProfile.ServiceAccount
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 	client, err := hpgcp.CreateClient(gcpProfile)
@@ -127,7 +128,7 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 	}
 
 	nodePoolIds, err := createNodePools(client, gcpProfile.ProjectId, gcpCluster.Zone,
-		deployer.ParentClusterId, deployment, log, true)
+		deployer.ParentClusterId, serviceAccount, deployment, log, true)
 	if err != nil {
 		return errors.New("Unable to create node pools: " + err.Error())
 	}

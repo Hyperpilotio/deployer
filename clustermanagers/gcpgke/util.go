@@ -23,10 +23,12 @@ import (
 var publicPortType = 1
 
 func NewNodePoolRequest(
-	nodePoolName string,
+	deploymentName string,
+	serviceAccount string,
 	machineType string,
-	nodePoolSize int) *container.CreateNodePoolRequest {
-	return &container.CreateNodePoolRequest{
+	nodePoolSize int) (string, *container.CreateNodePoolRequest) {
+	nodePoolName := createUniqueNodePoolName(machineType, nodePoolSize)
+	return nodePoolName, &container.CreateNodePoolRequest{
 		NodePool: &container.NodePool{
 			Name:             nodePoolName,
 			InitialNodeCount: int64(nodePoolSize),
@@ -44,6 +46,11 @@ func NewNodePoolRequest(
 					"https://www.googleapis.com/auth/service.management.readonly",
 					"https://www.googleapis.com/auth/trace.append",
 				},
+				Metadata: map[string]string{
+					"deploymentName": deploymentName,
+					"nodePoolName":   nodePoolName,
+					"serviceAccount": serviceAccount,
+				},
 			},
 			Autoscaling: &container.NodePoolAutoscaling{
 				Enabled: false,
@@ -57,9 +64,9 @@ func NewNodePoolRequest(
 	}
 }
 
-func createUniqueNodePoolName() string {
+func createUniqueNodePoolName(machineType string, nodePoolSize int) string {
 	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
-	return fmt.Sprintf("default-pool-%s", timeSeq)
+	return fmt.Sprintf("%s-%d-%s", machineType, nodePoolSize, timeSeq)
 }
 
 func createNodePools(
@@ -67,6 +74,7 @@ func createNodePools(
 	projectId string,
 	zone string,
 	clusterId string,
+	serviceAccount string,
 	deployment *apis.Deployment,
 	log *logging.Logger,
 	groupByNodeInstanceType bool) ([]string, error) {
@@ -88,8 +96,8 @@ func createNodePools(
 		}
 
 		for instanceType, cnt := range instanceTypesMap {
-			nodePoolName := createUniqueNodePoolName()
-			nodePoolRequest := NewNodePoolRequest(nodePoolName, instanceType, cnt)
+			nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name,
+				serviceAccount, instanceType, cnt)
 			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 				Create(projectId, zone, clusterId, nodePoolRequest).
 				Do()
@@ -101,8 +109,8 @@ func createNodePools(
 	} else {
 		nodePoolSize := len(deployment.ClusterDefinition.Nodes)
 		instanceType := deployment.ClusterDefinition.Nodes[0].InstanceType
-		nodePoolName := createUniqueNodePoolName()
-		nodePoolRequest := NewNodePoolRequest(nodePoolName, instanceType, nodePoolSize)
+		nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name,
+			serviceAccount, instanceType, nodePoolSize)
 		_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 			Create(projectId, zone, clusterId, nodePoolRequest).
 			Do()
