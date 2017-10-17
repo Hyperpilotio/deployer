@@ -45,10 +45,12 @@ GCP
       * Enable GAE service support because we need to use 'Storage' to upload serviceAccount JSON file 
       * gcloud init (Set to be used projectId)
       * Run deployer/build_gcp_serviceAccoutFile.sh to gen your serviceAccount JSON file (You can also change iam-account)
-      * Setting gcpServiceAccountJSONFile path to dev.config (See template.config)
+      * Set gcpServiceAccountJSONFile path to serviceAccount JSON file path (See template.config). (Note that a tilde does not currently map to $HOME in this workflow, i.e. use `/Users/<username>/...` instead of `~/...` on OSX).
       * Run deployer
       * Use $DEPLOYER_URL:7777/ui/users?tab=GCP to upload your serviceAccount JSON file (serviceAccount is your gmail userName) 
       * Write deploy-gcp.json to deploy
+      
+      
 
 ```
     If need to upload files, replace home dir to $(SERVICE_ACCOUNT) from deploy-gcp.json, like
