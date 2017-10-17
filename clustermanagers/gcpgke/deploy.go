@@ -168,10 +168,18 @@ func (deployer *GCPDeployer) DeleteDeployment() error {
 func (deployer *GCPDeployer) deleteDeployment() error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
-	log := deployer.DeploymentLog.Logger
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
+	projectId := gcpProfile.ProjectId
+	zone := gcpCluster.Zone
+	clusterId := gcpCluster.ClusterId
+	log := deployer.GetLog().Logger
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	inClusterDeploymentNames, err := findDeploymentNames(client, projectId, zone, clusterId)
+	if err != nil {
+		return errors.New("Unable to find in-cluster deployment names: " + err.Error())
 	}
 
 	containerSvc, err := container.New(client)
@@ -179,21 +187,25 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 	_, err = containerSvc.Projects.Zones.Clusters.
-		Delete(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
+		Delete(projectId, zone, clusterId).
 		Do()
 	if err != nil {
 		return errors.New("Unable to delete cluster: " + err.Error())
 	}
 
 	log.Infof("Waiting until cluster to be delete completed...")
-	if err := waitUntilClusterDeleteComplete(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
-		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
+	if err := waitUntilClusterDeleteComplete(containerSvc, projectId, zone,
+		clusterId, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until %s cluster to be delete completed: %s\n",
-			gcpCluster.ClusterId, err.Error())
+			clusterId, err.Error())
 	}
 
-	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	if err := deleteFirewallRules(client, gcpProfile.ProjectId, firewallRuleName, log); err != nil {
+	firewallRuleNames := []string{fmt.Sprintf("gke-%s-http", clusterId)}
+	for _, deploymentName := range inClusterDeploymentNames {
+		firewallRuleNames = append(firewallRuleNames, fmt.Sprintf("gke-%s-http", deploymentName))
+	}
+
+	if err := deleteFirewallRules(client, projectId, firewallRuleNames, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -303,7 +315,7 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 			MonitoringService: "none",
 			NodePools: []*container.NodePool{
 				&container.NodePool{
-					Name:             gcpCluster.ClusterId + "-pool",
+					Name:             "default-pool",
 					InitialNodeCount: int64(initialNodeCount),
 					Config: &container.NodeConfig{
 						MachineType: deployment.ClusterDefinition.Nodes[0].InstanceType,
@@ -542,7 +554,7 @@ func (deployer *GCPDeployer) CheckClusterState() error {
 		List(gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId).
 		Do()
 	if err != nil && strings.Contains(err.Error(), "was not found") {
-		return errors.New("Unable to reload stack because cluster is not exist")
+		return fmt.Errorf("Unable to find %s cluster to be reload", gcpCluster.ClusterId)
 	}
 
 	return nil
@@ -615,7 +627,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	nodePoolName := []string{gcpCluster.ClusterId + "-pool"}
+	nodePoolName := []string{"default-pool"}
 	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())

@@ -86,6 +86,18 @@ func NewInClusterDeployer(
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
 
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	serviceAccount, err := findServiceAccount(client, projectId, log.Logger)
+	if err != nil {
+		return nil, errors.New("Unable to find serviceAccount: " + err.Error())
+	}
+	gcpProfile.ServiceAccount = serviceAccount
+	log.Logger.Infof("Reload in-cluster serviceAccount: %s", gcpProfile.ServiceAccount)
+
 	deployer := &InClusterGCPDeployer{
 		GCPDeployer: GCPDeployer{
 			Config: config,
@@ -119,7 +131,6 @@ func (deployer *InClusterGCPDeployer) CreateDeployment(uploadedFiles map[string]
 func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]string) error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
-	serviceAccount := gcpProfile.ServiceAccount
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 	client, err := hpgcp.CreateClient(gcpProfile)
@@ -127,8 +138,8 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	nodePoolIds, err := createNodePools(client, gcpProfile.ProjectId, gcpCluster.Zone,
-		deployer.ParentClusterId, serviceAccount, deployment, log, true)
+	nodePoolIds, err := CreateNodePools(client, gcpProfile.ProjectId, gcpCluster.Zone,
+		deployer.ParentClusterId, deployment, log, true)
 	if err != nil {
 		return errors.New("Unable to create node pools: " + err.Error())
 	}
@@ -191,9 +202,6 @@ func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
-	// TODO incluster ServiceAccount now is nil, need to restore
-	// 1)tag serviceAccount to compute metadata
-	// 2)get serviceAccount from compute metadata
 	userName := strings.ToLower(deployer.GCPCluster.GCPProfile.ServiceAccount)
 	if err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
 		namespace, existingNamespaces, userName, log); err != nil {
@@ -332,8 +340,8 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to delete node pools: %s" + err.Error())
 	}
 
-	firewallRuleName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	if err := deleteFirewallRules(client, projectId, firewallRuleName, log); err != nil {
+	firewallRuleNames := []string{fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)}
+	if err := deleteFirewallRules(client, projectId, firewallRuleNames, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -348,19 +356,19 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 }
 
 func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) error {
-	gcpCluster := deployer.GCPCluster
-	gcpProfile := gcpCluster.GCPProfile
-	client, err := hpgcp.CreateClient(gcpProfile)
-	log := deployer.GetLog().Logger
-	if err != nil {
-		return errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
+	// gcpCluster := deployer.GCPCluster
+	// gcpProfile := gcpCluster.GCPProfile
+	// client, err := hpgcp.CreateClient(gcpProfile)
+	// log := deployer.GetLog().Logger
+	// if err != nil {
+	// 	return errors.New("Unable to create google cloud platform client: " + err.Error())
+	// }
 
-	serviceAccount, err := findServiceAccount(client, gcpProfile.ProjectId, log)
-	if err != nil {
-		return errors.New("Unable to find serviceAccount: " + err.Error())
-	}
-	gcpProfile.ServiceAccount = serviceAccount
+	// serviceAccount, err := findServiceAccount(client, gcpProfile.ProjectId, log)
+	// if err != nil {
+	// 	return errors.New("Unable to find serviceAccount: " + err.Error())
+	// }
+	// gcpProfile.ServiceAccount = serviceAccount
 
 	return nil
 }
