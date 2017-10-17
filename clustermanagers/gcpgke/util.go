@@ -24,7 +24,6 @@ var publicPortType = 1
 
 func NewNodePoolRequest(
 	deploymentName string,
-	serviceAccount string,
 	machineType string,
 	nodePoolSize int) (string, *container.CreateNodePoolRequest) {
 	nodePoolName := createUniqueNodePoolName(machineType, nodePoolSize)
@@ -49,7 +48,6 @@ func NewNodePoolRequest(
 				Metadata: map[string]string{
 					"deploymentName": deploymentName,
 					"nodePoolName":   nodePoolName,
-					"serviceAccount": serviceAccount,
 				},
 			},
 			Autoscaling: &container.NodePoolAutoscaling{
@@ -69,12 +67,11 @@ func createUniqueNodePoolName(machineType string, nodePoolSize int) string {
 	return fmt.Sprintf("%s-%d-%s", machineType, nodePoolSize, timeSeq)
 }
 
-func createNodePools(
+func CreateNodePools(
 	client *http.Client,
 	projectId string,
 	zone string,
 	clusterId string,
-	serviceAccount string,
 	deployment *apis.Deployment,
 	log *logging.Logger,
 	groupByNodeInstanceType bool) ([]string, error) {
@@ -96,12 +93,10 @@ func createNodePools(
 		}
 
 		for instanceType, cnt := range instanceTypesMap {
-			nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name,
-				serviceAccount, instanceType, cnt)
-			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
-				Create(projectId, zone, clusterId, nodePoolRequest).
-				Do()
+			nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId, instanceType, cnt,
+				deployment, log)
 			if err != nil {
+				deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName})
 				return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
 			}
 			nodePoolIds = append(nodePoolIds, nodePoolName)
@@ -109,24 +104,43 @@ func createNodePools(
 	} else {
 		nodePoolSize := len(deployment.ClusterDefinition.Nodes)
 		instanceType := deployment.ClusterDefinition.Nodes[0].InstanceType
-		nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name,
-			serviceAccount, instanceType, nodePoolSize)
-		_, err := containerSvc.Projects.Zones.Clusters.NodePools.
-			Create(projectId, zone, clusterId, nodePoolRequest).
-			Do()
+		nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId,
+			instanceType, nodePoolSize, deployment, log)
 		if err != nil {
+			deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName})
 			return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
 		}
 		nodePoolIds = append(nodePoolIds, nodePoolName)
 	}
 
-	log.Info("Waiting until node pool is completed...")
-	if err := waitUntilNodePoolCreateComplete(containerSvc, projectId, zone,
-		clusterId, nodePoolIds, time.Duration(10)*time.Minute, log); err != nil {
-		return nil, fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	return nodePoolIds, nil
+}
+
+func createClusterNodePool(
+	containerSvc *container.Service,
+	projectId string,
+	zone string,
+	clusterId string,
+	instanceType string,
+	nodePoolSize int,
+	deployment *apis.Deployment,
+	log *logging.Logger) (string, error) {
+	nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name, instanceType, nodePoolSize)
+	_, err := containerSvc.Projects.Zones.Clusters.NodePools.
+		Create(projectId, zone, clusterId, nodePoolRequest).
+		Do()
+	if err != nil {
+		return "", fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
 	}
 
-	return nodePoolIds, nil
+	log.Infof("Waiting until %s node pool is completed...", nodePoolName)
+	if err := waitUntilNodePoolCreateComplete(containerSvc, projectId, zone,
+		clusterId, nodePoolName, time.Duration(10)*time.Minute, log); err != nil {
+		return "", fmt.Errorf("Unable to wait until %s node pool to be complete: %s\n",
+			nodePoolName, err.Error())
+	}
+
+	return nodePoolName, nil
 }
 
 func deleteNodePools(
@@ -159,20 +173,27 @@ func deleteNodePools(
 func deleteFirewallRules(
 	client *http.Client,
 	projectId string,
-	firewallName string,
+	firewallNames []string,
 	log *logging.Logger) error {
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
-	if err != nil && strings.Contains(err.Error(), "was not found") {
-		if strings.Contains(err.Error(), "was not found") {
-			log.Warningf("Unable to find %s to be delete", firewallName)
-			return nil
+	var errBool bool
+	for _, firewallName := range firewallNames {
+		_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
+		if err != nil {
+			if strings.Contains(err.Error(), "was not found") {
+				log.Warningf("Unable to find %s to be delete", firewallName)
+				continue
+			}
+			log.Warningf("Unable to delete firewall rules: " + err.Error())
+			errBool = true
 		}
-		return errors.New("Unable to delete firewall rules: " + err.Error())
+	}
+	if errBool {
+		return fmt.Errorf("Unable to delete firewall rules")
 	}
 
 	return nil
@@ -498,6 +519,42 @@ func findServiceAccount(client *http.Client, projectId string, log *logging.Logg
 	return serviceAccount, nil
 }
 
+func findDeploymentNames(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string) ([]string, error) {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	resp, err := computeSvc.Instances.List(projectId, zone).Do()
+	if err != nil {
+		return nil, errors.New("Unable to list instance: " + err.Error())
+	}
+
+	clusterInstances := []*compute.Instance{}
+	for _, instance := range resp.Items {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
+				clusterInstances = append(clusterInstances, instance)
+			}
+		}
+	}
+
+	deploymentNames := []string{}
+	for _, instance := range clusterInstances {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "deploymentName" {
+				deploymentNames = append(deploymentNames, *metadata.Value)
+			}
+		}
+	}
+
+	return deploymentNames, nil
+}
+
 func waitUntilClusterCreateComplete(
 	containerSvc *container.Service,
 	projectId string,
@@ -544,17 +601,15 @@ func waitUntilNodePoolCreateComplete(
 	projectId string,
 	zone string,
 	clusterId string,
-	nodePoolIds []string,
+	nodePoolName string,
 	timeout time.Duration,
 	log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		for _, nodePoolId := range nodePoolIds {
-			_, err := containerSvc.Projects.Zones.Clusters.NodePools.
-				Get(projectId, zone, clusterId, nodePoolId).
-				Do()
-			if err != nil {
-				return false, nil
-			}
+		nodePool, _ := containerSvc.Projects.Zones.Clusters.NodePools.
+			Get(projectId, zone, clusterId, nodePoolName).
+			Do()
+		if nodePool == nil {
+			return false, nil
 		}
 		log.Info("Node pool create complete")
 		return true, nil
