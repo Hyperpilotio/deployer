@@ -516,7 +516,8 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list daemonsets in namespace '%s' for deletion: ", namespace, listError.Error())
+			return fmt.Errorf("Unable to list daemonsets in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 
 		deploys := k8sClient.Extensions().Deployments(namespace)
@@ -528,7 +529,8 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list deployments in namespace '%s' for deletion: ", namespace, listError.Error())
+			return fmt.Errorf("Unable to list deployments in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 
 		replicaSets := k8sClient.Extensions().ReplicaSets(namespace)
@@ -540,7 +542,8 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list replica sets in namespace '%s' for deletion: ", namespace, listError.Error())
+			return fmt.Errorf("Unable to list replica sets in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 
 		services := k8sClient.CoreV1().Services(namespace)
@@ -552,7 +555,8 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list services in namespace '%s' for deletion: %s", namespace, listError.Error())
+			return fmt.Errorf("Unable to list services in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 
 		pods := k8sClient.CoreV1().Pods(namespace)
@@ -564,7 +568,8 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list pods in namespace '%s' for deletion: %s", namespace, listError.Error())
+			return fmt.Errorf("Unable to list pods in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 
 		secrets := k8sClient.CoreV1().Secrets(namespace)
@@ -576,7 +581,21 @@ func DeleteK8S(namespaces []string, kubeConfig *rest.Config, log *logging.Logger
 				}
 			}
 		} else {
-			return fmt.Errorf("Unable to list secrets in namespace '%s' for deletion: %s", namespace, listError.Error())
+			return fmt.Errorf("Unable to list secrets in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
+		}
+
+		statefulSets := k8sClient.StatefulSets(namespace)
+		if statefulSetsList, listError := statefulSets.List(metav1.ListOptions{}); listError == nil {
+			for _, statefulSet := range statefulSetsList.Items {
+				name := statefulSet.GetObjectMeta().GetName()
+				if err := statefulSets.Delete(name, &metav1.DeleteOptions{}); err != nil {
+					log.Warningf("Unable to delete service %s: %s", name, err.Error())
+				}
+			}
+		} else {
+			return fmt.Errorf("Unable to list statefulSets in namespace '%s' for deletion: \n%s",
+				namespace, listError.Error())
 		}
 	}
 
