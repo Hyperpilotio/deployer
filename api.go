@@ -1205,6 +1205,10 @@ func (server *Server) reloadClusterState() error {
 		}
 	}
 
+	if err := hpgcp.DownloadUserProfiles(server.Config); err != nil {
+		return errors.New("Unable to download GCP user profiles: " + err.Error())
+	}
+
 	inCluster := server.Config.GetBool("inCluster")
 	var deploymentStore blobstore.BlobStore
 	if inCluster {
