@@ -355,28 +355,65 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 	return nil
 }
 
+// CheckClusterState check GCP in-cluster state is exist
+func (deployer *InClusterGCPDeployer) CheckClusterState() error {
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	projectId := gcpProfile.ProjectId
+	zone := gcpCluster.Zone
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
+
+	inClusterDeploymentNames, err := findDeploymentNames(client, projectId, zone, deployer.ParentClusterId)
+	if err != nil {
+		return errors.New("Unable to find in-cluster deployment names: " + err.Error())
+	}
+
+	findInclusterDeployment := false
+	for _, deploymentName := range inClusterDeploymentNames {
+		if deploymentName == gcpCluster.ClusterId {
+			findInclusterDeployment = true
+			break
+		}
+	}
+	if !findInclusterDeployment {
+		return fmt.Errorf("Unable to %s deployment exist", gcpCluster.ClusterId)
+	}
+
+	return nil
+}
+
 func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) error {
-	// gcpCluster := deployer.GCPCluster
-	// gcpProfile := gcpCluster.GCPProfile
-	// client, err := hpgcp.CreateClient(gcpProfile)
-	// log := deployer.GetLog().Logger
-	// if err != nil {
-	// 	return errors.New("Unable to create google cloud platform client: " + err.Error())
-	// }
+	gcpStoreInfo := storeInfo.(*StoreInfo)
+	gcpCluster := deployer.GCPCluster
+	gcpProfile := gcpCluster.GCPProfile
+	gcpCluster.ClusterId = gcpStoreInfo.ClusterId
+	gcpCluster.Name = gcpStoreInfo.ClusterId
+	projectId := gcpProfile.ProjectId
+	zone := gcpCluster.Zone
+	deployer.Deployment.Name = gcpCluster.ClusterId
+	deploymentName := gcpCluster.ClusterId
 
-	// serviceAccount, err := findServiceAccount(client, gcpProfile.ProjectId, log)
-	// if err != nil {
-	// 	return errors.New("Unable to find serviceAccount: " + err.Error())
-	// }
-	// gcpProfile.ServiceAccount = serviceAccount
+	if err := deployer.CheckClusterState(); err != nil {
+		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
+	}
 
-	return nil
-}
+	client, err := hpgcp.CreateClient(gcpProfile)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform client: " + err.Error())
+	}
 
-func (deployer *InClusterGCPDeployer) GetStoreInfo() interface{} {
-	return nil
-}
+	nodePoolIds, err := findNodePoolNames(client, projectId, zone, deployer.ParentClusterId, deploymentName)
+	if err != nil {
+		return errors.New("Unable to find in-cluster deployment names: " + err.Error())
+	}
 
-func (deployer *InClusterGCPDeployer) NewStoreInfo() interface{} {
+	if err := populateNodeInfos(client, projectId, zone, deployer.ParentClusterId, nodePoolIds, gcpCluster); err != nil {
+		return errors.New("Unable to populate node infos: " + err.Error())
+	}
+	deployer.recordPublicEndpoints(false)
+
 	return nil
 }

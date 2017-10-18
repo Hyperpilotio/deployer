@@ -613,7 +613,9 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	gcpCluster := deployer.GCPCluster
 	gcpProfile := gcpCluster.GCPProfile
 	gcpCluster.ClusterId = gcpStoreInfo.ClusterId
-	deploymentName := gcpCluster.Name
+	gcpCluster.Name = gcpStoreInfo.ClusterId
+	deployer.Deployment.Name = gcpCluster.ClusterId
+	deploymentName := gcpCluster.ClusterId
 	if err := deployer.CheckClusterState(); err != nil {
 		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
 	}
