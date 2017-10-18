@@ -58,6 +58,7 @@ func NewDeployer(
 		GCPCluster:    gcpCluster,
 		Deployment:    deployment,
 		DeploymentLog: log,
+		Services:      map[string]ServiceMapping{},
 	}
 
 	return deployer, nil
@@ -114,7 +115,7 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
-	deployer.recordPublicEndpoints()
+	deployer.recordEndpoints()
 
 	return nil
 }
@@ -260,7 +261,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag firewall ingress rules: " + err.Error())
 	}
-	deployer.recordPublicEndpoints()
+	deployer.recordEndpoints()
 
 	return nil
 }
@@ -369,18 +370,14 @@ func deleteDeploymentOnFailure(deployer *GCPDeployer) {
 	deployer.DeleteDeployment()
 }
 
-func (deployer *GCPDeployer) recordPublicEndpoints() {
+func (deployer *GCPDeployer) recordEndpoints() {
 	deployment := deployer.Deployment
-	deployer.Services = map[string]ServiceMapping{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
 			continue
 		}
 		ports := task.GetPorts()
 		for i, portType := range task.PortTypes {
-			if portType != publicPortType {
-				continue
-			}
 			hostPort := ports[i].HostPort
 			taskFamilyName := task.Family
 			for _, nodeMapping := range deployment.NodeMapping {
@@ -389,10 +386,13 @@ func (deployer *GCPDeployer) recordPublicEndpoints() {
 					if ok {
 						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
 						servicePort := strconv.FormatInt(int64(hostPort), 10)
+						url := serviceName + ":" + servicePort
 						serviceMapping := ServiceMapping{
-							NodeId:    nodeMapping.Id,
-							NodeName:  nodeInfo.Instance.Name,
-							PublicUrl: serviceName + ":" + servicePort,
+							NodeId:   nodeMapping.Id,
+							NodeName: nodeInfo.Instance.Name,
+						}
+						if portType == publicPortType {
+							serviceMapping.PublicUrl = url
 						}
 						deployer.Services[taskFamilyName] = serviceMapping
 					}
@@ -601,7 +601,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	if err := populateNodeInfos(client, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
-	deployer.recordPublicEndpoints()
+	deployer.recordEndpoints()
 
 	glog.Infof("Reloading kube config for %s...", deployer.GCPCluster.Name)
 	if err := deployer.DownloadKubeConfig(); err != nil {
