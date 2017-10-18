@@ -1023,6 +1023,7 @@ func (server *Server) getAWSRegionInstances(c *gin.Context) {
 }
 
 func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
+	log := deploymentInfo.Deployer.GetLog().Logger
 	deploymentName := deploymentInfo.Deployment.Name
 	var deploymentStore blobstore.BlobStore
 	if server.Config.GetBool("inCluster") {
@@ -1033,19 +1034,25 @@ func (server *Server) storeDeployment(deploymentInfo *DeploymentInfo) error {
 
 	switch deploymentInfo.State {
 	case DELETED:
-		glog.Infof("Deleting deployment from store: " + deploymentName)
+		log.Infof("Deleting deployment from store: " + deploymentName)
 		if err := deploymentStore.Delete(deploymentName); err != nil {
-			return fmt.Errorf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
+			errMsg := fmt.Sprintf("Unable to delete %s deployment status: %s", deploymentName, err.Error())
+			log.Warningf(errMsg)
+			return errors.New(errMsg)
 		}
 	default:
-		glog.Infof("Storing deployment: " + deploymentName)
+		log.Infof("Storing deployment: " + deploymentName)
 		deployment, err := deploymentInfo.NewStoreDeployment()
 		if err != nil {
-			return fmt.Errorf("Unable to new %s store deployment: %s", deploymentName, err.Error())
+			errMsg := fmt.Sprintf("Unable to new %s store deployment: %s", deploymentName, err.Error())
+			log.Warningf(errMsg)
+			return errors.New(errMsg)
 		}
 
 		if err := deploymentStore.Store(deploymentName, deployment); err != nil {
-			return fmt.Errorf("Unable to store %s deployment status: %s", deploymentName, err.Error())
+			errMsg := fmt.Sprintf("Unable to store %s deployment status: %s", deploymentName, err.Error())
+			log.Warningf(errMsg)
+			return errors.New(errMsg)
 		}
 	}
 
