@@ -127,7 +127,7 @@ func DeployServices(
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
 			err := CreateServiceForDeployment(namespace, family, k8sClient,
-				task, container, log, skipCreatePublicService)
+				task, container, log, skipCreatePublicService, false)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
