@@ -547,12 +547,74 @@ func findDeploymentNames(
 	for _, instance := range clusterInstances {
 		for _, metadata := range instance.Metadata.Items {
 			if metadata.Key == "deploymentName" {
-				deploymentNames = append(deploymentNames, *metadata.Value)
+				existBool := false
+				for _, deploymentName := range deploymentNames {
+					if deploymentName == *metadata.Value {
+						existBool = true
+					}
+				}
+				if !existBool {
+					deploymentNames = append(deploymentNames, *metadata.Value)
+				}
 			}
 		}
 	}
 
 	return deploymentNames, nil
+}
+
+func findNodePoolNames(
+	client *http.Client,
+	projectId string,
+	zone string,
+	clusterId string,
+	deploymentName string) ([]string, error) {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return nil, errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	resp, err := computeSvc.Instances.List(projectId, zone).Do()
+	if err != nil {
+		return nil, errors.New("Unable to list instance: " + err.Error())
+	}
+
+	clusterInstances := []*compute.Instance{}
+	for _, instance := range resp.Items {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
+				clusterInstances = append(clusterInstances, instance)
+			}
+		}
+	}
+
+	deploymentInstances := []*compute.Instance{}
+	for _, instance := range clusterInstances {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "deploymentName" && *metadata.Value == deploymentName {
+				deploymentInstances = append(deploymentInstances, instance)
+			}
+		}
+	}
+
+	nodePoolNames := []string{}
+	for _, instance := range deploymentInstances {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "nodePoolName" {
+				existBool := false
+				for _, nodePoolName := range nodePoolNames {
+					if nodePoolName == *metadata.Value {
+						existBool = true
+					}
+				}
+				if !existBool {
+					nodePoolNames = append(nodePoolNames, *metadata.Value)
+				}
+			}
+		}
+	}
+
+	return nodePoolNames, nil
 }
 
 func waitUntilClusterCreateComplete(

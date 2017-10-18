@@ -1268,7 +1268,9 @@ func (server *Server) reloadClusterState() error {
 		glog.Infof("Trying to recover deployment %s from store", deploymentName)
 		glog.V(2).Infof("Deployment found in store: %+v", deployment)
 		if storeDeployment.Status == "Deleted" || storeDeployment.Status == "Failed" {
-			// TODO: Remove failed stored deployments
+			if err := deploymentStore.Delete(deploymentName); err != nil {
+				glog.Warningf("Unable to delete %s deployment: %s", deploymentName, err.Error())
+			}
 			continue
 		}
 
