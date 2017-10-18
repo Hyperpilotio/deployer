@@ -216,7 +216,7 @@ func populateNodeInfos(
 			Get(projectId, zone, clusterId, nodePoolId).
 			Do()
 		if err != nil {
-			return fmt.Errorf("Unable to get %s node pool: ", nodePoolId, err.Error())
+			return fmt.Errorf("Unable to get %s node pool: %s", nodePoolId, err.Error())
 		}
 		for _, instanceGroupUrl := range resp.InstanceGroupUrls {
 			urls := strings.Split(instanceGroupUrl, "/")

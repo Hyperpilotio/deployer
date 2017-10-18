@@ -232,7 +232,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
 	}
 
-	nodePoolName := []string{gcpCluster.ClusterId + "-pool"}
+	nodePoolName := []string{"default-pool"}
 	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
 		deleteDeploymentOnFailure(deployer)
