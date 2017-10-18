@@ -48,26 +48,7 @@ GCP
       * Set gcpServiceAccountJSONFile path to serviceAccount JSON file path (See template.config). (Note that a tilde does not currently map to $HOME in this workflow, i.e. use `/Users/<username>/...` instead of `~/...` on OSX).
       * Run deployer
       * Use $DEPLOYER_URL:7777/ui/users?tab=GCP to upload your serviceAccount JSON file (serviceAccount is your gmail userName) 
-      * Write deploy-gcp.json to deploy
-      
-      
-
-```
-    If need to upload files, replace home dir to $(SERVICE_ACCOUNT) from deploy-gcp.json, like
-    "files": [
-        {
-            "fileId": "tech_demo_load_test",
-            "path": "\/home\/$(SERVICE_ACCOUNT)\/locust_file\/locustfile.py"
-        }
-    ],
-
-    "volumeMounts": [
-        {
-            "mountPath": "\/locust_file",
-            "name": "home-$(SERVICE_ACCOUNT)-locust-file"
-        }
-    ]
-```
+      * Write deploy-gcp.json to deploy 
 
 Clustermanagers
 -----------
