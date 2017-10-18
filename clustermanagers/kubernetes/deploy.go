@@ -15,6 +15,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	k8s "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/pkg/api"
 	"k8s.io/client-go/pkg/api/v1"
 	rbac "k8s.io/client-go/pkg/apis/rbac/v1beta1"
 	"k8s.io/client-go/rest"
@@ -112,7 +113,7 @@ func DeployServices(
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
 			skipCreatePublicService := (deployment.ClusterType == "GCP")
-			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log, skipCreatePublicService)
+			err := CreateServiceForDeployment(namespace, family, k8sClient, task, container, log, skipCreatePublicService, false)
 			if err != nil {
 				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -170,7 +171,7 @@ func DeployServices(
 		}
 
 		for _, container := range task.StatefulSet.Spec.Template.Spec.Containers {
-			if err := CreateServiceForDeployment(namespace, task.Family, k8sClient, task, container, log, false); err != nil {
+			if err := CreateServiceForDeployment(namespace, task.Family, k8sClient, task, container, log, false, true); err != nil {
 				return fmt.Errorf("Unable to create service for stateful set: " + err.Error())
 			}
 		}
@@ -289,7 +290,8 @@ func CreateServiceForDeployment(
 	task apis.KubernetesTask,
 	container v1.Container,
 	log *logging.Logger,
-	skipCreatePublicService bool) error {
+	skipCreatePublicService bool,
+	internalHeadlessService bool) error {
 	if len(container.Ports) == 0 {
 		return nil
 	}
@@ -310,6 +312,11 @@ func CreateServiceForDeployment(
 		servicePorts = append(servicePorts, newPort)
 	}
 
+	clusterIp := ""
+	if internalHeadlessService {
+		clusterIp = api.ClusterIPNone
+	}
+
 	internalService := &v1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      serviceName,
@@ -317,9 +324,10 @@ func CreateServiceForDeployment(
 			Namespace: namespace,
 		},
 		Spec: v1.ServiceSpec{
-			Type:     v1.ServiceTypeClusterIP,
-			Ports:    servicePorts,
-			Selector: labels,
+			Type:      v1.ServiceTypeClusterIP,
+			ClusterIP: clusterIp,
+			Ports:     servicePorts,
+			Selector:  labels,
 		},
 	}
 	_, err := service.Create(internalService)
