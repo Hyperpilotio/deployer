@@ -599,7 +599,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 			}
 
 			if err := server.NewShutDownScheduler(deployer, deploymentInfo, ""); err != nil {
-				glog.Warningf("Unable to New  %s auto shutdown scheduler", deployment.Name)
+				glog.Warningf("Unable to New %s auto shutdown scheduler: %s", deployment.Name, err.Error())
 			}
 			deploymentInfo.SetState(AVAILABLE)
 
