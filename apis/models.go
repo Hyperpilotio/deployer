@@ -101,7 +101,7 @@ type Deployment struct {
 	UserId      string `form:"userId" json:"userId"`
 	Name        string `form:"name" json:"name" binding:"required"`
 	Region      string `form:"region" json:"region" binding:"required"`
-	ClusterType string `form:"clusterType" json:"clusterType" binding:"required"`
+	ClusterType string `form:"clusterType" json:"clusterType"`
 	Files       []struct {
 		FileId string `json:"fileId"`
 		Path   string `json:"path"`
