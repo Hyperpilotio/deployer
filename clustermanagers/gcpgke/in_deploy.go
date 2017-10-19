@@ -178,7 +178,7 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.recordPublicEndpoints(false)
+	deployer.recordEndpoints(false)
 
 	return nil
 }
@@ -245,7 +245,7 @@ func (deployer *InClusterGCPDeployer) UpdateDeployment(deployment *apis.Deployme
 	if err := updateFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		return errors.New("Unable to update firewall ingress rules: " + err.Error())
 	}
-	deployer.recordPublicEndpoints(true)
+	deployer.recordEndpoints(true)
 
 	return nil
 }
@@ -277,7 +277,7 @@ func (deployer *InClusterGCPDeployer) DeployExtensions(
 	if err := updateFirewallIngressRules(client, gcpCluster, deployer.Deployment, log); err != nil {
 		return errors.New("Unable to update firewall ingress rules: " + err.Error())
 	}
-	deployer.recordPublicEndpoints(true)
+	deployer.recordEndpoints(true)
 
 	return nil
 }
@@ -413,7 +413,7 @@ func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) 
 	if err := populateNodeInfos(client, projectId, zone, deployer.ParentClusterId, nodePoolIds, gcpCluster); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
-	deployer.recordPublicEndpoints(false)
+	deployer.recordEndpoints(false)
 
 	return nil
 }
