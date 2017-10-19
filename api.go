@@ -54,6 +54,7 @@ type DeploymentInfo struct {
 }
 
 type DeploymentUserProfile struct {
+	UserId     string
 	AWSProfile *hpaws.AWSProfile
 	GCPProfile *hpgcp.GCPProfile
 }
@@ -143,8 +144,7 @@ type Server struct {
 	Config                   *viper.Viper
 	DeploymentStore          blobstore.BlobStore
 	InClusterDeploymentStore blobstore.BlobStore
-	AWSProfileStore          blobstore.BlobStore
-	GCPProfileStore          blobstore.BlobStore
+	ProfileStore             blobstore.BlobStore
 	TemplateStore            blobstore.BlobStore
 
 	// Maps all available users
@@ -165,10 +165,11 @@ type Server struct {
 // NewServer return an instance of Server struct.
 func NewServer(config *viper.Viper) *Server {
 	return &Server{
-		Config:           config,
-		DeployedClusters: make(map[string]*DeploymentInfo),
-		UploadedFiles:    make(map[string]string),
-		Templates:        make(map[string]*apis.Deployment),
+		Config:                 config,
+		DeploymentUserProfiles: make(map[string]clusters.UserProfile),
+		DeployedClusters:       make(map[string]*DeploymentInfo),
+		UploadedFiles:          make(map[string]string),
+		Templates:              make(map[string]*apis.Deployment),
 	}
 }
 
@@ -223,16 +224,10 @@ func (server *Server) StartServer() error {
 		server.InClusterDeploymentStore = inClusterDeploymentStore
 	}
 
-	if awsProfileStore, err := blobstore.NewBlobStore("AWSProfiles", server.Config); err != nil {
+	if profileStore, err := blobstore.NewBlobStore("UserProfiles", server.Config); err != nil {
 		return errors.New("Unable to create awsProfiles store: " + err.Error())
 	} else {
-		server.AWSProfileStore = awsProfileStore
-	}
-
-	if gcpProfileStore, err := blobstore.NewBlobStore("GCPProfiles", server.Config); err != nil {
-		return errors.New("Unable to create awsProfiles store: " + err.Error())
-	} else {
-		server.GCPProfileStore = gcpProfileStore
+		server.ProfileStore = profileStore
 	}
 
 	if templateStore, err := blobstore.NewBlobStore("Templates", server.Config); err != nil {
@@ -1167,53 +1162,18 @@ func checkDuplicateTask(nodeMappings []apis.NodeMapping, checkNodeMapping apis.N
 
 // reloadClusterState reload cluster state when deployer restart
 func (server *Server) reloadClusterState() error {
-	deploymentUserProfiles := map[string]clusters.UserProfile{}
-	server.DeploymentUserProfiles = deploymentUserProfiles
-
-	profiles, err := server.AWSProfileStore.LoadAll(func() interface{} {
-		return &hpaws.AWSProfile{}
+	profiles, err := server.ProfileStore.LoadAll(func() interface{} {
+		return &DeploymentUserProfile{
+			AWSProfile: &hpaws.AWSProfile{},
+			GCPProfile: &hpgcp.GCPProfile{},
+		}
 	})
 	if err != nil {
-		return fmt.Errorf("Unable to load aws profiles: %s", err.Error())
+		return fmt.Errorf("Unable to load deployment use profiles: %s", err.Error())
 	}
-	for _, awsProfile := range profiles.([]interface{}) {
-		userId := awsProfile.(*hpaws.AWSProfile).UserId
-		userProfile, ok := server.DeploymentUserProfiles[userId]
-		if ok {
-			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-				AWSProfile: awsProfile.(*hpaws.AWSProfile),
-				GCPProfile: userProfile.GetGCPProfile(),
-			}
-		} else {
-			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-				AWSProfile: awsProfile.(*hpaws.AWSProfile),
-			}
-		}
-	}
-
-	gcpProfiles, err := server.GCPProfileStore.LoadAll(func() interface{} {
-		return &hpgcp.GCPProfile{}
-	})
-	if err != nil {
-		return fmt.Errorf("Unable to load gcp profiles: %s", err.Error())
-	}
-	for _, gcpProfile := range gcpProfiles.([]interface{}) {
-		userId := gcpProfile.(*hpgcp.GCPProfile).UserId
-		userProfile, ok := server.DeploymentUserProfiles[userId]
-		if ok {
-			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-				AWSProfile: userProfile.GetAWSProfile(),
-				GCPProfile: gcpProfile.(*hpgcp.GCPProfile),
-			}
-		} else {
-			server.DeploymentUserProfiles[userId] = &DeploymentUserProfile{
-				GCPProfile: gcpProfile.(*hpgcp.GCPProfile),
-			}
-		}
-	}
-
-	if err := hpgcp.DownloadUserProfiles(server.Config); err != nil {
-		return errors.New("Unable to download GCP user profiles: " + err.Error())
+	for _, userProfile := range profiles.([]interface{}) {
+		userId := userProfile.(*DeploymentUserProfile).UserId
+		server.DeploymentUserProfiles[userId] = userProfile.(*DeploymentUserProfile)
 	}
 
 	inCluster := server.Config.GetBool("inCluster")
