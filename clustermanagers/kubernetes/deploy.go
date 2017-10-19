@@ -8,10 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"bitbucket.org/jpra1113/alango/funcs"
-
 	"github.com/golang/glog"
 	"github.com/hyperpilotio/deployer/apis"
+	"github.com/hyperpilotio/go-utils/funcs"
 	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 
