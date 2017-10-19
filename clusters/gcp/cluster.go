@@ -4,18 +4,14 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/golang/glog"
 
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/spf13/viper"
@@ -35,10 +31,10 @@ var defaultScopes = []string{
 }
 
 type GCPProfile struct {
-	UserId           string
-	ServiceAccount   string
-	ProjectId        string
-	AuthJSONFilePath string
+	UserId              string
+	ServiceAccount      string
+	ProjectId           string
+	AuthJSONFileContent string
 }
 
 func (gcpProfile *GCPProfile) GetProjectId() (string, error) {
@@ -46,15 +42,12 @@ func (gcpProfile *GCPProfile) GetProjectId() (string, error) {
 		return gcpProfile.ProjectId, nil
 	}
 
-	viper := viper.New()
-	viper.SetConfigType("json")
-	viper.SetConfigFile(gcpProfile.AuthJSONFilePath)
-	err := viper.ReadInConfig()
-	if err != nil {
-		return "", err
+	jsonMap := make(map[string]interface{})
+	if err := json.Unmarshal([]byte(gcpProfile.AuthJSONFileContent), &jsonMap); err != nil {
+		return "", errors.New("Unable to get projectId: " + err.Error())
 	}
 
-	return viper.GetString("project_id"), nil
+	return jsonMap["project_id"].(string), nil
 }
 
 type GCPKeyPairOutput struct {
@@ -103,12 +96,7 @@ func NewGCPCluster(
 }
 
 func CreateClient(gcpProfile *GCPProfile) (*http.Client, error) {
-	dat, err := ioutil.ReadFile(gcpProfile.AuthJSONFilePath)
-	if err != nil {
-		return nil, errors.New("Unable to read service account file: " + err.Error())
-	}
-
-	conf, err := google.JWTConfigFromJSON(dat, defaultScopes...)
+	conf, err := google.JWTConfigFromJSON([]byte(gcpProfile.AuthJSONFileContent), defaultScopes...)
 	if err != nil {
 		return nil, errors.New("Unable to acquire generate config: " + err.Error())
 	}
@@ -185,143 +173,4 @@ func CreateUniqueClusterId(deploymentName string) string {
 	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
 	deploymentNames := strings.Split(deploymentName, "-")
 	return fmt.Sprintf("%s-%s", strings.Join(deploymentNames[:len(deploymentNames)-1], "-"), timeSeq)
-}
-
-func UploadFilesToStorage(config *viper.Viper, fileName string, filePath string) error {
-	gcpProfile := &GCPProfile{
-		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
-	}
-	client, err := CreateClient(gcpProfile)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
-	storageSrv, err := storage.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return errors.New("unable to open file: " + err.Error())
-	}
-	defer file.Close()
-
-	projectId, err := gcpProfile.GetProjectId()
-	if err != nil {
-		return errors.New("Unable to find projectId: " + err.Error())
-	}
-	gcpProfile.ProjectId = projectId
-
-	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
-	_, err = storageSrv.Buckets.Get(bucketName).Do()
-	if err != nil {
-		glog.Warningf("Unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
-		glog.Infof("Create %s bucketName to google cloud platform storage", bucketName)
-		if _, err := storageSrv.Buckets.
-			Insert(projectId, &storage.Bucket{Name: bucketName}).Do(); err != nil {
-			return errors.New("Unable to create bucketName from google cloud platform storage: " + err.Error())
-		}
-	}
-
-	_, err = storageSrv.Objects.
-		Insert(bucketName, &storage.Object{Name: fileName}).
-		Media(file).
-		Do()
-	if err != nil {
-		return errors.New("unable to upload file to google cloud platform storage: " + err.Error())
-	}
-
-	return nil
-}
-
-func RemoveFileFromStorage(config *viper.Viper, bucketName string, fileName string) error {
-	gcpProfile := &GCPProfile{
-		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
-	}
-	client, err := CreateClient(gcpProfile)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
-	storageSrv, err := storage.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
-	}
-
-	projectId, err := gcpProfile.GetProjectId()
-	if err != nil {
-		return errors.New("Unable to find projectId: " + err.Error())
-	}
-	gcpProfile.ProjectId = projectId
-
-	_, err = storageSrv.Buckets.Get(bucketName).Do()
-	if err != nil {
-		return fmt.Errorf("Unable to get %s bucketName from google cloud platform storage: %s", bucketName, err.Error())
-	}
-
-	err = storageSrv.Objects.Delete(bucketName, fileName).Do()
-	if err != nil {
-		return fmt.Errorf("Unable to delete %s file from %s bucket: %s",
-			fileName, bucketName, err.Error())
-	}
-
-	return nil
-}
-
-func DownloadUserProfiles(config *viper.Viper) error {
-	if config.GetBool("inCluster") {
-		glog.Warningf("Depolyer in-cluster, no need to download GCP userProfiles")
-		return nil
-	}
-
-	gcpProfile := &GCPProfile{
-		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
-	}
-	client, err := CreateClient(gcpProfile)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
-	storageSrv, err := storage.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform storage service: " + err.Error())
-	}
-
-	projectId, err := gcpProfile.GetProjectId()
-	if err != nil {
-		return errors.New("Unable to find projectId: " + err.Error())
-	}
-	gcpProfile.ProjectId = projectId
-
-	bucketName := fmt.Sprintf("%s-%s", projectId, config.GetString("gcpUserProfileBucketName"))
-	resp, err := storageSrv.Objects.List(bucketName).Do()
-	if err != nil {
-		return errors.New("Unable to list bucket files from google cloud platform storage: " + err.Error())
-	}
-
-	basePath := config.GetString("filesPath")
-	for _, obj := range resp.Items {
-		fileName := obj.Name
-		resp, err := storageSrv.Objects.
-			Get(bucketName, fileName).
-			Download()
-		if err != nil {
-			return fmt.Errorf("Unable download %s fileName: %s", fileName, err.Error())
-		}
-		defer resp.Body.Close()
-
-		output, err := os.Create(basePath + "/" + fileName)
-		if err != nil {
-			return errors.New("Error while creating: " + err.Error())
-		}
-		defer output.Close()
-
-		_, err = io.Copy(output, resp.Body)
-		if err != nil {
-			return errors.New("Error while downloading: " + err.Error())
-		}
-	}
-
-	return nil
 }

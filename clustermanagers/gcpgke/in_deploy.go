@@ -3,6 +3,7 @@ package gcpgke
 import (
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"sort"
 	"strings"
 	"time"
@@ -70,8 +71,13 @@ func NewInClusterDeployer(
 		return nil, errors.New("Unable to find deployment name in node labels")
 	}
 
+	b, err := ioutil.ReadFile(config.GetString("gcpServiceAccountJSONFile"))
+	if err != nil {
+		return nil, errors.New("Unable to read service account file: " + err.Error())
+	}
+
 	gcpProfile := &hpgcp.GCPProfile{
-		AuthJSONFilePath: config.GetString("gcpServiceAccountJSONFile"),
+		AuthJSONFileContent: string(b),
 	}
 	projectId, err := gcpProfile.GetProjectId()
 	if err != nil {

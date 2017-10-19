@@ -5,307 +5,189 @@
     <title>Deployer</title>
     <link rel="import" href="/static/common/linkCss.html">
     <link rel="import" href="/static/common/linkJs.html">
-    <script src="/static/js/bootstrap.min.js"></script>
     <script>
-        // Common
-        $.urlParam = function(name) {
-            var results = new RegExp('[\?&]' + name + '=([^&#]*)').exec(window.location.href);
-            return (results == null ? '' : results[1]);
-        }
-        var delRowBtnHtml =
-            '<button type="button" class="btn btn-danger"' +
-            '    onclick="$(this).closest(\'tr\').remove();">' +
-            '    <i class="fa fa-trash-o"></i> Delete' +
-            '</button>';
-
-        $(function() {
-            $('.nav-tabs a[href="#' + $.urlParam('tab') + '"]').tab('show')
-            $('#addAWSUserBtn').click(function() {
-                var rowHtml = '';
-                rowHtml += '<tr>';
-                rowHtml += '    <td>' + userInputHtml + '</td>';
-                rowHtml += '    <td>' + awsIdInputHtml + '</td>';
-                rowHtml += '    <td>' + awsSecretInputHtml + '</td>';
-                rowHtml += '    <td style="text-align:center">' + storeAWSUserBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
-                rowHtml += '</tr>';
-                $('#awsUserData:last-child').append(rowHtml);
-            });
-            $('#addGCPUserBtn').click(function() {
-                var rowHtml = '';
-                rowHtml += '<tr>';
-                rowHtml += '    <td>' + userInputHtml + '</td>';
-                rowHtml += '    <td>' + gcpServiceAccountInputHtml + '</td>';
-                rowHtml += '    <td>' + gcpJsonFileUploadHtml + '</td>';
-                rowHtml += '    <td style="text-align:center">' + storeGCPUserBtnHtml + '&nbsp;' + delRowBtnHtml + '</td>';
-                rowHtml += '</tr>';
-                $('#gcpUserData:last-child').append(rowHtml);
+        $(function () {
+            $('#addUserBtn').click(function () {
+                $('#userData:last-child').append(rowTemplateHtml);
             });
         });
 
-        // AWS
-        var userInputHtml = '<input type="text"/>';
-        var awsIdInputHtml = '<input type="text" size="25"/>';
-        var awsSecretInputHtml = '<input type="text" size="50"/>';
-        var storeAWSUserBtnHtml =
-            '<button type="button" class="btn btn-success"' +
-            '    onclick="storeAWSUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-check"></i> Confirm</button>' +
-            '</button>';
-        var editAWSUserBtnHtml =
-            '<button type="button" class="btn btn-warning"' +
-            '    onclick="editAWSUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-pencil-square-o"></i> Edit' +
-            '</button>';
-        var cancelAWSBtnHtml =
-            '<button type="button" class="btn btn-warning"' +
-            '    onclick="cancelAWSEdit($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-times"></i> Cancel' +
-            '</button>';
-        var updateAWSUserBtnHtml =
-            '<button type="button" class="btn btn-success"' +
-            '    onclick="updateAWSUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-pencil-square-o"></i> Update' +
-            '</button>';
-        var delAWSUserBtnHtml =
-            '<button type="button" class="btn btn-danger"' +
-            '    onclick="deleteAWSUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-trash-o"></i> Delete' +
-            '</button>';
+        var rowTemplateHtml = `
+        <tbody>
+            <tr>
+                <td rowspan="4" data-name="userId"><input type="text" size="10"/></td>
+                <td rowspan="2">AWS</td>
+                <td width="20%">AWS_ACCESS_KEY_ID</td>
+                <td data-name="awsId"><input type="text" size="50"/></td>
+                <td rowspan="4" style="text-align:center">
+                    <button type="button" class="btn btn-success"
+                        onclick="storeUser($(this).closest('tbody'));">
+                        <i class="fa fa-check"></i> Confirm</button>
+                    </button>
+                    <button type="button" class="btn btn-danger"
+                        onclick="$(this).closest('tbody').remove();">
+                        <i class="fa fa-trash-o"></i> Delete
+                    </button>
+                </td>
+            </tr>
+            <tr>
+                <td>AWS_SECRET_ACCESS_KEY</td>
+                <td data-name="awsSecret"><input type="text" size="50"/></td>
+            </tr>
+            <tr>
+                <td rowspan="2">GCP</td>
+                <td>GMAIL USER NAME</td>
+                <td data-name="serviceAccount"><input type="text" size="50"/></td>
+            </tr>
+            <tr>
+                <td>SERVICE ACCOUNT FILE CONTENT</td>
+                <td data-name="authJSONFileContent" style="word-wrap: normal; word-break: break-all; white-space: normal;">
+                    <textarea cols="60" rows="5"></textarea>
+                </td>
+            </tr>
+        </tbody>`;
+        var fileUploadHtml = '<input type="file"/>';
+        var cancelBtnHtml = `
+        <button type="button" class="btn btn-warning" onclick="cancelEdit($(this).closest('tbody'));">
+            <i class="fa fa-times"></i> Cancel
+        </button>`;
+        var updateUserBtnHtml = `
+        <button type="button" class="btn btn-success" onclick="storeUser($(this).closest('tbody'));">
+            <i class="fa fa-pencil-square-o"></i> Update
+        </button>`;
+        var editUserBtnHtml = `
+        <button type="button" class="btn btn-warning" onclick="editUser($(this).closest('tbody'));">
+            <i class="fa fa-pencil-square-o"></i> Edit
+        </button>`;
+        var delUserBtnHtml = `
+        <button type="button" class="btn btn-danger" onclick="deleteUser($(this).closest('tbody'));">
+            <i class="fa fa-trash-o"></i> Delete
+        </button>`;
 
-        function storeAWSUser($tr) {
-            if (!checkAWSUserData($tr, true)) {
+        function checkUserData($tbody, addMode) {
+            var userId = $tbody.find('td[data-name=userId] > input:text').val();
+            if (addMode && userId == '') {
+                alert('Please enter a userId');
                 return false;
             }
 
-            var formdata = {};
-            formdata.userId = $tr.find('td:eq(0) > input:text').val();
-            formdata.awsId = $tr.find('td:eq(1) > input:text').val();
-            formdata.awsSecret = $tr.find('td:eq(2) > input:text').val();
-
-            $.ajax({
-                url: '/ui/users?clusterType=AWS',
-                type: 'POST',
-                data: formdata,
-                dataType: 'json',
-                success: function(data) {
-                    alert('Store user ok');
-                    location.href = "/ui/users?tab=AWS";
-                },
-                error: function(xhr, textStatus, error) {
-                    alert('Store user fail');
-                }
-            });
+            return true;
         }
 
-        function updateAWSUser($tr) {
-            if (!checkAWSUserData($tr, false)) {
+        function storeUser($tbody) {
+            var formdata = {};
+            var actionType = '';
+            var userId = '';
+            var url = '';
+            if ($tbody.find('td[data-name=userId] > input:text').length == 0) {
+                actionType = 'PUT';
+                userId = $tbody.find('td[data-name=userId]').html();
+                url = '/ui/users/' + userId;
+            } else {
+                actionType = 'POST';
+                url = '/ui/users';
+                userId = $tbody.find('td[data-name=userId] > input:text').val();   
+            }
+
+            if (actionType == 'POST' && !checkUserData($tbody, true)) {
                 return false;
             }
 
-            var formdata = {};
-            formdata.userId = $tr.find('td:eq(0) > input:hidden').val();
-            formdata.awsId = $tr.find('td:eq(1) > input:text').val();
-            formdata.awsSecret = $tr.find('td:eq(2) > input:text').val();
-
-            $.ajax({
-                url: '/ui/users/' + formdata.userId + '?clusterType=AWS',
-                type: 'PUT',
-                data: formdata,
-                dataType: 'json',
-                success: function(json) {
-                    alert('Update user ok');
-                    location.href = "/ui/users?tab=AWS";
-                },
-                error: function(xhr, textStatus, error) {
-                    alert('Update user fail');
-                }
-            });
+            formdata.userId = userId;
+            formdata.awsId = $tbody.find('td[data-name=awsId] > input:text').val();
+            formdata.awsSecret = $tbody.find('td[data-name=awsSecret] > input:text').val();
+            formdata.serviceAccount = $tbody.find('td[data-name=serviceAccount] > input:text').val();
+            formdata.authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent] > textarea').val();
+            store(url, formdata, actionType);
         }
 
-        function deleteAWSUser($tr) {
-            var userId = $tr.find('td:eq(0)').html();
+        function deleteUser($tbody) {
+            var userId = $tbody.find('td[data-name=userId]').html();
             if (confirm('Delete ' + userId + '?')) {
                 $.ajax({
-                    url: '/ui/users/' + userId + '?clusterType=AWS',
+                    url: '/ui/users/' + userId,
                     type: 'DELETE',
                     dataType: 'json',
-                    success: function(json) {
+                    success: function (json) {
                         alert('Delete user ok');
                         location.href = "/ui/users";
                     },
-                    error: function(xhr, textStatus, error) {
+                    error: function (xhr, textStatus, error) {
                         alert('Delete user fail');
                     }
                 });
             }
         }
 
-        function editAWSUser($tr) {
-            $tr.css('background-color', '#d3efff');
-
-            var userId = $tr.find('td:eq(0)').html();
-            var awsId = $tr.find('td:eq(1)').html();
-            var awsSecret = $tr.find('td:eq(2)').html();
-
-            $tr.find('td:eq(0)').html(userId + '<input type="hidden" value="' + userId + '"/>');
-            $tr.find('td:eq(1)').html('<input type="text" value="' + awsId + '" size="25"/><input type="hidden" value="' + awsId + '"/>');
-            $tr.find('td:eq(2)').html('<input type="text" value="' + awsSecret + '" size="50"/><input type="hidden" value="' + awsSecret + '"/>');
-            $tr.find('td:eq(3)').html(updateAWSUserBtnHtml + '&nbsp;' + cancelAWSBtnHtml);
-        }
-
-        function cancelAWSEdit($tr) {
-            var userId = $tr.find('td:eq(0) > input:hidden').val();
-            var awsId = $tr.find('td:eq(1) > input:hidden').val();
-            var awsSecret = $tr.find('td:eq(2) > input:hidden').val();
-            $tr.find('td:eq(0)').html(userId)
-            $tr.find('td:eq(1)').html(awsId)
-            $tr.find('td:eq(2)').html(awsSecret)
-            $tr.find('td:eq(3)').html(editAWSUserBtnHtml + '&nbsp;' + delAWSUserBtnHtml);
-            $tr.css('background-color', '');
-        }
-
-        function checkAWSUserData($tr, addMode) {
-            var userId = $tr.find('td:eq(0) > input:text').val();
-            if (addMode && userId == '') {
-                alert('Please enter a userId');
-                return false;
-            }
-
-            var awsId = $tr.find('td:eq(1) > input:text').val();
-            if (awsId == '') {
-                alert('Please enter a awsId');
-                return false;
-            }
-
-            var awsSecret = $tr.find('td:eq(2) > input:text').val();
-            if (awsSecret == '') {
-                alert('Please enter a awsSecret');
-                return false;
-            }
-
-            return true;
-        }
-
-        // GCP
-        var gcpServiceAccountInputHtml = '<input type="text" size="25"/>';
-        var gcpJsonFileUploadHtml = '<input type="file" id="file" name="file"/>';
-        var storeGCPUserBtnHtml =
-            '<button type="button" class="btn btn-success"' +
-            '    onclick="storeGCPUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-check"></i> Confirm</button>' +
-            '</button>';
-        var delGCPUserBtnHtml =
-            '<button type="button" class="btn btn-danger"' +
-            '    onclick="deleteGCPUser($(this).closest(\'tr\'));">' +
-            '    <i class="fa fa-trash-o"></i> Delete' +
-            '</button>';
-
-        function storeGCPUser($tr) {
-            if (!checkGCPUserData($tr, true)) {
-                return false;
-            }
-
-            var userId = $tr.find('td:eq(0) > input:text').val();
-            var serviceAccount = $tr.find('td:eq(1) > input:text').val();
-            var fileName = $('#file')[0].files[0].name;
-            var fileId = fileName.replace(/\./g, '_');
-            var uploadUrl = '/v1/users/' + userId + '/files/' + fileId;
-            var uploadFormData = new FormData();
-            uploadFormData.append('upload', $('#file')[0].files[0])
-
+        function store(url, formdata, actionType) {
             $.ajax({
-                url: uploadUrl,
-                type: 'POST',
-                cache: false,
-                data: uploadFormData,
-                processData: false,
-                contentType: false
-            })
-            .done(function(res) {
-                var formdata = {};
-                formdata.userId = userId
-                formdata.serviceAccount = serviceAccount
-                formdata.fileId = fileId
-                $.ajax({
-                    url: '/ui/users?clusterType=GCP',
-                    type: 'POST',
-                    data: formdata,
-                    dataType: 'json',
-                    success: function(data) {
-                        alert('Register user ok');
-                        location.href = "/ui/users?tab=GCP";
-                    },
-                    error: function(xhr, textStatus, error) {
-                        alert('Register user fail');
-                    }
-                });
-            })
-            .fail(function(res) {
-                alert("Upload json file fail");
-            });
+                url: url,
+                type: actionType,
+                data: formdata,
+                dataType: 'json',
+                success: function (data) {
+                    alert('Store user ok');
+                    location.href = "/ui/users";
+                },
+                error: function (xhr, textStatus, error) {
+                    alert('Store user fail');
+                }
+            });  
         }
 
-        function deleteGCPUser($tr) {
-            var userId = $tr.find('td:eq(0)').html();
-            if (confirm('Delete ' + userId + '?')) {
-                $.ajax({
-                    url: '/ui/users/' + userId + '?clusterType=GCP',
-                    type: 'DELETE',
-                    success: function(json) {
-                        alert('Delete user ok');
-                        location.href = "/ui/users?tab=GCP";
-                    },
-                    error: function(xhr, textStatus, error) {
-                        alert('Delete user fail');
-                    }
-                });
-            }
+        function editUser($tbody) {
+            $tbody.css('background-color', '#d3efff');
+
+            var awsId = $tbody.find('td[data-name=awsId]').html();
+            var awsSecret = $tbody.find('td[data-name=awsSecret]').html();
+            var serviceAccount = $tbody.find('td[data-name=serviceAccount]').html();
+            var authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent]').find('div').html();
+   
+            $tbody.find('td[data-name=awsId]').html('<input type="text" value="' + awsId +
+                '" size="50"/><input type="hidden" value="' + awsId + '"/>');
+            $tbody.find('td[data-name=awsSecret]').html('<input type="text" value="' + awsSecret +
+                '" size="50"/><input type="hidden" value="' + awsSecret + '"/>');
+            $tbody.find('td[data-name=serviceAccount]').html('<input type="text" value="' + serviceAccount +
+                '" size="50"/><input type="hidden" value="' + serviceAccount + '"/>');
+            $tbody.find('td[data-name=authJSONFileContent]').html('<textarea cols="60" rows="5">' + authJSONFileContent + 
+                '</textarea><input type="hidden" value=\'' + authJSONFileContent + '\'/>');
+            $tbody.find('td[data-name=btn]').html(updateUserBtnHtml + '&nbsp;' + cancelBtnHtml);
         }
 
-        function checkGCPUserData($tr, addMode) {
-            var userId = $tr.find('td:eq(0) > input:text').val();
-            if (addMode && userId == '') {
-                alert('Please enter a userId');
-                return false;
-            }
-            
-            var serviceAccount = $tr.find('td:eq(1) > input:text').val();
-            if (serviceAccount == '') {
-                alert('Please enter a serviceAccount');
-                return false;
-            }
+        function cancelEdit($tbody) {
+            var awsId = $tbody.find('td[data-name=awsId] > input:hidden').val();
+            var awsSecret = $tbody.find('td[data-name=awsSecret] > input:hidden').val();
+            var serviceAccount = $tbody.find('td[data-name=serviceAccount] > input:hidden').val();
+            var authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent] > input:hidden').val();
 
-            var jsonFilePath = $tr.find('td:eq(2) > input:file').val();
-            if (jsonFilePath == '') {
-                alert('Please upload a json file');
-                return false;
-            }
-
-            return true;
+            $tbody.find('td[data-name=awsId]').html(awsId);
+            $tbody.find('td[data-name=awsSecret]').html(awsSecret);
+            $tbody.find('td[data-name=serviceAccount]').html(serviceAccount);
+            $tbody.find('td[data-name=authJSONFileContent]').html('<div style="height: 80px; overflow-y: auto;">' + authJSONFileContent + '</div>');
+            $tbody.find('td[data-name=btn]').html(editUserBtnHtml + '&nbsp;' + delUserBtnHtml);
+            $tbody.css('background-color', '');
         }
     </script>
     <style>
         main {
             margin-left: 0%;
         }
-        
+
         .user-detail button {
             width: 90px;
         }
-        
+
         table {
             border-collapse: collapse;
             width: 100%;
         }
-        
-        table,
-        td,
-        th {
+
+        table, td, th {
             border: 1px solid #ddd;
             text-align: left;
             padding: 15px;
         }
-        
+
         th {
             background-color: #f1f1f1;
         }
@@ -329,80 +211,53 @@
     </header>
 
     <main>
-        <ul class="nav nav-tabs" style="margin-top: 10px;">
-            <li class="active"><a data-toggle="tab" href="#AWS">AWS</a></li>
-            <li><a data-toggle="tab" href="#GCP">GCP</a></li>
-        </ul>
-        <div class="tab-content">
-            <div id="AWS" class="tab-pane fade in active">
-                <div class="user-detail-btn">
-                    <button id="addAWSUserBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
-                </div>
-                <div class="user-detail">
-                    <table>
-                        <tbody>
-                            <tr>
-                                <th width="10%">USER_ID</th>
-                                <th width="25%">AWS_ACCESS_KEY_ID</th>
-                                <th width="40%">AWS_SECRET_ACCESS_KEY</th>
-                                <th width="25%">&nbsp;</th>
-                            </tr>
-                        </tbody>
-                        <tbody id="awsUserData">
-                            {{range $userId, $profile := .userProfiles}}
-                            {{if $profile.AWSProfile}} 
-                            <tr>
-                                <td>{{$userId}}</td>
-                                <td>{{$profile.AWSProfile.AwsId}}</td> 
-                                <td>{{$profile.AWSProfile.AwsSecret}}</td>
-                                <td style="text-align:center">
-                                    <button type="button" class="btn btn-warning" onclick="editAWSUser($(this).closest('tr'));">
-                                        <i class="fa fa-pencil-square-o"></i> Edit
-                                    </button>
-                                    <button type="button" class="btn btn-danger" onclick="deleteAWSUser($(this).closest('tr'));">
-                                        <i class="fa fa-trash-o"></i> Delete
-                                    </button>
-                                </td>
-                            </tr>
-                            {{end}}
-                            {{end}}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div id="GCP" class="tab-pane fade">
-                <div class="user-detail-btn">
-                    <button id="addGCPUserBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
-                </div>
-                <div class="user-detail">
-                    <table>
-                        <tbody>
-                            <tr>
-                                <th width="10%">USER_ID</th>
-                                <th width="25%">GMAIL USER NAME</th>
-                                <th width="25%">UPLOAD YOUR JSON FILE</th>
-                                <th width="25%">&nbsp;</th>
-                            </tr>
-                        </tbody>
-                        <tbody id="gcpUserData">
-                            {{range $userId, $profile := .userProfiles}}
-                            {{if $profile.GCPProfile}} 
-                            <tr>
-                                <td>{{$userId}}</td>
-                                <td>{{$profile.GCPProfile.ServiceAccount}}</td>
-                                <td>{{$profile.GCPProfile.AuthJSONFilePath}}</td>
-                                <td style="text-align:center">
-                                    <button type="button" class="btn btn-danger" onclick="deleteGCPUser($(this).closest('tr'));">
-                                        <i class="fa fa-trash-o"></i> Delete
-                                    </button>
-                                </td>
-                            </tr>
-                            {{end}}
-                            {{end}}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
+        <div class="user-detail-btn">
+            <button id="addUserBtn" type="button" class="btn btn-primary"><i class="fa fa-plus"></i> Add User</button>
+        </div>
+        <div class="user-detail">
+            <table id="userData">
+                <tbody>
+                    <tr>
+                        <th width="10%">USER_ID</th>
+                        <th width="7%">CLUSTER</th>
+                        <th width="63%" colspan="2">ATTRIBUTES</th>
+                        <th width="20%">&nbsp;</th>
+                    </tr>
+                </tbody>
+                {{range $userId, $profile := .userProfiles}} 
+                <tbody>
+                    <tr>
+                        <td rowspan="4" data-name="userId">{{$userId}}</td>
+                        <td rowspan="2">AWS</td>
+                        <td width="20%">AWS_ACCESS_KEY_ID</td>
+                        <td data-name="awsId">{{if $profile.AWSProfile}}{{$profile.AWSProfile.AwsId}}{{end}}</td>
+                        <td data-name="btn" rowspan="4" style="text-align:center">
+                            <button type="button" class="btn btn-warning" onclick="editUser($(this).closest('tbody'));">
+                                <i class="fa fa-pencil-square-o"></i> Edit
+                            </button>
+                            <button type="button" class="btn btn-danger" onclick="deleteUser($(this).closest('tbody'));">
+                                <i class="fa fa-trash-o"></i> Delete
+                            </button>               
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>AWS_SECRET_ACCESS_KEY</td>
+                        <td data-name="awsSecret">{{if $profile.AWSProfile}}{{$profile.AWSProfile.AwsSecret}}{{end}}</td>
+                    </tr>
+                    <tr>
+                        <td rowspan="2">GCP</td>
+                        <td>GMAIL USER NAME</td>
+                        <td data-name="serviceAccount">{{if $profile.GCPProfile}}{{$profile.GCPProfile.ServiceAccount}}{{end}}</td>
+                    </tr>
+                    <tr>
+                        <td>SERVICE ACCOUNT FILE CONTENT</td>
+                        <td data-name="authJSONFileContent" style="word-wrap: normal; word-break: break-all; white-space: normal;">
+                            <div style="height: 80px; overflow-y: auto;">{{if $profile.GCPProfile}}{{$profile.GCPProfile.AuthJSONFileContent}}{{end}}</div>
+                        </td>
+                    </tr>
+                </tbody>
+                {{end}}
+            </table>
         </div>
     </main>
 </body>
