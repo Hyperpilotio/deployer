@@ -152,14 +152,20 @@ func (deployer *GCPDeployer) DeleteDeployment() error {
 	kubeConfig := deployer.KubeConfig
 	log := deployer.DeploymentLog.Logger
 
-	// Deleting kubernetes deployment
+	var errBool bool
 	log.Infof("Deleting kubernetes deployment...")
 	if err := k8sUtil.DeleteK8S(k8sUtil.GetAllDeployedNamespaces(deployment), kubeConfig, log); err != nil {
+		errBool = true
 		log.Warningf("Unable to deleting kubernetes deployment: %s", err.Error())
 	}
 
 	if err := deployer.deleteDeployment(); err != nil {
+		errBool = true
 		log.Warningf("Unable to deleting %s deployment: %s", deployment.Name, err.Error())
+	}
+
+	if errBool {
+		return fmt.Errorf("Unable to delete %s deployment", deployment.Name)
 	}
 
 	return nil
