@@ -191,6 +191,11 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
+	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+		clusterId, time.Duration(5)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
+
 	_, err = containerSvc.Projects.Zones.Clusters.
 		Delete(projectId, zone, clusterId).
 		Do()

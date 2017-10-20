@@ -168,8 +168,13 @@ func deleteNodePools(
 	}
 
 	var errBool bool
-	log.Infof("Deleting %s nodePools: %s", clusterId, nodePoolIds)
 	for _, nodePoolId := range nodePoolIds {
+		if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+			clusterId, time.Duration(5)*time.Minute, log); err != nil {
+			return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+		}
+
+		log.Infof("Deleting %s node pool: %s", clusterId, nodePoolId)
 		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
 			Delete(projectId, zone, clusterId, nodePoolId).
 			Do()
@@ -180,6 +185,11 @@ func deleteNodePools(
 	}
 	if errBool {
 		return fmt.Errorf("Unable to delete %s node pools", clusterId)
+	}
+
+	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+		clusterId, time.Duration(5)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 
 	return nil
