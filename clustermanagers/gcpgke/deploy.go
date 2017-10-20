@@ -233,8 +233,8 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	nodePoolName := []string{"default-pool"}
-	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
-		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
+	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId,
+		nodePoolName, gcpCluster, deployment.ClusterDefinition, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
@@ -616,6 +616,7 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	gcpCluster.Name = gcpStoreInfo.ClusterId
 	deployer.Deployment.Name = gcpCluster.ClusterId
 	deploymentName := gcpCluster.ClusterId
+	log := deployer.GetLog().Logger
 	if err := deployer.CheckClusterState(); err != nil {
 		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
 	}
@@ -624,14 +625,14 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
-	client, err := hpgcp.CreateClient(gcpCluster.GCPProfile)
+	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
 	nodePoolName := []string{"default-pool"}
-	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
-		gcpCluster.ClusterId, nodePoolName, gcpCluster); err != nil {
+	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId,
+		nodePoolName, gcpCluster, deployer.Deployment.ClusterDefinition, log); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 	deployer.recordEndpoints(false)

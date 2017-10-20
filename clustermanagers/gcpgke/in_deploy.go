@@ -151,13 +151,15 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 	}
 	gcpCluster.NodePoolIds = nodePoolIds
 
-	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone,
-		deployer.ParentClusterId, nodePoolIds, gcpCluster); err != nil {
+	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone, deployer.ParentClusterId,
+		nodePoolIds, gcpCluster, deployment.ClusterDefinition, log); err != nil {
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
 	k8sClient, err := k8sUtil.RetryConnectKubernetes(deployer.KubeConfig)
 	if err != nil {
+		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
 
@@ -401,7 +403,7 @@ func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) 
 	zone := gcpCluster.Zone
 	deployer.Deployment.Name = gcpCluster.ClusterId
 	deploymentName := gcpCluster.ClusterId
-
+	log := deployer.GetLog().Logger
 	if err := deployer.CheckClusterState(); err != nil {
 		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
 	}
@@ -416,7 +418,8 @@ func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) 
 		return errors.New("Unable to find in-cluster deployment names: " + err.Error())
 	}
 
-	if err := populateNodeInfos(client, projectId, zone, deployer.ParentClusterId, nodePoolIds, gcpCluster); err != nil {
+	if err := populateNodeInfos(client, projectId, zone, deployer.ParentClusterId,
+		nodePoolIds, gcpCluster, deployer.Deployment.ClusterDefinition, log); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 	deployer.recordEndpoints(false)

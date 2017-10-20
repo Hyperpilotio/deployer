@@ -205,12 +205,16 @@ func populateNodeInfos(
 	zone string,
 	clusterId string,
 	nodePoolIds []string,
-	gcpCluster *hpgcp.GCPCluster) error {
+	gcpCluster *hpgcp.GCPCluster,
+	clusterNodeDefinition apis.ClusterDefinition,
+	log *logging.Logger) error {
 	instanceGroupNames := []string{}
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
+
+	log.Infof("Populate nodeInfos with nodePoolIds: %s", nodePoolIds)
 	for _, nodePoolId := range nodePoolIds {
 		resp, err := containerSvc.Projects.Zones.Clusters.NodePools.
 			Get(projectId, zone, clusterId, nodePoolId).
@@ -243,24 +247,39 @@ func populateNodeInfos(
 		}
 	}
 
-	clusterInstances := []*compute.Instance{}
-	for _, instanceName := range instanceNames {
+	clusterInstancesMap := map[int]*compute.Instance{}
+	for i, instanceName := range instanceNames {
 		instance, err := computeSvc.Instances.Get(projectId, zone, instanceName).Do()
 		if err != nil {
 			return fmt.Errorf("Unable to get %s instances: %s", instanceName, err.Error())
 		}
-		clusterInstances = append(clusterInstances, instance)
+		clusterInstancesMap[i] = instance
+		log.Infof("Find %s node instance name: %s, instance type: %s",
+			gcpCluster.ClusterId, instanceName, instance.MachineType)
 	}
 
-	i := 1
-	for _, instance := range clusterInstances {
-		nodeInfo := &hpgcp.NodeInfo{
-			Instance:  instance,
-			PublicIp:  instance.NetworkInterfaces[0].AccessConfigs[0].NatIP,
-			PrivateIp: instance.NetworkInterfaces[0].NetworkIP,
+	for _, node := range clusterNodeDefinition.Nodes {
+		assignedKey := -1
+		for key, instance := range clusterInstancesMap {
+			machineTypeUrls := strings.Split(instance.MachineType, "/")
+			if node.InstanceType == machineTypeUrls[len(machineTypeUrls)-1] {
+				log.Infof("Assigning public dns name %s to node %d", instance.Name, node.Id)
+				gcpCluster.NodeInfos[node.Id] = &hpgcp.NodeInfo{
+					Instance:  instance,
+					PublicIp:  instance.NetworkInterfaces[0].AccessConfigs[0].NatIP,
+					PrivateIp: instance.NetworkInterfaces[0].NetworkIP,
+				}
+				assignedKey = key
+				break
+			}
 		}
-		gcpCluster.NodeInfos[i] = nodeInfo
-		i += 1
+		if assignedKey != -1 {
+			delete(clusterInstancesMap, assignedKey)
+		}
+	}
+
+	if len(gcpCluster.NodeInfos) != len(clusterNodeDefinition.Nodes) {
+		return fmt.Errorf("Unexpected list of nodeInfos: %d", len(gcpCluster.NodeInfos))
 	}
 
 	return nil
