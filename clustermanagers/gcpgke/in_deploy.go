@@ -156,7 +156,7 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
-	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	k8sClient, err := k8sUtil.RetryConnectKubernetes(deployer.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
