@@ -314,20 +314,28 @@ func (deployer *InClusterGCPDeployer) DeleteDeployment() error {
 		return errors.New("Unable to create k8s client: " + err.Error())
 	}
 
+	var errBool bool
 	log.Infof("Deleting %s kubernetes deployment...", deployment.Name)
 	namespace := deployer.getNamespace()
 	if err := k8sUtil.DeleteK8S([]string{namespace}, kubeConfig, log); err != nil {
+		errBool = true
 		log.Warningf("Unable to deleting %s kubernetes deployment: %s", deployment.Name, err.Error())
 	}
 
 	k8sUtil.DeleteNodeReaderClusterRoleBindingToNamespace(k8sClient, namespace, log)
 
 	if err := k8sClient.CoreV1().Namespaces().Delete(namespace, &metav1.DeleteOptions{}); err != nil {
+		errBool = true
 		log.Warningf("Unable to delete kubernetes namespace %s: %s", namespace, err.Error())
 	}
 
 	if err := deployer.deleteDeployment(); err != nil {
+		errBool = true
 		log.Warningf("Unable to deleting %s deployment: %s", deployment.Name, err.Error())
+	}
+
+	if errBool {
+		return fmt.Errorf("Unable to delete %s deployment", deployment.Name)
 	}
 
 	return nil
