@@ -125,6 +125,11 @@ func createClusterNodePool(
 	nodePoolSize int,
 	deployment *apis.Deployment,
 	log *logging.Logger) (string, error) {
+	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+		clusterId, time.Duration(5)*time.Minute, log); err != nil {
+		return "", fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
+
 	nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name, instanceType, nodePoolSize)
 	_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 		Create(projectId, zone, clusterId, nodePoolRequest).
@@ -636,7 +641,7 @@ func findNodePoolNames(
 	return nodePoolNames, nil
 }
 
-func waitUntilClusterCreateComplete(
+func waitUntilClusterStatusRunning(
 	containerSvc *container.Service,
 	projectId string,
 	zone string,
@@ -644,14 +649,14 @@ func waitUntilClusterCreateComplete(
 	timeout time.Duration,
 	log *logging.Logger) error {
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		resp, err := containerSvc.Projects.Zones.Clusters.NodePools.
-			List(projectId, zone, clusterId).
+		resp, err := containerSvc.Projects.Zones.Clusters.
+			Get(projectId, zone, clusterId).
 			Do()
 		if err != nil {
 			return false, nil
 		}
-		if resp.NodePools[0].Status == "RUNNING" {
-			log.Info("Create cluster complete")
+		if resp.Status == "RUNNING" {
+			log.Info("Cluster status is RUNNING")
 			return true, nil
 		}
 		return false, nil
