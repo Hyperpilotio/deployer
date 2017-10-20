@@ -157,6 +157,8 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 
+	// After create node pools, sometimes kubernetes master connection will refuse the connect situation
+	// So here we have a retry coonnect mechanism
 	k8sClient, err := k8sUtil.RetryConnectKubernetes(deployer.KubeConfig)
 	if err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
