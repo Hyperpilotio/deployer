@@ -96,7 +96,7 @@ func CreateNodePools(
 			nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId, instanceType, cnt,
 				deployment, log)
 			if err != nil {
-				deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName})
+				deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName}, log)
 				return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
 			}
 			nodePoolIds = append(nodePoolIds, nodePoolName)
@@ -107,7 +107,7 @@ func CreateNodePools(
 		nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId,
 			instanceType, nodePoolSize, deployment, log)
 		if err != nil {
-			deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName})
+			deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName}, log)
 			return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
 		}
 		nodePoolIds = append(nodePoolIds, nodePoolName)
@@ -153,18 +153,21 @@ func deleteNodePools(
 	projectId string,
 	zone string,
 	clusterId string,
-	nodePoolIds []string) error {
+	nodePoolIds []string,
+	log *logging.Logger) error {
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 
 	var errBool bool
+	log.Infof("Deleting %s nodePools: %s", clusterId, nodePoolIds)
 	for _, nodePoolId := range nodePoolIds {
 		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
 			Delete(projectId, zone, clusterId, nodePoolId).
 			Do()
 		if err != nil {
+			log.Warningf("Unable to delete %s node pool: %s", nodePoolId, err.Error())
 			errBool = true
 		}
 	}
