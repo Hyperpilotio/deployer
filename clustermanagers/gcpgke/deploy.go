@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/golang/glog"
 	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
@@ -622,7 +621,15 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 	gcpCluster.Name = gcpStoreInfo.ClusterId
 	deployer.Deployment.Name = gcpCluster.ClusterId
 	deploymentName := gcpCluster.ClusterId
-	log := deployer.GetLog().Logger
+
+	// Need to reset log name with deployment name
+	deployer.GetLog().LogFile.Close()
+	log, err := log.NewLogger(deployer.Config.GetString("filesPath"), deploymentName)
+	if err != nil {
+		return errors.New("Error creating deployment logger: " + err.Error())
+	}
+	deployer.DeploymentLog = log
+
 	if err := deployer.CheckClusterState(); err != nil {
 		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
 	}
@@ -638,16 +645,16 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 
 	nodePoolName := []string{"default-pool"}
 	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId,
-		nodePoolName, gcpCluster, deployer.Deployment.ClusterDefinition, log); err != nil {
+		nodePoolName, gcpCluster, deployer.Deployment.ClusterDefinition, log.Logger); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 	deployer.recordEndpoints(false)
 
-	glog.Infof("Reloading kube config for %s...", deployer.GCPCluster.Name)
+	log.Logger.Infof("Reloading kube config for %s...", deployer.GCPCluster.Name)
 	if err := deployer.DownloadKubeConfig(); err != nil {
 		return fmt.Errorf("Unable to download %s kubeconfig: %s", deploymentName, err.Error())
 	}
-	glog.Infof("Reloaded %s kube config at %s", deployer.GCPCluster.Name, deployer.KubeConfigPath)
+	log.Logger.Infof("Reloaded %s kube config at %s", deployer.GCPCluster.Name, deployer.KubeConfigPath)
 
 	return nil
 }

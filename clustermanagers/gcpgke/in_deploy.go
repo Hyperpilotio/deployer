@@ -352,7 +352,8 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	if err := deleteNodePools(client, projectId, zone, deployer.ParentClusterId, gcpCluster.NodePoolIds); err != nil {
+	if err := deleteNodePools(client, projectId, zone, deployer.ParentClusterId,
+		gcpCluster.NodePoolIds, log); err != nil {
 		return errors.New("Unable to delete node pools: %s" + err.Error())
 	}
 
@@ -411,7 +412,15 @@ func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) 
 	zone := gcpCluster.Zone
 	deployer.Deployment.Name = gcpCluster.ClusterId
 	deploymentName := gcpCluster.ClusterId
-	log := deployer.GetLog().Logger
+
+	// Need to reset log name with deployment name
+	deployer.GetLog().LogFile.Close()
+	log, err := log.NewLogger(deployer.Config.GetString("filesPath"), deploymentName)
+	if err != nil {
+		return errors.New("Error creating deployment logger: " + err.Error())
+	}
+	deployer.DeploymentLog = log
+
 	if err := deployer.CheckClusterState(); err != nil {
 		return fmt.Errorf("Skipping reloading because unable to load %s cluster: %s", deploymentName, err.Error())
 	}
@@ -427,7 +436,7 @@ func (deployer *InClusterGCPDeployer) ReloadClusterState(storeInfo interface{}) 
 	}
 
 	if err := populateNodeInfos(client, projectId, zone, deployer.ParentClusterId,
-		nodePoolIds, gcpCluster, deployer.Deployment.ClusterDefinition, log); err != nil {
+		nodePoolIds, gcpCluster, deployer.Deployment.ClusterDefinition, log.Logger); err != nil {
 		return errors.New("Unable to populate node infos: " + err.Error())
 	}
 	deployer.recordEndpoints(false)
