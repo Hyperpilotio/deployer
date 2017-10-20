@@ -113,6 +113,13 @@ func CreateNodePools(
 		nodePoolIds = append(nodePoolIds, nodePoolName)
 	}
 
+	log.Info("Waiting until cluster is completed...")
+	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+		clusterId, time.Duration(5)*time.Minute, log); err != nil {
+		return "", fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
+	log.Info("Kuberenete cluster completed")
+
 	return nodePoolIds, nil
 }
 
