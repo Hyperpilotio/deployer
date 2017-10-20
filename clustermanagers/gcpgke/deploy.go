@@ -376,7 +376,7 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 	}
 
 	log.Info("Waiting until cluster is completed...")
-	if err := waitUntilClusterCreateComplete(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
+	if err := waitUntilClusterStatusRunning(containerSvc, gcpProfile.ProjectId, gcpCluster.Zone,
 		gcpCluster.ClusterId, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
