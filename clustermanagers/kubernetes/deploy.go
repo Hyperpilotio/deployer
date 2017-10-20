@@ -25,6 +25,23 @@ import (
 
 var publicPortType = 1
 
+func RetryConnectKubernetes(kubeConfig *rest.Config) (*k8s.Clientset, error) {
+	maxRetries := 3
+	var err error
+	for i := 1; i <= maxRetries; i++ {
+		k8sClient, err := k8s.NewForConfig(kubeConfig)
+		if err != nil {
+			err = errors.New("Unable to connect to kubernetes master server: " + err.Error())
+			glog.Infof("Unable to connect to kubernetes master server, retrying %d time", i)
+		} else {
+			return k8sClient, nil
+		}
+		time.Sleep(time.Duration(10) * time.Second)
+	}
+
+	return nil, err
+}
+
 func DeployKubernetesObjects(
 	config *viper.Viper,
 	k8sClient *k8s.Clientset,
