@@ -57,7 +57,7 @@ func NewDeployer(
 		GCPCluster:    gcpCluster,
 		Deployment:    deployment,
 		DeploymentLog: log,
-		Services:      map[string]ServiceMapping{},
+		Services:      map[string]k8sUtil.ServiceMapping{},
 	}
 
 	return deployer, nil
@@ -98,6 +98,7 @@ func (deployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string) (
 func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error {
 	deployer.Deployment = deployment
 	log := deployer.GetLog().Logger
+	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 
 	log.Info("Updating kubernetes deployment")
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
@@ -111,9 +112,11 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
+	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 	deployer.recordEndpoints(true)
 
 	return nil
@@ -131,16 +134,18 @@ func (deployer *GCPDeployer) DeployExtensions(
 	deployer.Deployment = extensions
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	if err := k8sUtil.DeployKubernetesObjects(
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
 		k8sClient,
 		deployer.Deployment,
 		userName,
-		deployer.GetLog().Logger); err != nil {
+		deployer.GetLog().Logger)
+	if err != nil {
 		deployer.Deployment = originalDeployment
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
 
+	deployer.Services = serviceMappings
 	deployer.Deployment = newDeployment
 	return nil
 }
@@ -228,6 +233,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 	client, err := hpgcp.CreateClient(gcpProfile)
+	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -286,7 +292,8 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log); err != nil {
+	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
@@ -295,6 +302,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 	deployer.recordEndpoints(false)
 
 	return nil
@@ -424,14 +432,19 @@ func (deployer *GCPDeployer) recordEndpoints(reset bool) {
 						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
 						servicePort := strconv.FormatInt(int64(hostPort), 10)
 						url := serviceName + ":" + servicePort
-						serviceMapping := ServiceMapping{
-							NodeId:   nodeMapping.Id,
-							NodeName: nodeInfo.Instance.Name,
-						}
 						if portType == publicPortType {
 							serviceMapping.PublicUrl = url
 						}
-						deployer.Services[taskFamilyName] = serviceMapping
+						serviceMapping.NodeName = nodeInfo.Instance.Name
+
+						assignedTaskName := taskFamilyName
+						for taskName, serviceMapping := range deployer.Services {
+							if strings.HasPrefix(taskName, taskFamilyName) && serviceMapping.NodeId == nodeMapping.Id {
+								assignedTaskName = taskName
+								break
+							}
+						}
+						deployer.Services[assignedTaskName] = serviceMapping
 					}
 				}
 			}

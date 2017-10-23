@@ -385,7 +385,7 @@ func deployInCluster(deployer *InClusterK8SDeployer, uploadedFiles map[string]st
 func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clientset) {
 	log := deployer.DeploymentLog.Logger
 	namespaces := []string{deployer.getNamespace()}
-	deployer.Services = map[string]ServiceMapping{}
+	deployer.Services = map[string]k8sUtil.ServiceMapping{}
 
 	for _, namespace := range namespaces {
 		services, serviceError := k8sClient.CoreV1().Services(namespace).List(metav1.ListOptions{})
@@ -396,7 +396,7 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 		for _, service := range services.Items {
 			serviceName := service.GetObjectMeta().GetName()
 			port := service.Spec.Ports[0].Port
-			serviceMapping := ServiceMapping{
+			serviceMapping := k8sUtil.ServiceMapping{
 				PrivateUrl: serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10),
 			}
 			deployer.Services[serviceName] = serviceMapping
@@ -679,7 +679,7 @@ func (deployer *InClusterK8SDeployer) GetServiceUrl(serviceName string) (string,
 			nodeId, _ := k8sUtil.FindNodeIdFromServiceName(deployer.Deployment, serviceName)
 			port := service.Spec.Ports[0].Port
 			serviceUrl := serviceName + "." + namespace + ":" + strconv.FormatInt(int64(port), 10)
-			deployer.Services[serviceName] = ServiceMapping{
+			deployer.Services[serviceName] = k8sUtil.ServiceMapping{
 				PrivateUrl: serviceUrl,
 				NodeId:     nodeId,
 			}

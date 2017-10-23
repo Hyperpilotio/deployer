@@ -48,7 +48,7 @@ func NewDeployer(
 		AWSCluster:    cluster.(*hpaws.AWSCluster),
 		Deployment:    deployment,
 		DeploymentLog: log,
-		Services:      make(map[string]ServiceMapping),
+		Services:      make(map[string]k8sUtil.ServiceMapping),
 	}
 
 	return deployer, nil
@@ -93,6 +93,7 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	awsProfile := awsCluster.AWSProfile
 	stackName := awsCluster.StackName()
 	log := deployer.DeploymentLog.Logger
+	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 
 	log.Info("Updating kubernetes deployment")
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
@@ -120,9 +121,11 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log); err != nil {
+	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
+	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 	deployer.recordPublicEndpoints(k8sClient)
 
 	return nil
@@ -138,16 +141,18 @@ func (deployer *K8SDeployer) DeployExtensions(
 
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
-	if err := k8sUtil.DeployKubernetesObjects(
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
 		k8sClient,
 		deployer.Deployment,
 		"ubuntu",
-		deployer.GetLog().Logger); err != nil {
+		deployer.GetLog().Logger)
+	if err != nil {
 		deployer.Deployment = originalDeployment
 		return errors.New("Unable to deploy k8s objects: " + err.Error())
 	}
 
+	deployer.Services = serviceMappings
 	deployer.Deployment = newDeployment
 	return nil
 }
@@ -283,10 +288,12 @@ func deployCluster(deployer *K8SDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	if err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log); err != nil {
+	serviceMapping, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
+	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.Services = serviceMapping
 	deployer.recordPublicEndpoints(k8sClient)
 
 	return nil
@@ -850,7 +857,7 @@ func (deployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {
 							hostname := service.Status.LoadBalancer.Ingress[0].Hostname
 							port := service.Spec.Ports[0].Port
 
-							serviceMapping := ServiceMapping{
+							serviceMapping := k8sUtil.ServiceMapping{
 								PublicUrl: hostname + ":" + strconv.FormatInt(int64(port), 10),
 							}
 
@@ -1140,7 +1147,7 @@ func (deployer *K8SDeployer) GetServiceUrl(serviceName string) (string, error) {
 			port := service.Spec.Ports[0].Port
 			hostname := service.Status.LoadBalancer.Ingress[0].Hostname
 			serviceUrl := hostname + ":" + strconv.FormatInt(int64(port), 10)
-			deployer.Services[serviceName] = ServiceMapping{
+			deployer.Services[serviceName] = k8sUtil.ServiceMapping{
 				PublicUrl: serviceUrl,
 				NodeId:    nodeId,
 			}

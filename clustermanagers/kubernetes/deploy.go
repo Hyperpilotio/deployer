@@ -25,6 +25,13 @@ import (
 
 var publicPortType = 1
 
+type ServiceMapping struct {
+	NodeId     int    `json:"nodeId"`
+	NodeName   string `json:"nodeName"`
+	PublicUrl  string `json:"publicUrl"`
+	PrivateUrl string `json:"privateUrl"`
+}
+
 func RetryConnectKubernetes(kubeConfig *rest.Config) (*k8s.Clientset, error) {
 	maxRetries := 3
 	var err error
@@ -47,22 +54,23 @@ func DeployKubernetesObjects(
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	userName string,
-	log *logging.Logger) error {
+	log *logging.Logger) (map[string]ServiceMapping, error) {
+	serviceMappings := map[string]ServiceMapping{}
 	namespaces, namespacesErr := GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
-		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
+		return nil, errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
 	if err := CreateSecrets(k8sClient, namespaces, deployment); err != nil {
-		return errors.New("Unable to create secrets in k8s: " + err.Error())
+		return nil, errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	if err := DeployServices(config, k8sClient, deployment, "", namespaces, userName, log); err != nil {
-		return errors.New("Unable to setup K8S: " + err.Error())
+	serviceMappings, err := DeployServices(config, k8sClient, deployment, "", namespaces, userName, log)
+	if err != nil {
+		return serviceMappings, errors.New("Unable to setup K8S: " + err.Error())
 	}
 	deployClusterRoleAndBindings(k8sClient, log)
-
-	return nil
+	return serviceMappings, nil
 }
 
 func DeployServices(
@@ -72,12 +80,13 @@ func DeployServices(
 	deployNamespace string,
 	existingNamespaces map[string]bool,
 	userName string,
-	log *logging.Logger) error {
+	log *logging.Logger) (map[string]ServiceMapping, error) {
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
 	}
 
+	serviceMappings := map[string]ServiceMapping{}
 	taskCount := map[string]int{}
 
 	// We sort before we create services because we want to have a deterministic way to assign
@@ -94,12 +103,12 @@ func DeployServices(
 
 		task, ok := tasks[mapping.Task]
 		if !ok {
-			return fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
+			return serviceMappings, fmt.Errorf("Unable to find task %s in task definitions", mapping.Task)
 		}
 
 		deploySpec := task.Deployment
 		if deploySpec == nil {
-			return fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
+			return serviceMappings, fmt.Errorf("Unable to find deployment in task %s", mapping.Task)
 		}
 		family := task.Family
 
@@ -108,7 +117,7 @@ func DeployServices(
 			namespace = deployNamespace
 		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return err
+			return serviceMappings, err
 		}
 
 		originalFamily := family
@@ -140,12 +149,16 @@ func DeployServices(
 
 		deploySpec.Spec.Template.Spec.NodeSelector = nodeSelector
 
+		servicemapping := ServiceMapping{
+			NodeId: mapping.Id,
+		}
+		serviceMappings[family] = servicemapping
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
 			err := CreateServiceForDeployment(namespace, family, k8sClient,
 				task, container, log, skipCreatePublicService, false)
 			if err != nil {
-				return fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
+				return serviceMappings, fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
 		}
 
@@ -158,7 +171,7 @@ func DeployServices(
 		deploy := k8sClient.Extensions().Deployments(namespace)
 		_, err := deploy.Create(deploySpec)
 		if err != nil {
-			return fmt.Errorf("Unable to create k8s deployment: %s", err)
+			return serviceMappings, fmt.Errorf("Unable to create k8s deployment: %s", err)
 		}
 		log.Infof("%s deployment created", family)
 	}
@@ -181,13 +194,13 @@ func DeployServices(
 			namespace = deployNamespace
 		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return err
+			return serviceMappings, err
 		}
 
 		daemonSets := k8sClient.Extensions().DaemonSets(namespace)
 		log.Infof("Creating daemonset %s", task.Family)
 		if _, err := daemonSets.Create(daemonSet); err != nil {
-			return fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
+			return serviceMappings, fmt.Errorf("Unable to create daemonset %s: %s", task.Family, err.Error())
 		}
 	}
 
@@ -203,23 +216,23 @@ func DeployServices(
 			namespace = deployNamespace
 		}
 		if err := CreateNamespaceIfNotExist(namespace, existingNamespaces, k8sClient); err != nil {
-			return err
+			return serviceMappings, err
 		}
 
 		statefulSets := k8sClient.StatefulSets(namespace)
 		log.Infof("Creating statefulset %s", task.Family)
 		if _, err := statefulSets.Create(statefulSet); err != nil {
-			return fmt.Errorf("Unable to create statefulset %s: %s", task.Family, err.Error())
+			return serviceMappings, fmt.Errorf("Unable to create statefulset %s: %s", task.Family, err.Error())
 		}
 
 		for _, container := range task.StatefulSet.Spec.Template.Spec.Containers {
 			if err := CreateServiceForDeployment(namespace, task.Family, k8sClient, task, container, log, false, true); err != nil {
-				return fmt.Errorf("Unable to create service for stateful set: " + err.Error())
+				return serviceMappings, fmt.Errorf("Unable to create service for stateful set: " + err.Error())
 			}
 		}
 	}
 
-	return nil
+	return serviceMappings, nil
 }
 
 func checkDeploymentReadyReplicas(
