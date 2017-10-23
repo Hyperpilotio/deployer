@@ -2,18 +2,13 @@ package gcpgke
 
 import (
 	"github.com/hyperpilotio/deployer/apis"
+	"github.com/hyperpilotio/deployer/clustermanagers/kubernetes"
 	"github.com/hyperpilotio/deployer/clusters/gcp"
 	"github.com/hyperpilotio/deployer/job"
 	"github.com/hyperpilotio/go-utils/log"
 	"github.com/spf13/viper"
 	"k8s.io/client-go/rest"
 )
-
-type ServiceMapping struct {
-	NodeId    int    `json:"nodeId"`
-	NodeName  string `json:"nodeName"`
-	PublicUrl string `json:"publicUrl"`
-}
 
 type GCPDeployer struct {
 	Config     *viper.Viper
@@ -25,7 +20,7 @@ type GCPDeployer struct {
 
 	KubeConfigPath string
 	KubeConfig     *rest.Config
-	Services       map[string]ServiceMapping
+	Services       map[string]kubernetes.ServiceMapping
 }
 
 type StoreInfo struct {
@@ -33,7 +28,7 @@ type StoreInfo struct {
 }
 
 type CreateDeploymentResponse struct {
-	Name      string                    `json:"name"`
-	ClusterId string                    `json:"clusterId"`
-	Services  map[string]ServiceMapping `json:"services"`
+	Name      string                               `json:"name"`
+	ClusterId string                               `json:"clusterId"`
+	Services  map[string]kubernetes.ServiceMapping `json:"services"`
 }
