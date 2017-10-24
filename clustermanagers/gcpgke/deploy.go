@@ -399,7 +399,7 @@ func deleteDeploymentOnFailure(deployer *GCPDeployer) {
 
 func (deployer *GCPDeployer) recordEndpoints(reset bool) {
 	if reset {
-		deployer.Services = map[string]ServiceMapping{}
+		deployer.Services = map[string]k8sUtil.ServiceMapping{}
 	}
 	deployment := deployer.Deployment
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
@@ -416,6 +416,7 @@ func (deployer *GCPDeployer) recordEndpoints(reset bool) {
 					if ok {
 						serviceName := nodeInfo.Instance.NetworkInterfaces[0].AccessConfigs[0].NatIP
 						servicePort := strconv.FormatInt(int64(hostPort), 10)
+						serviceMapping := k8sUtil.ServiceMapping{}
 						url := serviceName + ":" + servicePort
 						if portType == publicPortType {
 							serviceMapping.PublicUrl = url

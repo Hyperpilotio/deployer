@@ -92,7 +92,7 @@ func NewInClusterDeployer(
 			AWSCluster:    awsCluster,
 			Deployment:    deployment,
 			DeploymentLog: log,
-			Services:      make(map[string]ServiceMapping),
+			Services:      make(map[string]k8sUtil.ServiceMapping),
 			KubeConfig:    kubeConfig,
 		},
 		StackName: stackName,
@@ -407,6 +407,7 @@ func recordPrivateEndpoints(deployer *InClusterK8SDeployer, k8sClient *k8s.Clien
 func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Clientset) error {
 	log := deployer.DeploymentLog.Logger
 	namespace := deployer.getNamespace()
+	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 	if err := k8sUtil.CreateSecretsByNamespace(k8sClient, namespace, deployer.Deployment); err != nil {
 		return errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
@@ -423,11 +424,12 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
-	if err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
-		namespace, existingNamespaces, "ubuntu", log); err != nil {
+	serviceMappings, err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
+		namespace, existingNamespaces, "ubuntu", log)
+	if err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
-
+	deployer.Services = serviceMappings
 	return nil
 }
 
