@@ -178,7 +178,7 @@ func DeployServices(
 
 	if deployNamespace != "" {
 		if err := checkDeploymentReadyReplicas(config, k8sClient, deployment, deployNamespace); err != nil {
-			return fmt.Errorf("Unable to check deployment ready replicas status: %s", err)
+			return serviceMappings, fmt.Errorf("Unable to check deployment ready replicas status: %s", err)
 		}
 	}
 
