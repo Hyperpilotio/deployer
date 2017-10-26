@@ -198,15 +198,41 @@ func deleteNodePools(
 func deleteFirewallRules(
 	client *http.Client,
 	projectId string,
-	firewallNames []string,
+	zone string,
 	log *logging.Logger) error {
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
+	fireWallNames := []string{}
+	firewallsResp, err := computeSvc.Firewalls.List(projectId).Do()
+	if err != nil {
+		return errors.New("Unable to list firewalls: " + err.Error())
+	}
+	for _, item := range firewallsResp.Items {
+		if strings.HasPrefix(item.Name, "gke-") && strings.HasSuffix(item.Name, "-http") {
+			fireWallNames = append(fireWallNames, item.Name)
+		}
+	}
+
+	needDeletefireWallNames := []string{}
+	instancesResp, err := computeSvc.Instances.List(projectId, zone).Do()
+	for _, fireWallName := range fireWallNames {
+		findUsed := false
+		for _, instance := range instancesResp.Items {
+			nodeIp := strings.Replace(instance.NetworkInterfaces[0].AccessConfigs[0].NatIP, ".", "-", -1)
+			if fireWallName == fmt.Sprintf("gke-%s-http", nodeIp) {
+				findUsed = true
+			}
+		}
+		if !findUsed {
+			needDeletefireWallNames = append(needDeletefireWallNames, fireWallName)
+		}
+	}
+
 	var errBool bool
-	for _, firewallName := range firewallNames {
+	for _, firewallName := range needDeletefireWallNames {
 		_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
 		if err != nil {
 			if strings.Contains(err.Error(), "was not found") {
@@ -335,27 +361,30 @@ func insertFirewallIngressRules(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	allowedPorts := getDeploymentAllowedPorts(deployment, log)
-	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
-	tagFirewall := &compute.Firewall{
-		Allowed: []*compute.FirewallAllowed{
-			&compute.FirewallAllowed{
-				IPProtocol: "tcp",
-				Ports:      allowedPorts,
+	for nodeId, nodeInfo := range gcpCluster.NodeInfos {
+		allowedPorts := getAllowedPortsByNodeTasks(nodeId, deployment, log)
+		nodeIp := strings.Replace(nodeInfo.PublicIp, ".", "-", -1)
+		firewallName := fmt.Sprintf("gke-%s-http", nodeIp)
+		targetTagName := fmt.Sprintf("gke-%s-http-server", nodeIp)
+		tagFirewall := &compute.Firewall{
+			Allowed: []*compute.FirewallAllowed{
+				&compute.FirewallAllowed{
+					IPProtocol: "tcp",
+					Ports:      allowedPorts,
+				},
 			},
-		},
-		Description: "INGRESS",
-		Name:        firewallName,
-		Priority:    int64(1000),
-		TargetTags:  []string{targetTagName},
-	}
-	if _, err := computeSvc.Firewalls.Insert(projectId, tagFirewall).Do(); err != nil {
-		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
-	}
+			Description: "INGRESS",
+			Name:        firewallName,
+			Priority:    int64(1000),
+			TargetTags:  []string{targetTagName},
+		}
+		if _, err := computeSvc.Firewalls.Insert(projectId, tagFirewall).Do(); err != nil {
+			return errors.New("Unable to insert firewall ingress rules: " + err.Error())
+		}
 
-	if err := tagFirewallTarget(computeSvc, gcpCluster, targetTagName, log); err != nil {
-		return errors.New("Unable to tag firewall target to node instance: " + err.Error())
+		if err := tagFirewallTarget(computeSvc, gcpCluster, targetTagName, log); err != nil {
+			return errors.New("Unable to tag firewall target to node instance: " + err.Error())
+		}
 	}
 
 	return nil
@@ -372,33 +401,52 @@ func updateFirewallIngressRules(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	allowedPorts := getDeploymentAllowedPorts(deployment, log)
-	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
-	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
-	tagFirewall := &compute.Firewall{
-		Allowed: []*compute.FirewallAllowed{
-			&compute.FirewallAllowed{
-				IPProtocol: "tcp",
-				Ports:      allowedPorts,
+	for nodeId, nodeInfo := range gcpCluster.NodeInfos {
+		allowedPorts := getAllowedPortsByNodeTasks(nodeId, deployment, log)
+		nodeIp := strings.Replace(nodeInfo.PublicIp, ".", "-", -1)
+		firewallName := fmt.Sprintf("gke-%s-http", nodeIp)
+		targetTagName := fmt.Sprintf("gke-%s-http-server", nodeIp)
+		tagFirewall := &compute.Firewall{
+			Allowed: []*compute.FirewallAllowed{
+				&compute.FirewallAllowed{
+					IPProtocol: "tcp",
+					Ports:      allowedPorts,
+				},
 			},
-		},
-		Description: "INGRESS",
-		Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
-		Priority:    int64(1000),
-		TargetTags:  []string{targetTagName},
-	}
-	if _, err := computeSvc.Firewalls.Update(projectId, firewallName, tagFirewall).Do(); err != nil {
-		return errors.New("Unable to update firewall ingress rules: " + err.Error())
+			Description: "INGRESS",
+			Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
+			Priority:    int64(1000),
+			TargetTags:  []string{targetTagName},
+		}
+		if _, err := computeSvc.Firewalls.Update(projectId, firewallName, tagFirewall).Do(); err != nil {
+			return errors.New("Unable to update firewall ingress rules: " + err.Error())
+		}
 	}
 
 	return nil
 }
 
-func getDeploymentAllowedPorts(deployment *apis.Deployment, log *logging.Logger) []string {
-	// TODO need to allowed ports by node deploy task
+func getAllowedPortsByNodeTasks(nodeId int, deployment *apis.Deployment, log *logging.Logger) []string {
 	allowedPorts := []string{}
+	allowedPortTasks := []string{}
+	for _, node := range deployment.NodeMapping {
+		if node.Id == nodeId {
+			allowedPortTasks = append(allowedPortTasks, node.Task)
+		}
+	}
+
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
+			continue
+		}
+
+		isNodeTask := false
+		for _, nodeTaskName := range allowedPortTasks {
+			if task.Family == nodeTaskName {
+				isNodeTask = true
+			}
+		}
+		if !isNodeTask {
 			continue
 		}
 
@@ -504,63 +552,40 @@ func tagPublicKey(
 	return nil
 }
 
-func tagServiceAccount(
+func findServiceAccount(
 	client *http.Client,
-	gcpCluster *hpgcp.GCPCluster,
-	log *logging.Logger) error {
-	projectId := gcpCluster.GCPProfile.ProjectId
-	computeSvc, err := compute.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	resp, err := computeSvc.Projects.Get(projectId).Do()
-	if err != nil {
-		return errors.New("Unable to get project metadata: " + err.Error())
-	}
-
-	metadata := resp.CommonInstanceMetadata
-	for _, item := range metadata.Items {
-		if item.Key == "serviceAccount" {
-			log.Warningf("ServiceAccount has been tagged")
-			return nil
-		}
-	}
-	metadata.Items = append(metadata.Items, &compute.MetadataItems{
-		Key:   "serviceAccount",
-		Value: &gcpCluster.GCPProfile.ServiceAccount,
-	})
-	_, err = computeSvc.Projects.SetCommonInstanceMetadata(projectId, metadata).Do()
-	if err != nil {
-		return errors.New("Unable to tag serviceAccount to projects metadata")
-	}
-
-	return nil
-}
-
-func findServiceAccount(client *http.Client, projectId string, log *logging.Logger) (string, error) {
+	projectId string,
+	zone string,
+	clusterId string,
+	log *logging.Logger) (string, error) {
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return "", errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	resp, err := computeSvc.Projects.Get(projectId).Do()
+	resp, err := computeSvc.Instances.List(projectId, zone).Do()
 	if err != nil {
-		return "", errors.New("Unable to get project metadata: " + err.Error())
+		return "", errors.New("Unable to list instance: " + err.Error())
 	}
 
-	serviceAccount := ""
-	for _, item := range resp.CommonInstanceMetadata.Items {
-		if item.Key == "serviceAccount" {
-			serviceAccount = *item.Value
-			break
+	clusterInstances := []*compute.Instance{}
+	for _, instance := range resp.Items {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
+				clusterInstances = append(clusterInstances, instance)
+			}
 		}
 	}
-	if serviceAccount == "" {
-		return "", errors.New("Unable to find serviceAccount from project metadata: " + err.Error())
+
+	for _, instance := range clusterInstances {
+		for _, metadata := range instance.Metadata.Items {
+			if metadata.Key == "serviceAccount" {
+				return *metadata.Value, nil
+			}
+		}
 	}
 
-	return serviceAccount, nil
+	return "", errors.New("Unable to find serviceAccount from compute metadata")
 }
 
 func findDeploymentNames(

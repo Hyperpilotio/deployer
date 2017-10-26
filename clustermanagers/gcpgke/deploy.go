@@ -172,11 +172,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	inClusterDeploymentNames, err := findDeploymentNames(client, projectId, zone, clusterId)
-	if err != nil {
-		return errors.New("Unable to find in-cluster deployment names: " + err.Error())
-	}
-
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
@@ -200,12 +195,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 			clusterId, err.Error())
 	}
 
-	firewallRuleNames := []string{fmt.Sprintf("gke-%s-http", clusterId)}
-	for _, deploymentName := range inClusterDeploymentNames {
-		firewallRuleNames = append(firewallRuleNames, fmt.Sprintf("gke-%s-http", deploymentName))
-	}
-
-	if err := deleteFirewallRules(client, projectId, firewallRuleNames, log); err != nil {
+	if err := deleteFirewallRules(client, projectId, zone, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -243,11 +233,6 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	if err := tagPublicKey(client, gcpCluster, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag publicKey to node instance metadata: " + err.Error())
-	}
-
-	if err := tagServiceAccount(client, gcpCluster, log); err != nil {
-		deleteDeploymentOnFailure(deployer)
-		return errors.New("Unable to tag serviceAccount to node instance metadata: " + err.Error())
 	}
 
 	if err := deployer.DownloadSSHKey(); err != nil {
@@ -333,6 +318,9 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 							"https://www.googleapis.com/auth/servicecontrol",
 							"https://www.googleapis.com/auth/service.management.readonly",
 							"https://www.googleapis.com/auth/trace.append",
+						},
+						Metadata: map[string]string{
+							"serviceAccount": gcpProfile.ServiceAccount,
 						},
 					},
 					Autoscaling: &container.NodePoolAutoscaling{
@@ -491,13 +479,10 @@ func (deployer *GCPDeployer) DownloadKubeConfig() error {
 	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$PROJECT_ID", projectId, -1)
 	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$ZONE", zone, -1)
 	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$CLUSTER_ID", clusterId, -1)
+	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$PASSWORD", deployer.KubeConfig.Password, -1)
+	kubeconfigYaml = strings.Replace(kubeconfigYaml, "$USERNAME", deployer.KubeConfig.Username, -1)
 
-	replaceKeyWords := []string{
-		"CA_CERT",
-		"KUBERNETES_MASTER_NAME",
-		"KUBELET_CERT",
-		"KUBELET_KEY",
-	}
+	replaceKeyWords := []string{"CA_CERT", "KUBERNETES_MASTER_NAME"}
 	for _, item := range deployer.GCPCluster.NodeInfos[1].Instance.Metadata.Items {
 		if item.Key == "kube-env" {
 			values := strings.Split(*item.Value, "\n")

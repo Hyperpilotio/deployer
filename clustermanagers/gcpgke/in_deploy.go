@@ -97,7 +97,7 @@ func NewInClusterDeployer(
 		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	serviceAccount, err := findServiceAccount(client, projectId, log.Logger)
+	serviceAccount, err := findServiceAccount(client, projectId, deployment.Region, parentClusterId, log.Logger)
 	if err != nil {
 		return nil, errors.New("Unable to find serviceAccount: " + err.Error())
 	}
@@ -361,16 +361,15 @@ func (deployer *InClusterGCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to delete node pools: %s" + err.Error())
 	}
 
-	firewallRuleNames := []string{fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)}
-	if err := deleteFirewallRules(client, projectId, firewallRuleNames, log); err != nil {
-		log.Warningf("Unable to delete firewall rules: " + err.Error())
-	}
-
 	log.Infof("Waiting until node pool to be delete completed...")
 	if err := waitUntilNodePoolDeleteComplete(client, projectId, zone,
 		deployer.ParentClusterId, gcpCluster.NodePoolIds, time.Duration(10)*time.Minute, log); err != nil {
 		return fmt.Errorf("Unable to wait until %s node pool to be delete completed: %s\n",
 			deployer.ParentClusterId, err.Error())
+	}
+
+	if err := deleteFirewallRules(client, projectId, zone, log); err != nil {
+		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
 	return nil

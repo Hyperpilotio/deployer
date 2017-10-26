@@ -17,6 +17,6 @@ preferences: {}
 users:
 - name: gke_$PROJECT_ID_$ZONE_$CLUSTER_ID
   user:
-    client-certificate-data: $KUBELET_CERT
-    client-key-data: $KUBELET_KEY
+    password: $PASSWORD
+    username: $USERNAME
 `
