@@ -253,9 +253,18 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
-		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+		return errors.New("Unable to connect to kubernetes during create: " + err.Error())
 	}
 
+	nodeNames := []string{}
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		nodeNames = append(nodeNames, nodeInfo.Instance.Name)
+	}
+	if err := k8sUtil.WaitUntilKubernetesNodeExists(k8sClient, nodeNames, time.Duration(3)*time.Minute, log); err != nil {
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
+	}
+	
 	if err := tagKubeNodes(k8sClient, gcpCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
