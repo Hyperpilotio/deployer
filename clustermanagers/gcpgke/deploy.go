@@ -123,18 +123,13 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 func (deployer *GCPDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
-	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
-	if err != nil {
-		return errors.New("Unable to connect to kubernetes: " + err.Error())
-	}
-
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
 	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
-		k8sClient,
+		deployer.KubeConfig,
 		deployer.Deployment,
 		userName,
 		deployer.GetLog().Logger)
