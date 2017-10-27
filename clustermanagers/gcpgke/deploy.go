@@ -101,18 +101,13 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 
 	log.Info("Updating kubernetes deployment")
-	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
-	if err != nil {
-		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
-	}
-
 	if err := k8sUtil.DeleteK8S(k8sUtil.GetAllDeployedNamespaces(deployment), deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, userName, log)
 	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -125,18 +120,13 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 func (deployer *GCPDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
-	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
-	if err != nil {
-		return errors.New("Unable to connect to kubernetes: " + err.Error())
-	}
-
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
 	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
-		k8sClient,
+		deployer.KubeConfig,
 		deployer.Deployment,
 		userName,
 		deployer.GetLog().Logger)
@@ -275,7 +265,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, userName, log)
 	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())

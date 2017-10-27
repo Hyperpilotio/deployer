@@ -51,11 +51,15 @@ func RetryConnectKubernetes(kubeConfig *rest.Config) (*k8s.Clientset, error) {
 
 func DeployKubernetesObjects(
 	config *viper.Viper,
-	k8sClient *k8s.Clientset,
+	kubeConfig *rest.Config,
 	deployment *apis.Deployment,
 	userName string,
 	log *logging.Logger) (map[string]ServiceMapping, error) {
-	serviceMappings := map[string]ServiceMapping{}
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to create k8s client: " + err.Error())
+	}
+
 	namespaces, namespacesErr := GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return nil, errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
@@ -65,29 +69,34 @@ func DeployKubernetesObjects(
 		return nil, errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	serviceMappings, err := DeployServices(config, k8sClient, deployment, "", namespaces, userName, log)
+	serviceMappings, err := DeployServices(config, kubeConfig, deployment, "", namespaces, userName, log)
 	if err != nil {
 		return serviceMappings, errors.New("Unable to setup K8S: " + err.Error())
 	}
 	deployClusterRoleAndBindings(k8sClient, log)
+
 	return serviceMappings, nil
 }
 
 func DeployServices(
 	config *viper.Viper,
-	k8sClient *k8s.Clientset,
+	kubeConfig *rest.Config,
 	deployment *apis.Deployment,
 	deployNamespace string,
 	existingNamespaces map[string]bool,
 	userName string,
 	log *logging.Logger) (map[string]ServiceMapping, error) {
+	serviceMappings := map[string]ServiceMapping{}
+	taskCount := map[string]int{}
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return serviceMappings, errors.New("Unable to create k8s client: " + err.Error())
+	}
+
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
 	}
-
-	serviceMappings := map[string]ServiceMapping{}
-	taskCount := map[string]int{}
 
 	// We sort before we create services because we want to have a deterministic way to assign
 	// service ids

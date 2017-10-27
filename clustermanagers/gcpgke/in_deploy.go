@@ -214,7 +214,7 @@ func (deployer *InClusterGCPDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 	}
 
 	userName := strings.ToLower(deployer.GCPCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
+	serviceMappings, err := k8sUtil.DeployServices(deployer.Config, deployer.KubeConfig, deployer.Deployment,
 		namespace, existingNamespaces, userName, log)
 	if err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())
