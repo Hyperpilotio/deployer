@@ -199,6 +199,10 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
+	if err := deletePublicKey(client, gcpCluster, log); err != nil {
+		log.Warningf("Unable to delete firewall rules: " + err.Error())
+	}
+
 	return nil
 }
 
@@ -264,7 +268,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
 	}
-	
+
 	if err := tagKubeNodes(k8sClient, gcpCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
