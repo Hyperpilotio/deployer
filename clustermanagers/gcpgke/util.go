@@ -113,13 +113,6 @@ func CreateNodePools(
 		nodePoolIds = append(nodePoolIds, nodePoolName)
 	}
 
-	log.Info("Waiting until cluster is completed...")
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return nil, fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
-	log.Info("Kuberenete cluster completed")
-
 	return nodePoolIds, nil
 }
 
@@ -132,11 +125,6 @@ func createClusterNodePool(
 	nodePoolSize int,
 	deployment *apis.Deployment,
 	log *logging.Logger) (string, error) {
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return "", fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
-
 	nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name, instanceType, nodePoolSize)
 	_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 		Create(projectId, zone, clusterId, nodePoolRequest).
@@ -169,11 +157,6 @@ func deleteNodePools(
 
 	var errBool bool
 	for _, nodePoolId := range nodePoolIds {
-		if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-			clusterId, time.Duration(5)*time.Minute, log); err != nil {
-			return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-		}
-
 		log.Infof("Deleting %s node pool: %s", clusterId, nodePoolId)
 		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
 			Delete(projectId, zone, clusterId, nodePoolId).
@@ -185,11 +168,6 @@ func deleteNodePools(
 	}
 	if errBool {
 		return fmt.Errorf("Unable to delete %s node pools", clusterId)
-	}
-
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 
 	return nil
@@ -263,11 +241,6 @@ func populateNodeInfos(
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(1)*time.Minute, log); err != nil {
-		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 
 	log.Infof("Populate nodeInfos with nodePoolIds: %s", nodePoolIds)

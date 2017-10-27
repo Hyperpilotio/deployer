@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
@@ -166,10 +167,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
 
 	_, err = containerSvc.Projects.Zones.Clusters.
 		Delete(projectId, zone, clusterId).
@@ -213,8 +210,12 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		gcpCluster.KeyPair = keyOutput
 	}
 
-	if err := deployKubernetes(client, deployer); err != nil {
+	if err := deployKubernetes(client, gcpCluster, deployment, log); err != nil {
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
+	}
+
+	if err := deployer.setKubeConfig(); err != nil {
+		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
 	nodePoolName := []string{"default-pool"}
@@ -281,11 +282,12 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	return nil
 }
 
-func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
-	gcpCluster := deployer.GCPCluster
+func deployKubernetes(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	deployment *apis.Deployment,
+	log *logging.Logger) error {
 	gcpProfile := gcpCluster.GCPProfile
-	deployment := deployer.Deployment
-	log := deployer.GetLog().Logger
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
@@ -369,11 +371,6 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 	log.Info("Kuberenete cluster completed")
-
-	// Setting KubeConfig
-	if err := deployer.setKubeConfig(); err != nil {
-		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
-	}
 
 	return nil
 }
