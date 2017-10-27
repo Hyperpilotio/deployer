@@ -32,34 +32,12 @@ type ServiceMapping struct {
 	PrivateUrl string `json:"privateUrl"`
 }
 
-func RetryConnectKubernetes(kubeConfig *rest.Config) (*k8s.Clientset, error) {
-	maxRetries := 3
-	var err error
-	for i := 1; i <= maxRetries; i++ {
-		k8sClient, err := k8s.NewForConfig(kubeConfig)
-		if err != nil {
-			err = errors.New("Unable to connect to kubernetes master server: " + err.Error())
-			glog.Infof("Unable to connect to kubernetes master server, retrying %d time", i)
-		} else {
-			return k8sClient, nil
-		}
-		time.Sleep(time.Duration(10) * time.Second)
-	}
-
-	return nil, err
-}
-
 func DeployKubernetesObjects(
 	config *viper.Viper,
-	kubeConfig *rest.Config,
+	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	userName string,
 	log *logging.Logger) (map[string]ServiceMapping, error) {
-	k8sClient, err := k8s.NewForConfig(kubeConfig)
-	if err != nil {
-		return nil, errors.New("Unable to create k8s client: " + err.Error())
-	}
-
 	namespaces, namespacesErr := GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return nil, errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
@@ -69,7 +47,7 @@ func DeployKubernetesObjects(
 		return nil, errors.New("Unable to create secrets in k8s: " + err.Error())
 	}
 
-	serviceMappings, err := DeployServices(config, kubeConfig, deployment, "", namespaces, userName, log)
+	serviceMappings, err := DeployServices(config, k8sClient, deployment, "", namespaces, userName, log)
 	if err != nil {
 		return serviceMappings, errors.New("Unable to setup K8S: " + err.Error())
 	}
@@ -80,23 +58,19 @@ func DeployKubernetesObjects(
 
 func DeployServices(
 	config *viper.Viper,
-	kubeConfig *rest.Config,
+	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	deployNamespace string,
 	existingNamespaces map[string]bool,
 	userName string,
 	log *logging.Logger) (map[string]ServiceMapping, error) {
-	serviceMappings := map[string]ServiceMapping{}
-	taskCount := map[string]int{}
-	k8sClient, err := k8s.NewForConfig(kubeConfig)
-	if err != nil {
-		return serviceMappings, errors.New("Unable to create k8s client: " + err.Error())
-	}
-
 	tasks := map[string]apis.KubernetesTask{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		tasks[task.Family] = task
 	}
+
+	serviceMappings := map[string]ServiceMapping{}
+	taskCount := map[string]int{}
 
 	// We sort before we create services because we want to have a deterministic way to assign
 	// service ids

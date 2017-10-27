@@ -424,7 +424,7 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 		return errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
 	}
 
-	serviceMappings, err := k8sUtil.DeployServices(deployer.Config, deployer.KubeConfig, deployer.Deployment,
+	serviceMappings, err := k8sUtil.DeployServices(deployer.Config, k8sClient, deployer.Deployment,
 		namespace, existingNamespaces, "ubuntu", log)
 	if err != nil {
 		return errors.New("Unable to setup K8S: " + err.Error())

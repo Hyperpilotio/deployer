@@ -99,7 +99,10 @@ func (deployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string) (
 func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error {
 	deployer.Deployment = deployment
 	log := deployer.GetLog().Logger
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+	}
 
 	log.Info("Updating kubernetes deployment")
 	if err := k8sUtil.DeleteK8S(k8sUtil.GetAllDeployedNamespaces(deployment), deployer.KubeConfig, log); err != nil {
@@ -108,7 +111,7 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
 	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -121,13 +124,18 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 func (deployer *GCPDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
+	}
+
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
 	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
-		deployer.KubeConfig,
+		k8sClient,
 		deployer.Deployment,
 		userName,
 		deployer.GetLog().Logger)
@@ -199,7 +207,6 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 	client, err := hpgcp.CreateClient(gcpProfile)
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -266,17 +273,17 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
 	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 
 	if err := insertFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.Services = serviceMappings
 	deployer.recordEndpoints(false)
 
 	return nil

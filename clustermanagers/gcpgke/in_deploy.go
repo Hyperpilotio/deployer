@@ -186,17 +186,17 @@ func deployInCluster(deployer *InClusterGCPDeployer, uploadedFiles map[string]st
 	}
 
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
 	if err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 
 	if err := insertFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		deleteInClusterDeploymentOnFailure(deployer)
 		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.Services = serviceMappings
 	deployer.recordEndpoints(false)
 
 	return nil

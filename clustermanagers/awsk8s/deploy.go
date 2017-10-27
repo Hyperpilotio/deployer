@@ -93,8 +93,6 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	awsProfile := awsCluster.AWSProfile
 	stackName := awsCluster.StackName()
 	log := deployer.DeploymentLog.Logger
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
-
 	log.Info("Updating kubernetes deployment")
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
@@ -121,7 +119,7 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, "ubuntu", log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
 	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -134,11 +132,16 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 func (deployer *K8SDeployer) DeployExtensions(
 	extensions *apis.Deployment,
 	newDeployment *apis.Deployment) error {
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return errors.New("Unable to connect to kubernetes: " + err.Error())
+	}
+
 	originalDeployment := deployer.Deployment
 	deployer.Deployment = extensions
 	serviceMappings, err := k8sUtil.DeployKubernetesObjects(
 		deployer.Config,
-		deployer.KubeConfig,
+		k8sClient,
 		deployer.Deployment,
 		"ubuntu",
 		deployer.GetLog().Logger)
@@ -283,7 +286,7 @@ func deployCluster(deployer *K8SDeployer, uploadedFiles map[string]string) error
 		return errors.New("Unable to tag Kubernetes nodes: " + err.Error())
 	}
 
-	serviceMapping, err := k8sUtil.DeployKubernetesObjects(deployer.Config, deployer.KubeConfig, deployment, "ubuntu", log)
+	serviceMapping, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
 	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
