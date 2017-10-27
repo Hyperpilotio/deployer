@@ -104,7 +104,6 @@ func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
-	log.Info("Updating kubernetes deployment")
 	if err := k8sUtil.DeleteK8S(k8sUtil.GetAllDeployedNamespaces(deployment), deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
