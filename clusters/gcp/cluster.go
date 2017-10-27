@@ -7,11 +7,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/hyperpilotio/deployer/apis"
 	"github.com/spf13/viper"
@@ -170,7 +167,5 @@ func (gcpCluster *GCPCluster) KeyName() string {
 }
 
 func CreateUniqueClusterId(deploymentName string) string {
-	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
-	deploymentNames := strings.Split(deploymentName, "-")
-	return fmt.Sprintf("%s-%s", strings.Join(deploymentNames[:len(deploymentNames)-1], "-"), timeSeq)
+	return strings.ToLower(deploymentName)
 }

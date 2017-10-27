@@ -93,8 +93,6 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 	awsProfile := awsCluster.AWSProfile
 	stackName := awsCluster.StackName()
 	log := deployer.DeploymentLog.Logger
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
-
 	log.Info("Updating kubernetes deployment")
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
@@ -121,7 +119,7 @@ func (deployer *K8SDeployer) UpdateDeployment(deployment *apis.Deployment) error
 		log.Warningf("Unable to deleting elb securityGroups: %s", err.Error())
 	}
 
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, "ubuntu", log)
 	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}

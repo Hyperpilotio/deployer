@@ -32,30 +32,12 @@ type ServiceMapping struct {
 	PrivateUrl string `json:"privateUrl"`
 }
 
-func RetryConnectKubernetes(kubeConfig *rest.Config) (*k8s.Clientset, error) {
-	maxRetries := 3
-	var err error
-	for i := 1; i <= maxRetries; i++ {
-		k8sClient, err := k8s.NewForConfig(kubeConfig)
-		if err != nil {
-			err = errors.New("Unable to connect to kubernetes master server: " + err.Error())
-			glog.Infof("Unable to connect to kubernetes master server, retrying %d time", i)
-		} else {
-			return k8sClient, nil
-		}
-		time.Sleep(time.Duration(10) * time.Second)
-	}
-
-	return nil, err
-}
-
 func DeployKubernetesObjects(
 	config *viper.Viper,
 	k8sClient *k8s.Clientset,
 	deployment *apis.Deployment,
 	userName string,
 	log *logging.Logger) (map[string]ServiceMapping, error) {
-	serviceMappings := map[string]ServiceMapping{}
 	namespaces, namespacesErr := GetExistingNamespaces(k8sClient)
 	if namespacesErr != nil {
 		return nil, errors.New("Unable to get existing namespaces: " + namespacesErr.Error())
@@ -70,6 +52,7 @@ func DeployKubernetesObjects(
 		return serviceMappings, errors.New("Unable to setup K8S: " + err.Error())
 	}
 	deployClusterRoleAndBindings(k8sClient, log)
+
 	return serviceMappings, nil
 }
 
@@ -809,6 +792,7 @@ func WaitUntilKubernetesNodeExists(
 	nodeNames []string,
 	timeout time.Duration,
 	log *logging.Logger) error {
+	log.Infof("Wait %s kubernetes nodes to be available", nodeNames)
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
 		allExists := true
 		for _, nodeName := range nodeNames {

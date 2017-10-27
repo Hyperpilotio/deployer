@@ -113,13 +113,6 @@ func CreateNodePools(
 		nodePoolIds = append(nodePoolIds, nodePoolName)
 	}
 
-	log.Info("Waiting until cluster is completed...")
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return nil, fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
-	log.Info("Kuberenete cluster completed")
-
 	return nodePoolIds, nil
 }
 
@@ -132,11 +125,6 @@ func createClusterNodePool(
 	nodePoolSize int,
 	deployment *apis.Deployment,
 	log *logging.Logger) (string, error) {
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return "", fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
-
 	nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name, instanceType, nodePoolSize)
 	_, err := containerSvc.Projects.Zones.Clusters.NodePools.
 		Create(projectId, zone, clusterId, nodePoolRequest).
@@ -169,11 +157,6 @@ func deleteNodePools(
 
 	var errBool bool
 	for _, nodePoolId := range nodePoolIds {
-		if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-			clusterId, time.Duration(5)*time.Minute, log); err != nil {
-			return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-		}
-
 		log.Infof("Deleting %s node pool: %s", clusterId, nodePoolId)
 		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
 			Delete(projectId, zone, clusterId, nodePoolId).
@@ -185,11 +168,6 @@ func deleteNodePools(
 	}
 	if errBool {
 		return fmt.Errorf("Unable to delete %s node pools", clusterId)
-	}
-
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 
 	return nil
@@ -512,41 +490,102 @@ func tagPublicKey(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
 	log *logging.Logger) error {
-	projectId := gcpCluster.GCPProfile.ProjectId
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	var errBool bool
-	for _, nodeInfo := range gcpCluster.NodeInfos {
-		instanceName := nodeInfo.Instance.Name
-		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
-		if err != nil {
-			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
-			errBool = true
+	resp, err := computeSvc.Projects.
+		Get(gcpCluster.GCPProfile.ProjectId).
+		Do()
+	if err != nil {
+		return errors.New("Unable to get projects metadata: " + err.Error())
+	}
+
+	orignalKeyVal := ""
+	sshKeyItemIndex := -1
+	for i, item := range resp.CommonInstanceMetadata.Items {
+		if item.Key == "ssh-keys" {
+			orignalKeyVal = *item.Value
+			sshKeyItemIndex = i
 			break
 		}
+	}
 
-		keyVal := fmt.Sprintf("%s:%s %s@%s",
-			gcpCluster.GCPProfile.ServiceAccount,
-			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
-			gcpCluster.GCPProfile.ServiceAccount,
-			instanceName)
-		instance.Metadata.Items = append(instance.Metadata.Items, &compute.MetadataItems{
-			Key:   "sshKeys",
-			Value: &keyVal,
+	newSshKeyVal := fmt.Sprintf("%s:%s %s@%s",
+		gcpCluster.GCPProfile.ServiceAccount,
+		strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
+		gcpCluster.GCPProfile.ServiceAccount,
+		gcpCluster.GCPProfile.ServiceAccount)
+	if sshKeyItemIndex == -1 {
+		resp.CommonInstanceMetadata.Items = append(resp.CommonInstanceMetadata.Items, &compute.MetadataItems{
+			Key:   "ssh-keys",
+			Value: &newSshKeyVal,
 		})
-		_, err = computeSvc.Instances.
-			SetMetadata(projectId, gcpCluster.Zone, instanceName, instance.Metadata).
-			Do()
-		if err != nil {
-			log.Warningf("Unable to tag publicKey: " + err.Error())
-			errBool = true
+	} else {
+		keyVal := orignalKeyVal + "\n" + newSshKeyVal
+		resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &keyVal
+	}
+
+	_, err = computeSvc.Projects.
+		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
+		Do()
+	if err != nil {
+		return errors.New("Unable to set public key to projects metadata: " + err.Error())
+	}
+
+	return nil
+}
+
+func deletePublicKey(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	log *logging.Logger) error {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	resp, err := computeSvc.Projects.
+		Get(gcpCluster.GCPProfile.ProjectId).
+		Do()
+	if err != nil {
+		return errors.New("Unable to get projects metadata: " + err.Error())
+	}
+
+	orignalKeyVal := ""
+	sshKeyItemIndex := -1
+	for i, item := range resp.CommonInstanceMetadata.Items {
+		if item.Key == "ssh-keys" {
+			orignalKeyVal = *item.Value
+			sshKeyItemIndex = i
+			break
 		}
 	}
-	if errBool {
-		return errors.New("Unable to tag sshKeys for all node")
+
+	if sshKeyItemIndex == -1 {
+		log.Infof("Unable to find ssh-keys to be delete")
+		return nil
+	}
+
+	newSshKeys := ""
+	sshKeys := strings.Split(orignalKeyVal, "\n")
+	for _, sshKey := range sshKeys {
+		if !strings.HasPrefix(sshKey, gcpCluster.GCPProfile.ServiceAccount+":") {
+			if newSshKeys == "" {
+				newSshKeys = sshKey
+			} else {
+				newSshKeys = newSshKeys + "\n" + sshKey
+			}
+		}
+	}
+	resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &newSshKeys
+
+	_, err = computeSvc.Projects.
+		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
+		Do()
+	if err != nil {
+		return errors.New("Unable to set public key to projects metadata: " + err.Error())
 	}
 
 	return nil

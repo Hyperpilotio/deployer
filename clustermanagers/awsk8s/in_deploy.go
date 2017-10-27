@@ -430,6 +430,7 @@ func (deployer *InClusterK8SDeployer) deployKubernetesObjects(k8sClient *k8s.Cli
 		return errors.New("Unable to setup K8S: " + err.Error())
 	}
 	deployer.Services = serviceMappings
+
 	return nil
 }
 

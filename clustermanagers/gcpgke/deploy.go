@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	logging "github.com/op/go-logging"
 	"github.com/spf13/viper"
 	container "google.golang.org/api/container/v1"
 
@@ -98,21 +99,19 @@ func (deployer *GCPDeployer) CreateDeployment(uploadedFiles map[string]string) (
 func (deployer *GCPDeployer) UpdateDeployment(deployment *apis.Deployment) error {
 	deployer.Deployment = deployment
 	log := deployer.GetLog().Logger
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
-
-	log.Info("Updating kubernetes deployment")
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
 		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
 	}
 
+	log.Info("Updating kubernetes deployment")
 	if err := k8sUtil.DeleteK8S(k8sUtil.GetAllDeployedNamespaces(deployment), deployer.KubeConfig, log); err != nil {
 		log.Warningf("Unable to delete k8s objects in update: " + err.Error())
 	}
 
 	gcpCluster := deployer.GCPCluster
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
 	if err != nil {
 		log.Warningf("Unable to deploy k8s objects in update: " + err.Error())
 	}
@@ -176,10 +175,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
-	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
-		clusterId, time.Duration(5)*time.Minute, log); err != nil {
-		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
-	}
 
 	_, err = containerSvc.Projects.Zones.Clusters.
 		Delete(projectId, zone, clusterId).
@@ -199,6 +194,10 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
+	if err := deletePublicKey(client, gcpCluster, log); err != nil {
+		log.Warningf("Unable to delete firewall rules: " + err.Error())
+	}
+
 	return nil
 }
 
@@ -208,7 +207,6 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	deployment := deployer.Deployment
 	log := deployer.GetLog().Logger
 	client, err := hpgcp.CreateClient(gcpProfile)
-	serviceMappings := map[string]k8sUtil.ServiceMapping{}
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
@@ -219,8 +217,12 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 		gcpCluster.KeyPair = keyOutput
 	}
 
-	if err := deployKubernetes(client, deployer); err != nil {
+	if err := deployKubernetes(client, gcpCluster, deployment, log); err != nil {
 		return errors.New("Unable to deploy kubernetes custer: " + err.Error())
+	}
+
+	if err := deployer.setKubeConfig(); err != nil {
+		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
 	nodePoolName := []string{"default-pool"}
@@ -253,7 +255,16 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 
 	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
 	if err != nil {
-		return errors.New("Unable to connect to kubernetes during delete: " + err.Error())
+		return errors.New("Unable to connect to kubernetes during create: " + err.Error())
+	}
+
+	nodeNames := []string{}
+	for _, nodeInfo := range gcpCluster.NodeInfos {
+		nodeNames = append(nodeNames, nodeInfo.Instance.Name)
+	}
+	if err := k8sUtil.WaitUntilKubernetesNodeExists(k8sClient, nodeNames, time.Duration(3)*time.Minute, log); err != nil {
+		deleteDeploymentOnFailure(deployer)
+		return errors.New("Unable wait for kubernetes nodes to be exist: " + err.Error())
 	}
 
 	if err := tagKubeNodes(k8sClient, gcpCluster, deployment, log); err != nil {
@@ -262,27 +273,28 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	userName := strings.ToLower(gcpCluster.GCPProfile.ServiceAccount)
-	serviceMappings, err = k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
+	serviceMappings, err := k8sUtil.DeployKubernetesObjects(deployer.Config, k8sClient, deployment, userName, log)
 	if err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to deploy kubernetes objects: " + err.Error())
 	}
+	deployer.Services = serviceMappings
 
 	if err := insertFirewallIngressRules(client, gcpCluster, deployment, log); err != nil {
 		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
-	deployer.Services = serviceMappings
 	deployer.recordEndpoints(false)
 
 	return nil
 }
 
-func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
-	gcpCluster := deployer.GCPCluster
+func deployKubernetes(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	deployment *apis.Deployment,
+	log *logging.Logger) error {
 	gcpProfile := gcpCluster.GCPProfile
-	deployment := deployer.Deployment
-	log := deployer.GetLog().Logger
 	containerSvc, err := container.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
@@ -366,11 +378,6 @@ func deployKubernetes(client *http.Client, deployer *GCPDeployer) error {
 		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
 	}
 	log.Info("Kuberenete cluster completed")
-
-	// Setting KubeConfig
-	if err := deployer.setKubeConfig(); err != nil {
-		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
-	}
 
 	return nil
 }
