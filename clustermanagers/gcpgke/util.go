@@ -265,6 +265,11 @@ func populateNodeInfos(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
+	if err := waitUntilClusterStatusRunning(containerSvc, projectId, zone,
+		clusterId, time.Duration(1)*time.Minute, log); err != nil {
+		return fmt.Errorf("Unable to wait until cluster complete: %s\n", err.Error())
+	}
+
 	log.Infof("Populate nodeInfos with nodePoolIds: %s", nodePoolIds)
 	for _, nodePoolId := range nodePoolIds {
 		resp, err := containerSvc.Projects.Zones.Clusters.NodePools.
