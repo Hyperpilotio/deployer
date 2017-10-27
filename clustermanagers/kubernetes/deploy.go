@@ -809,6 +809,7 @@ func WaitUntilKubernetesNodeExists(
 	nodeNames []string,
 	timeout time.Duration,
 	log *logging.Logger) error {
+	log.Infof("Wait %s kubernetes nodes to be available", nodeNames)
 	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
 		allExists := true
 		for _, nodeName := range nodeNames {
