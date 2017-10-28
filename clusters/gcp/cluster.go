@@ -167,5 +167,11 @@ func (gcpCluster *GCPCluster) KeyName() string {
 }
 
 func CreateUniqueClusterId(deploymentName string) string {
-	return strings.ToLower(deploymentName)
+	name := strings.ToLower(deploymentName)
+	// Google only allows cluster name with less than 40 chars
+	if len(name) >= 40 {
+		return string(name[0:39])
+	}
+
+	return name
 }
