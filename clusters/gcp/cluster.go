@@ -83,7 +83,7 @@ func NewGCPCluster(
 		ClusterId: clusterId,
 		KeyPair: &GCPKeyPairOutput{
 			KeyName: clusterId,
-			Pem:     strings.Replace(config.GetString("gcp.privateKey"), "\n", "", -1),
+			Pem:     config.GetString("gcp.privateKey"),
 			Pub:     config.GetString("gcp.publicKey"),
 		},
 		NodeInfos:   make(map[int]*NodeInfo),
