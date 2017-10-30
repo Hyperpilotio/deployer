@@ -47,7 +47,7 @@ GCP
       * Run deployer/build_gcp_serviceAccoutFile.sh to gen your serviceAccount JSON file (You can also change iam-account)
       * Set gcpServiceAccountJSONFile path to serviceAccount JSON file path (See template.config). (Note that a tilde does not currently map to $HOME in this workflow, i.e. use `/Users/<username>/...` instead of `~/...` on OSX).
       * Run deployer
-      * Use $DEPLOYER_URL:7777/ui/users to write your gmail userName and serviceAccount file content
+      * Use $DEPLOYER_URL:7777/ui/users to write your serviceAccount file content
       * Write deploy-gcp.json to deploy 
 
 Clustermanagers
