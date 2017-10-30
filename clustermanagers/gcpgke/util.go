@@ -545,178 +545,54 @@ func tagPublicKey(
 	client *http.Client,
 	gcpCluster *hpgcp.GCPCluster,
 	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
+	serviceAccount := gcpCluster.GCPProfile.ServiceAccount
+	publicKey := gcpCluster.KeyPair.Pub
 	computeSvc, err := compute.New(client)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	// Because there may be other users to modify when change metadata,
-	// the fingerprint will be inconsistent with the original when a failure occurs,
-	// try updating once
-	maxRetries := 1
-	var tagErr error
-	for i := 0; i <= maxRetries; i++ {
-		resp, err := computeSvc.Projects.
-			Get(gcpCluster.GCPProfile.ProjectId).
-			Do()
-		if err != nil {
-			return errors.New("Unable to get projects metadata: " + err.Error())
-		}
-
-		orignalKeyVal := ""
-		sshKeyItemIndex := -1
-		for i, item := range resp.CommonInstanceMetadata.Items {
-			if item.Key == "ssh-keys" {
-				orignalKeyVal = *item.Value
-				sshKeyItemIndex = i
-				break
-			}
-		}
-
-		newSshKeyVal := fmt.Sprintf("%s:%s %s@%s",
-			gcpCluster.GCPProfile.ServiceAccount,
-			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
-			gcpCluster.GCPProfile.ServiceAccount,
-			gcpCluster.ClusterId)
-		if sshKeyItemIndex == -1 {
-			resp.CommonInstanceMetadata.Items = append(resp.CommonInstanceMetadata.Items, &compute.MetadataItems{
-				Key:   "ssh-keys",
-				Value: &newSshKeyVal,
-			})
-		} else {
-			keyVal := orignalKeyVal + "\n" + newSshKeyVal
-			resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &keyVal
-		}
-
-		_, err = computeSvc.Projects.
-			SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
-			Do()
-		if err != nil {
-			tagErr = errors.New("Unable to set public key to projects metadata: " + err.Error())
-			log.Infof("Unable to set public key to projects metadata, retrying %d time", i)
-		} else {
-			return nil
-		}
-
-		time.Sleep(time.Duration(10) * time.Second)
-	}
-
-	return tagErr
-}
-
-func deletePublicKey(
-	client *http.Client,
-	gcpCluster *hpgcp.GCPCluster,
-	log *logging.Logger) error {
-	computeSvc, err := compute.New(client)
+	resp, err := computeSvc.Projects.Get(projectId).Do()
 	if err != nil {
-		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+		return errors.New("Unable to get projects metadata: " + err.Error())
 	}
 
-	// Because there may be other users to modify when change metadata,
-	// the fingerprint will be inconsistent with the original when a failure occurs,
-	// try updating once
-	maxRetries := 1
-	var tagErr error
-	for i := 0; i <= maxRetries; i++ {
-		resp, err := computeSvc.Projects.
-			Get(gcpCluster.GCPProfile.ProjectId).
-			Do()
-		if err != nil {
-			return errors.New("Unable to get projects metadata: " + err.Error())
+	orignalKeyVal := ""
+	sshKeyItemIndex := -1
+	for i, item := range resp.CommonInstanceMetadata.Items {
+		if item.Key == "ssh-keys" {
+			orignalKeyVal = *item.Value
+			sshKeyItemIndex = i
+			break
 		}
+	}
 
-		orignalKeyVal := ""
-		sshKeyItemIndex := -1
-		for i, item := range resp.CommonInstanceMetadata.Items {
-			if item.Key == "ssh-keys" {
-				orignalKeyVal = *item.Value
-				sshKeyItemIndex = i
-				break
-			}
-		}
-
-		if sshKeyItemIndex == -1 {
-			log.Infof("Unable to find ssh-keys to be delete")
-			return nil
-		}
-
-		newSshKeys := ""
+	newSshKeyVal := fmt.Sprintf("%s:%s %s@%s", serviceAccount, publicKey, serviceAccount, serviceAccount)
+	if sshKeyItemIndex == -1 {
+		resp.CommonInstanceMetadata.Items = append(resp.CommonInstanceMetadata.Items, &compute.MetadataItems{
+			Key:   "ssh-keys",
+			Value: &newSshKeyVal,
+		})
+	} else {
 		sshKeys := strings.Split(orignalKeyVal, "\n")
 		for _, sshKey := range sshKeys {
-			if !strings.HasSuffix(sshKey, gcpCluster.GCPProfile.ServiceAccount+"@"+gcpCluster.ClusterId) {
-				if sshKey == "" {
-					continue
-				}
-				if newSshKeys == "" {
-					newSshKeys = sshKey
-				} else {
-					newSshKeys = newSshKeys + "\n" + sshKey
-				}
+			if strings.HasPrefix(sshKey, serviceAccount+":") && strings.HasSuffix(sshKey, serviceAccount+"@"+serviceAccount) {
+				log.Infof("Share serviceAccout %s publicKey has been tag", serviceAccount)
+				return nil
 			}
 		}
 
-		if newSshKeys != "" {
-			resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &newSshKeys
-		} else {
-			newMetadataItems := []*compute.MetadataItems{}
-			for _, item := range resp.CommonInstanceMetadata.Items {
-				if item.Key != "ssh-keys" {
-					newMetadataItems = append(newMetadataItems, item)
-				}
-			}
-			resp.CommonInstanceMetadata.Items = newMetadataItems
-		}
-
-		_, err = computeSvc.Projects.
-			SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
-			Do()
-		if err != nil {
-			return errors.New("Unable to set public key to projects metadata: " + err.Error())
-		} else {
-			return nil
-		}
-
-		time.Sleep(time.Duration(10) * time.Second)
+		keyVal := orignalKeyVal + "\n" + newSshKeyVal
+		resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &keyVal
 	}
 
-	return tagErr
-}
-
-func findServiceAccount(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string,
-	log *logging.Logger) (string, error) {
-	computeSvc, err := compute.New(client)
+	_, err = computeSvc.Projects.SetCommonInstanceMetadata(projectId, resp.CommonInstanceMetadata).Do()
 	if err != nil {
-		return "", errors.New("Unable to create google cloud platform compute service: " + err.Error())
+		return errors.New("Unable to set public key to projects metadata: " + err.Error())
 	}
 
-	resp, err := computeSvc.Instances.List(projectId, zone).Do()
-	if err != nil {
-		return "", errors.New("Unable to list instance: " + err.Error())
-	}
-
-	clusterInstances := []*compute.Instance{}
-	for _, instance := range resp.Items {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
-				clusterInstances = append(clusterInstances, instance)
-			}
-		}
-	}
-
-	for _, instance := range clusterInstances {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "serviceAccount" {
-				return *metadata.Value, nil
-			}
-		}
-	}
-
-	return "", errors.New("Unable to find serviceAccount from compute metadata")
+	return nil
 }
 
 func findDeploymentNames(

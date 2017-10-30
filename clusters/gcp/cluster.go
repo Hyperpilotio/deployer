@@ -78,9 +78,14 @@ func NewGCPCluster(
 	clusterId := CreateUniqueClusterId(deployment.Name)
 	deployment.Name = clusterId
 	gcpCluster := &GCPCluster{
-		Name:        clusterId,
-		Zone:        deployment.Region,
-		ClusterId:   clusterId,
+		Name:      clusterId,
+		Zone:      deployment.Region,
+		ClusterId: clusterId,
+		KeyPair: &GCPKeyPairOutput{
+			KeyName: clusterId,
+			Pem:     strings.Replace(config.GetString("gcp.privateKey"), "\n", "", -1),
+			Pub:     config.GetString("gcp.publicKey"),
+		},
 		NodeInfos:   make(map[int]*NodeInfo),
 		NodePoolIds: make([]string, 0),
 	}

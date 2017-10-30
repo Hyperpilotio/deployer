@@ -78,6 +78,7 @@ func NewInClusterDeployer(
 	}
 
 	gcpProfile := &hpgcp.GCPProfile{
+		ServiceAccount:      config.GetString("gcp.serviceAccount"),
 		AuthJSONFileContent: string(b),
 	}
 	projectId, err := gcpProfile.GetProjectId()
@@ -92,18 +93,6 @@ func NewInClusterDeployer(
 	if err != nil {
 		return nil, errors.New("Error creating deployment logger: " + err.Error())
 	}
-
-	client, err := hpgcp.CreateClient(gcpProfile)
-	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
-	serviceAccount, err := findServiceAccount(client, projectId, deployment.Region, parentClusterId, log.Logger)
-	if err != nil {
-		return nil, errors.New("Unable to find serviceAccount: " + err.Error())
-	}
-	gcpProfile.ServiceAccount = serviceAccount
-	log.Logger.Infof("Reload in-cluster serviceAccount: %s", gcpProfile.ServiceAccount)
 
 	deployer := &InClusterGCPDeployer{
 		GCPDeployer: GCPDeployer{

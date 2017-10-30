@@ -48,10 +48,7 @@ func NewDeployer(
 		return nil, errors.New("Unable to find projectId: " + err.Error())
 	}
 	gcpCluster.GCPProfile.ProjectId = projectId
-
-	if gcpCluster.GCPProfile.ServiceAccount == "" {
-		return nil, errors.New("Unable to find serviceAccount: " + err.Error())
-	}
+	gcpCluster.GCPProfile.ServiceAccount = config.GetString("gcp.serviceAccount")
 
 	deployer := &GCPDeployer{
 		Config:        config,
@@ -193,10 +190,6 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
-	if err := deletePublicKey(client, gcpCluster, log); err != nil {
-		log.Warningf("Unable to delete firewall rules: " + err.Error())
-	}
-
 	return nil
 }
 
@@ -208,12 +201,6 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	client, err := hpgcp.CreateClient(gcpProfile)
 	if err != nil {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
-	}
-
-	if keyOutput, err := hpgcp.CreateKeypair(gcpCluster.ClusterId); err != nil {
-		return errors.New("Unable to create key pair: " + err.Error())
-	} else {
-		gcpCluster.KeyPair = keyOutput
 	}
 
 	if err := deployKubernetes(client, gcpCluster, deployment, log); err != nil {

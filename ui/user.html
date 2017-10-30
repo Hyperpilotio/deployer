@@ -35,11 +35,7 @@
                 <td data-name="awsSecret"><input type="text" size="50"/></td>
             </tr>
             <tr>
-                <td rowspan="2">GCP</td>
-                <td>GMAIL USER NAME</td>
-                <td data-name="serviceAccount"><input type="text" size="50"/></td>
-            </tr>
-            <tr>
+                <td>GCP</td>
                 <td>SERVICE ACCOUNT FILE CONTENT</td>
                 <td data-name="authJSONFileContent" style="word-wrap: normal; word-break: break-all; white-space: normal;">
                     <textarea cols="60" rows="5"></textarea>
@@ -96,7 +92,6 @@
             formdata.userId = userId;
             formdata.awsId = $tbody.find('td[data-name=awsId] > input:text').val();
             formdata.awsSecret = $tbody.find('td[data-name=awsSecret] > input:text').val();
-            formdata.serviceAccount = $tbody.find('td[data-name=serviceAccount] > input:text').val();
             formdata.authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent] > textarea').val();
             store(url, formdata, actionType);
         }
@@ -140,15 +135,12 @@
 
             var awsId = $tbody.find('td[data-name=awsId]').html();
             var awsSecret = $tbody.find('td[data-name=awsSecret]').html();
-            var serviceAccount = $tbody.find('td[data-name=serviceAccount]').html();
             var authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent]').find('div').html();
    
             $tbody.find('td[data-name=awsId]').html('<input type="text" value="' + awsId +
                 '" size="50"/><input type="hidden" value="' + awsId + '"/>');
             $tbody.find('td[data-name=awsSecret]').html('<input type="text" value="' + awsSecret +
                 '" size="50"/><input type="hidden" value="' + awsSecret + '"/>');
-            $tbody.find('td[data-name=serviceAccount]').html('<input type="text" value="' + serviceAccount +
-                '" size="50"/><input type="hidden" value="' + serviceAccount + '"/>');
             $tbody.find('td[data-name=authJSONFileContent]').html('<textarea cols="60" rows="5">' + authJSONFileContent + 
                 '</textarea><input type="hidden" value=\'' + authJSONFileContent + '\'/>');
             $tbody.find('td[data-name=btn]').html(updateUserBtnHtml + '&nbsp;' + cancelBtnHtml);
@@ -157,12 +149,10 @@
         function cancelEdit($tbody) {
             var awsId = $tbody.find('td[data-name=awsId] > input:hidden').val();
             var awsSecret = $tbody.find('td[data-name=awsSecret] > input:hidden').val();
-            var serviceAccount = $tbody.find('td[data-name=serviceAccount] > input:hidden').val();
             var authJSONFileContent = $tbody.find('td[data-name=authJSONFileContent] > input:hidden').val();
 
             $tbody.find('td[data-name=awsId]').html(awsId);
             $tbody.find('td[data-name=awsSecret]').html(awsSecret);
-            $tbody.find('td[data-name=serviceAccount]').html(serviceAccount);
             $tbody.find('td[data-name=authJSONFileContent]').html('<div style="height: 80px; overflow-y: auto;">' + authJSONFileContent + '</div>');
             $tbody.find('td[data-name=btn]').html(editUserBtnHtml + '&nbsp;' + delUserBtnHtml);
             $tbody.css('background-color', '');
@@ -245,11 +235,7 @@
                         <td data-name="awsSecret">{{if $profile.AWSProfile}}{{$profile.AWSProfile.AwsSecret}}{{end}}</td>
                     </tr>
                     <tr>
-                        <td rowspan="2">GCP</td>
-                        <td>GMAIL USER NAME</td>
-                        <td data-name="serviceAccount">{{if $profile.GCPProfile}}{{$profile.GCPProfile.ServiceAccount}}{{end}}</td>
-                    </tr>
-                    <tr>
+                        <td>GCP</td>
                         <td>SERVICE ACCOUNT FILE CONTENT</td>
                         <td data-name="authJSONFileContent" style="word-wrap: normal; word-break: break-all; white-space: normal;">
                             <div style="height: 80px; overflow-y: auto;">{{if $profile.GCPProfile}}{{$profile.GCPProfile.AuthJSONFileContent}}{{end}}</div>
