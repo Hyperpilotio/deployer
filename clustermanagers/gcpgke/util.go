@@ -17,7 +17,9 @@ import (
 	compute "google.golang.org/api/compute/v1"
 	container "google.golang.org/api/container/v1"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 var publicPortType = 1
@@ -314,6 +316,59 @@ func populateNodeInfos(
 	return nil
 }
 
+func reloadNodeInfos(
+	client *http.Client,
+	kubeConfig *rest.Config,
+	projectId string,
+	zone string,
+	clusterId string,
+	gcpCluster *hpgcp.GCPCluster,
+	log *logging.Logger) error {
+	k8sClient, err := k8s.NewForConfig(kubeConfig)
+	if err != nil {
+		return errors.New("Unable to create in cluster k8s client: " + err.Error())
+	}
+
+	nodes, err := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
+	if err != nil {
+		return errors.New("Unable to list kubernetes nodes: " + err.Error())
+	}
+
+	nodeNames := map[int]string{}
+	for _, node := range nodes.Items {
+		if deployment, ok := node.Labels["hyperpilot/deployment"]; ok {
+			if clusterId == deployment {
+				if nodeId, ok := node.Labels["hyperpilot/node-id"]; ok {
+					id, err := strconv.Atoi(nodeId)
+					if err != nil {
+						return errors.New("Unable to convert node id to int: " + err.Error())
+					}
+					nodeNames[id] = node.GetName()
+				}
+			}
+		}
+	}
+
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	for nodeId, nodeName := range nodeNames {
+		instance, err := computeSvc.Instances.Get(projectId, zone, nodeName).Do()
+		if err != nil {
+			return errors.New("Unable to get compute instance: " + err.Error())
+		}
+		gcpCluster.NodeInfos[nodeId] = &hpgcp.NodeInfo{
+			Instance:  instance,
+			PublicIp:  instance.NetworkInterfaces[0].AccessConfigs[0].NatIP,
+			PrivateIp: instance.NetworkInterfaces[0].NetworkIP,
+		}
+	}
+
+	return nil
+}
+
 func tagKubeNodes(
 	k8sClient *k8s.Clientset,
 	gcpCluster *hpgcp.GCPCluster,
@@ -495,46 +550,58 @@ func tagPublicKey(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	resp, err := computeSvc.Projects.
-		Get(gcpCluster.GCPProfile.ProjectId).
-		Do()
-	if err != nil {
-		return errors.New("Unable to get projects metadata: " + err.Error())
-	}
-
-	orignalKeyVal := ""
-	sshKeyItemIndex := -1
-	for i, item := range resp.CommonInstanceMetadata.Items {
-		if item.Key == "ssh-keys" {
-			orignalKeyVal = *item.Value
-			sshKeyItemIndex = i
-			break
+	// Because there may be other users to modify when change metadata,
+	// the fingerprint will be inconsistent with the original when a failure occurs,
+	// try updating once
+	maxRetries := 1
+	var tagErr error
+	for i := 0; i <= maxRetries; i++ {
+		resp, err := computeSvc.Projects.
+			Get(gcpCluster.GCPProfile.ProjectId).
+			Do()
+		if err != nil {
+			return errors.New("Unable to get projects metadata: " + err.Error())
 		}
+
+		orignalKeyVal := ""
+		sshKeyItemIndex := -1
+		for i, item := range resp.CommonInstanceMetadata.Items {
+			if item.Key == "ssh-keys" {
+				orignalKeyVal = *item.Value
+				sshKeyItemIndex = i
+				break
+			}
+		}
+
+		newSshKeyVal := fmt.Sprintf("%s:%s %s@%s",
+			gcpCluster.GCPProfile.ServiceAccount,
+			strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
+			gcpCluster.GCPProfile.ServiceAccount,
+			gcpCluster.ClusterId)
+		if sshKeyItemIndex == -1 {
+			resp.CommonInstanceMetadata.Items = append(resp.CommonInstanceMetadata.Items, &compute.MetadataItems{
+				Key:   "ssh-keys",
+				Value: &newSshKeyVal,
+			})
+		} else {
+			keyVal := orignalKeyVal + "\n" + newSshKeyVal
+			resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &keyVal
+		}
+
+		_, err = computeSvc.Projects.
+			SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
+			Do()
+		if err != nil {
+			tagErr = errors.New("Unable to set public key to projects metadata: " + err.Error())
+			log.Infof("Unable to set public key to projects metadata, retrying %d time", i)
+		} else {
+			return nil
+		}
+
+		time.Sleep(time.Duration(10) * time.Second)
 	}
 
-	newSshKeyVal := fmt.Sprintf("%s:%s %s@%s",
-		gcpCluster.GCPProfile.ServiceAccount,
-		strings.Replace(gcpCluster.KeyPair.Pub, "\n", "", -1),
-		gcpCluster.GCPProfile.ServiceAccount,
-		gcpCluster.GCPProfile.ServiceAccount)
-	if sshKeyItemIndex == -1 {
-		resp.CommonInstanceMetadata.Items = append(resp.CommonInstanceMetadata.Items, &compute.MetadataItems{
-			Key:   "ssh-keys",
-			Value: &newSshKeyVal,
-		})
-	} else {
-		keyVal := orignalKeyVal + "\n" + newSshKeyVal
-		resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &keyVal
-	}
-
-	_, err = computeSvc.Projects.
-		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
-		Do()
-	if err != nil {
-		return errors.New("Unable to set public key to projects metadata: " + err.Error())
-	}
-
-	return nil
+	return tagErr
 }
 
 func deletePublicKey(
@@ -546,49 +613,74 @@ func deletePublicKey(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	resp, err := computeSvc.Projects.
-		Get(gcpCluster.GCPProfile.ProjectId).
-		Do()
-	if err != nil {
-		return errors.New("Unable to get projects metadata: " + err.Error())
-	}
-
-	orignalKeyVal := ""
-	sshKeyItemIndex := -1
-	for i, item := range resp.CommonInstanceMetadata.Items {
-		if item.Key == "ssh-keys" {
-			orignalKeyVal = *item.Value
-			sshKeyItemIndex = i
-			break
+	// Because there may be other users to modify when change metadata,
+	// the fingerprint will be inconsistent with the original when a failure occurs,
+	// try updating once
+	maxRetries := 1
+	var tagErr error
+	for i := 0; i <= maxRetries; i++ {
+		resp, err := computeSvc.Projects.
+			Get(gcpCluster.GCPProfile.ProjectId).
+			Do()
+		if err != nil {
+			return errors.New("Unable to get projects metadata: " + err.Error())
 		}
-	}
 
-	if sshKeyItemIndex == -1 {
-		log.Infof("Unable to find ssh-keys to be delete")
-		return nil
-	}
-
-	newSshKeys := ""
-	sshKeys := strings.Split(orignalKeyVal, "\n")
-	for _, sshKey := range sshKeys {
-		if !strings.HasPrefix(sshKey, gcpCluster.GCPProfile.ServiceAccount+":") {
-			if newSshKeys == "" {
-				newSshKeys = sshKey
-			} else {
-				newSshKeys = newSshKeys + "\n" + sshKey
+		orignalKeyVal := ""
+		sshKeyItemIndex := -1
+		for i, item := range resp.CommonInstanceMetadata.Items {
+			if item.Key == "ssh-keys" {
+				orignalKeyVal = *item.Value
+				sshKeyItemIndex = i
+				break
 			}
 		}
-	}
-	resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &newSshKeys
 
-	_, err = computeSvc.Projects.
-		SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
-		Do()
-	if err != nil {
-		return errors.New("Unable to set public key to projects metadata: " + err.Error())
+		if sshKeyItemIndex == -1 {
+			log.Infof("Unable to find ssh-keys to be delete")
+			return nil
+		}
+
+		newSshKeys := ""
+		sshKeys := strings.Split(orignalKeyVal, "\n")
+		for _, sshKey := range sshKeys {
+			if !strings.HasSuffix(sshKey, gcpCluster.GCPProfile.ServiceAccount+"@"+gcpCluster.ClusterId) {
+				if sshKey == "" {
+					continue
+				}
+				if newSshKeys == "" {
+					newSshKeys = sshKey
+				} else {
+					newSshKeys = newSshKeys + "\n" + sshKey
+				}
+			}
+		}
+
+		if newSshKeys != "" {
+			resp.CommonInstanceMetadata.Items[sshKeyItemIndex].Value = &newSshKeys
+		} else {
+			newMetadataItems := []*compute.MetadataItems{}
+			for _, item := range resp.CommonInstanceMetadata.Items {
+				if item.Key != "ssh-keys" {
+					newMetadataItems = append(newMetadataItems, item)
+				}
+			}
+			resp.CommonInstanceMetadata.Items = newMetadataItems
+		}
+
+		_, err = computeSvc.Projects.
+			SetCommonInstanceMetadata(gcpCluster.GCPProfile.ProjectId, resp.CommonInstanceMetadata).
+			Do()
+		if err != nil {
+			return errors.New("Unable to set public key to projects metadata: " + err.Error())
+		} else {
+			return nil
+		}
+
+		time.Sleep(time.Duration(10) * time.Second)
 	}
 
-	return nil
+	return tagErr
 }
 
 func findServiceAccount(

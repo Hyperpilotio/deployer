@@ -638,10 +638,9 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 		return errors.New("Unable to create google cloud platform client: " + err.Error())
 	}
 
-	nodePoolName := []string{"default-pool"}
-	if err := populateNodeInfos(client, gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId,
-		nodePoolName, gcpCluster, deployer.Deployment.ClusterDefinition, log.Logger); err != nil {
-		return errors.New("Unable to populate node infos: " + err.Error())
+	if err := reloadNodeInfos(client, deployer.KubeConfig, gcpProfile.ProjectId, gcpCluster.Zone, gcpCluster.ClusterId,
+		gcpCluster, log.Logger); err != nil {
+		return errors.New("Unable to reload node infos: " + err.Error())
 	}
 	deployer.recordEndpoints(false)
 
