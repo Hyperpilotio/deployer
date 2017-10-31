@@ -641,24 +641,28 @@ func (deployer *GCPDeployer) ReloadClusterState(storeInfo interface{}) error {
 }
 
 func (deployer *GCPDeployer) GetServiceMappings() (map[string]interface{}, error) {
-	nodeNameInfos := map[string]string{}
+	k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
+	if err != nil {
+		return nil, errors.New("Unable to connect to Kubernetes: " + err.Error())
+	}
+
+	nodeNameInfos := map[int]string{}
 	if len(deployer.GCPCluster.NodeInfos) > 0 {
 		for id, nodeInfo := range deployer.GCPCluster.NodeInfos {
-			nodeNameInfos[strconv.Itoa(id)] = nodeInfo.Instance.Name
+			nodeNameInfos[id] = nodeInfo.Instance.Name
 		}
 	} else {
-		k8sClient, err := k8s.NewForConfig(deployer.KubeConfig)
-		if err != nil {
-			return nil, errors.New("Unable to connect to Kubernetes: " + err.Error())
-		}
-
 		nodes, nodeError := k8sClient.CoreV1().Nodes().List(metav1.ListOptions{})
 		if nodeError != nil {
 			return nil, fmt.Errorf("Unable to list nodes: %s", nodeError.Error())
 		}
 
 		for _, node := range nodes.Items {
-			nodeNameInfos[node.Labels["hyperpilot/node-id"]] = node.Name
+			nodeId, err := strconv.Atoi(node.Labels["hyperpilot/node-id"])
+			if err != nil {
+				return nil, fmt.Errorf("Unable to convert node id to int: %s", err.Error())
+			}
+			nodeNameInfos[nodeId] = node.Name
 		}
 	}
 
@@ -671,8 +675,42 @@ func (deployer *GCPDeployer) GetServiceMappings() (map[string]interface{}, error
 			}
 			serviceMapping.NodeId = serviceNodeId
 		}
-		serviceMapping.NodeName = nodeNameInfos[strconv.Itoa(serviceMapping.NodeId)]
+		serviceMapping.NodeName = nodeNameInfos[serviceMapping.NodeId]
 		serviceMappings[serviceName] = serviceMapping
+	}
+
+	// Add StatefulSet pod service
+	for _, task := range deployer.Deployment.KubernetesDeployment.Kubernetes {
+		if task.StatefulSet == nil {
+			continue
+		}
+
+		statefulSet := task.StatefulSet
+		namespace := k8sUtil.GetNamespace(statefulSet.ObjectMeta)
+		pods, listErr := k8sClient.CoreV1().Pods(namespace).List(metav1.ListOptions{
+			LabelSelector: "app=" + statefulSet.GetName(),
+		})
+		if listErr != nil {
+			return nil, errors.New("Unable to list statefulSet pods: " + listErr.Error())
+		}
+
+		for _, pod := range pods.Items {
+			nodeId := -1
+			for key, value := range nodeNameInfos {
+				if pod.Spec.NodeName == value {
+					nodeId = key
+				}
+			}
+
+			if nodeId == -1 {
+				return nil, errors.New("Unable to find nodeId by " + pod.Spec.NodeName)
+			}
+
+			serviceMappings[pod.Name] = k8sUtil.ServiceMapping{
+				NodeId:   nodeId,
+				NodeName: pod.Spec.NodeName,
+			}
+		}
 	}
 
 	return serviceMappings, nil
