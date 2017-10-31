@@ -172,9 +172,7 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 		return errors.New("Unable to create google cloud platform container service: " + err.Error())
 	}
 
-	_, err = containerSvc.Projects.Zones.Clusters.
-		Delete(projectId, zone, clusterId).
-		Do()
+	_, err = containerSvc.Projects.Zones.Clusters.Delete(projectId, zone, clusterId).Do()
 	if err != nil {
 		return errors.New("Unable to delete cluster: " + err.Error())
 	}
@@ -186,7 +184,8 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 			clusterId, err.Error())
 	}
 
-	if err := deleteFirewallRules(client, projectId, zone, log); err != nil {
+	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	if err := deleteFirewallRules(client, projectId, firewallName, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
 	}
 
@@ -208,6 +207,7 @@ func deployCluster(deployer *GCPDeployer, uploadedFiles map[string]string) error
 	}
 
 	if err := deployer.setKubeConfig(); err != nil {
+		deleteDeploymentOnFailure(deployer)
 		return errors.New("Unable to set GCP deployer kubeconfig: " + err.Error())
 	}
 
@@ -317,8 +317,8 @@ func deployKubernetes(
 							"https://www.googleapis.com/auth/service.management.readonly",
 							"https://www.googleapis.com/auth/trace.append",
 						},
-						Metadata: map[string]string{
-							"serviceAccount": gcpProfile.ServiceAccount,
+						Tags: []string{
+							fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId),
 						},
 					},
 					Autoscaling: &container.NodePoolAutoscaling{

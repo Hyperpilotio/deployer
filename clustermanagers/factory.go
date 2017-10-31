@@ -50,8 +50,6 @@ func NewDeployer(
 		switch deployType {
 		case "K8S":
 			return awsk8s.NewInClusterDeployer(config, deployment)
-		case "GCP":
-			return gcpgke.NewInClusterDeployer(config, deployment)
 		default:
 			return nil, errors.New("Unsupported in cluster deploy type: " + deployType)
 		}
