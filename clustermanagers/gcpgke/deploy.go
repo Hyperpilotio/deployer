@@ -306,7 +306,7 @@ func deployKubernetes(
 					Config: &container.NodeConfig{
 						MachineType: deployment.ClusterDefinition.Nodes[0].InstanceType,
 						ImageType:   "COS",
-						DiskSizeGb:  int64(100),
+						DiskSizeGb:  int64(60),
 						Preemptible: false,
 						OauthScopes: []string{
 							"https://www.googleapis.com/auth/compute",
