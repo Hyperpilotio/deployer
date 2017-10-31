@@ -266,7 +266,6 @@ func deleteFirewallRules(
 }
 
 func getDeploymentAllowedPorts(deployment *apis.Deployment, log *logging.Logger) []string {
-	// TODO need to allowed ports by node deploy task
 	allowedPorts := []string{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
