@@ -24,212 +24,6 @@ import (
 
 var publicPortType = 1
 
-func NewNodePoolRequest(
-	deploymentName string,
-	machineType string,
-	nodePoolSize int) (string, *container.CreateNodePoolRequest) {
-	nodePoolName := createUniqueNodePoolName(machineType, nodePoolSize)
-	return nodePoolName, &container.CreateNodePoolRequest{
-		NodePool: &container.NodePool{
-			Name:             nodePoolName,
-			InitialNodeCount: int64(nodePoolSize),
-			Config: &container.NodeConfig{
-				MachineType: machineType,
-				ImageType:   "COS",
-				DiskSizeGb:  int64(100),
-				Preemptible: false,
-				OauthScopes: []string{
-					"https://www.googleapis.com/auth/compute",
-					"https://www.googleapis.com/auth/devstorage.read_only",
-					"https://www.googleapis.com/auth/logging.write",
-					"https://www.googleapis.com/auth/monitoring.write",
-					"https://www.googleapis.com/auth/servicecontrol",
-					"https://www.googleapis.com/auth/service.management.readonly",
-					"https://www.googleapis.com/auth/trace.append",
-				},
-				Metadata: map[string]string{
-					"deploymentName": deploymentName,
-					"nodePoolName":   nodePoolName,
-				},
-			},
-			Autoscaling: &container.NodePoolAutoscaling{
-				Enabled: false,
-			},
-			Management: &container.NodeManagement{
-				AutoUpgrade:    false,
-				AutoRepair:     false,
-				UpgradeOptions: &container.AutoUpgradeOptions{},
-			},
-		},
-	}
-}
-
-func createUniqueNodePoolName(machineType string, nodePoolSize int) string {
-	timeSeq := strconv.FormatInt(time.Now().Unix(), 10)
-	return fmt.Sprintf("%s-%d-%s", machineType, nodePoolSize, timeSeq)
-}
-
-func CreateNodePools(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string,
-	deployment *apis.Deployment,
-	log *logging.Logger,
-	groupByNodeInstanceType bool) ([]string, error) {
-	containerSvc, err := container.New(client)
-	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform container service: " + err.Error())
-	}
-
-	nodePoolIds := []string{}
-	if groupByNodeInstanceType {
-		instanceTypesMap := map[string]int{}
-		for _, node := range deployment.ClusterDefinition.Nodes {
-			cnt, ok := instanceTypesMap[node.InstanceType]
-			if ok {
-				instanceTypesMap[node.InstanceType] = (cnt + 1)
-			} else {
-				instanceTypesMap[node.InstanceType] = 1
-			}
-		}
-
-		for instanceType, cnt := range instanceTypesMap {
-			nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId, instanceType, cnt,
-				deployment, log)
-			if err != nil {
-				deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName}, log)
-				return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
-			}
-			nodePoolIds = append(nodePoolIds, nodePoolName)
-		}
-	} else {
-		nodePoolSize := len(deployment.ClusterDefinition.Nodes)
-		instanceType := deployment.ClusterDefinition.Nodes[0].InstanceType
-		nodePoolName, err := createClusterNodePool(containerSvc, projectId, zone, clusterId,
-			instanceType, nodePoolSize, deployment, log)
-		if err != nil {
-			deleteNodePools(client, projectId, zone, clusterId, []string{nodePoolName}, log)
-			return nil, fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
-		}
-		nodePoolIds = append(nodePoolIds, nodePoolName)
-	}
-
-	return nodePoolIds, nil
-}
-
-func createClusterNodePool(
-	containerSvc *container.Service,
-	projectId string,
-	zone string,
-	clusterId string,
-	instanceType string,
-	nodePoolSize int,
-	deployment *apis.Deployment,
-	log *logging.Logger) (string, error) {
-	nodePoolName, nodePoolRequest := NewNodePoolRequest(deployment.Name, instanceType, nodePoolSize)
-	_, err := containerSvc.Projects.Zones.Clusters.NodePools.
-		Create(projectId, zone, clusterId, nodePoolRequest).
-		Do()
-	if err != nil {
-		return "", fmt.Errorf("Unable to create %s node pool: %s", nodePoolName, err.Error())
-	}
-
-	log.Infof("Waiting until %s node pool is completed...", nodePoolName)
-	if err := waitUntilNodePoolCreateComplete(containerSvc, projectId, zone,
-		clusterId, nodePoolName, time.Duration(10)*time.Minute, log); err != nil {
-		return "", fmt.Errorf("Unable to wait until %s node pool to be complete: %s\n",
-			nodePoolName, err.Error())
-	}
-
-	return nodePoolName, nil
-}
-
-func deleteNodePools(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string,
-	nodePoolIds []string,
-	log *logging.Logger) error {
-	containerSvc, err := container.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform container service: " + err.Error())
-	}
-
-	var errBool bool
-	for _, nodePoolId := range nodePoolIds {
-		log.Infof("Deleting %s node pool: %s", clusterId, nodePoolId)
-		_, err = containerSvc.Projects.Zones.Clusters.NodePools.
-			Delete(projectId, zone, clusterId, nodePoolId).
-			Do()
-		if err != nil {
-			log.Warningf("Unable to delete %s node pool: %s", nodePoolId, err.Error())
-			errBool = true
-		}
-	}
-	if errBool {
-		return fmt.Errorf("Unable to delete %s node pools", clusterId)
-	}
-
-	return nil
-}
-
-func deleteFirewallRules(
-	client *http.Client,
-	projectId string,
-	zone string,
-	log *logging.Logger) error {
-	computeSvc, err := compute.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	fireWallNames := []string{}
-	firewallsResp, err := computeSvc.Firewalls.List(projectId).Do()
-	if err != nil {
-		return errors.New("Unable to list firewalls: " + err.Error())
-	}
-	for _, item := range firewallsResp.Items {
-		if strings.HasPrefix(item.Name, "gke-") && strings.HasSuffix(item.Name, "-http") {
-			fireWallNames = append(fireWallNames, item.Name)
-		}
-	}
-
-	needDeletefireWallNames := []string{}
-	instancesResp, err := computeSvc.Instances.List(projectId, zone).Do()
-	for _, fireWallName := range fireWallNames {
-		findUsed := false
-		for _, instance := range instancesResp.Items {
-			nodeIp := strings.Replace(instance.NetworkInterfaces[0].AccessConfigs[0].NatIP, ".", "-", -1)
-			if fireWallName == fmt.Sprintf("gke-%s-http", nodeIp) {
-				findUsed = true
-			}
-		}
-		if !findUsed {
-			needDeletefireWallNames = append(needDeletefireWallNames, fireWallName)
-		}
-	}
-
-	var errBool bool
-	for _, firewallName := range needDeletefireWallNames {
-		_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
-		if err != nil {
-			if strings.Contains(err.Error(), "was not found") {
-				log.Warningf("Unable to find %s to be delete", firewallName)
-				continue
-			}
-			log.Warningf("Unable to delete firewall rules: " + err.Error())
-			errBool = true
-		}
-	}
-	if errBool {
-		return fmt.Errorf("Unable to delete firewall rules")
-	}
-
-	return nil
-}
-
 func populateNodeInfos(
 	client *http.Client,
 	projectId string,
@@ -394,30 +188,23 @@ func insertFirewallIngressRules(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	for nodeId, nodeInfo := range gcpCluster.NodeInfos {
-		allowedPorts := getAllowedPortsByNodeTasks(nodeId, deployment, log)
-		nodeIp := strings.Replace(nodeInfo.PublicIp, ".", "-", -1)
-		firewallName := fmt.Sprintf("gke-%s-http", nodeIp)
-		targetTagName := fmt.Sprintf("gke-%s-http-server", nodeIp)
-		tagFirewall := &compute.Firewall{
-			Allowed: []*compute.FirewallAllowed{
-				&compute.FirewallAllowed{
-					IPProtocol: "tcp",
-					Ports:      allowedPorts,
-				},
+	allowedPorts := getDeploymentAllowedPorts(deployment, log)
+	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
+	tagFirewall := &compute.Firewall{
+		Allowed: []*compute.FirewallAllowed{
+			&compute.FirewallAllowed{
+				IPProtocol: "tcp",
+				Ports:      allowedPorts,
 			},
-			Description: "INGRESS",
-			Name:        firewallName,
-			Priority:    int64(1000),
-			TargetTags:  []string{targetTagName},
-		}
-		if _, err := computeSvc.Firewalls.Insert(projectId, tagFirewall).Do(); err != nil {
-			return errors.New("Unable to insert firewall ingress rules: " + err.Error())
-		}
-
-		if err := tagFirewallTarget(computeSvc, gcpCluster, targetTagName, log); err != nil {
-			return errors.New("Unable to tag firewall target to node instance: " + err.Error())
-		}
+		},
+		Description: "INGRESS",
+		Name:        firewallName,
+		Priority:    int64(1000),
+		TargetTags:  []string{targetTagName},
+	}
+	if _, err := computeSvc.Firewalls.Insert(projectId, tagFirewall).Do(); err != nil {
+		return errors.New("Unable to insert firewall ingress rules: " + err.Error())
 	}
 
 	return nil
@@ -434,52 +221,55 @@ func updateFirewallIngressRules(
 		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
-	for nodeId, nodeInfo := range gcpCluster.NodeInfos {
-		allowedPorts := getAllowedPortsByNodeTasks(nodeId, deployment, log)
-		nodeIp := strings.Replace(nodeInfo.PublicIp, ".", "-", -1)
-		firewallName := fmt.Sprintf("gke-%s-http", nodeIp)
-		targetTagName := fmt.Sprintf("gke-%s-http-server", nodeIp)
-		tagFirewall := &compute.Firewall{
-			Allowed: []*compute.FirewallAllowed{
-				&compute.FirewallAllowed{
-					IPProtocol: "tcp",
-					Ports:      allowedPorts,
-				},
+	allowedPorts := getDeploymentAllowedPorts(deployment, log)
+	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
+	targetTagName := fmt.Sprintf("gke-%s-http-server", gcpCluster.ClusterId)
+	tagFirewall := &compute.Firewall{
+		Allowed: []*compute.FirewallAllowed{
+			&compute.FirewallAllowed{
+				IPProtocol: "tcp",
+				Ports:      allowedPorts,
 			},
-			Description: "INGRESS",
-			Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
-			Priority:    int64(1000),
-			TargetTags:  []string{targetTagName},
-		}
-		if _, err := computeSvc.Firewalls.Update(projectId, firewallName, tagFirewall).Do(); err != nil {
-			return errors.New("Unable to update firewall ingress rules: " + err.Error())
-		}
+		},
+		Description: "INGRESS",
+		Name:        fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId),
+		Priority:    int64(1000),
+		TargetTags:  []string{targetTagName},
+	}
+	if _, err := computeSvc.Firewalls.Update(projectId, firewallName, tagFirewall).Do(); err != nil {
+		return errors.New("Unable to update firewall ingress rules: " + err.Error())
 	}
 
 	return nil
 }
 
-func getAllowedPortsByNodeTasks(nodeId int, deployment *apis.Deployment, log *logging.Logger) []string {
-	allowedPorts := []string{}
-	allowedPortTasks := []string{}
-	for _, node := range deployment.NodeMapping {
-		if node.Id == nodeId {
-			allowedPortTasks = append(allowedPortTasks, node.Task)
-		}
+func deleteFirewallRules(
+	client *http.Client,
+	projectId string,
+	firewallName string,
+	log *logging.Logger) error {
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
 	}
 
+	_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
+	if err != nil {
+		if strings.Contains(err.Error(), "was not found") {
+			log.Warningf("Unable to find %s to be delete", firewallName)
+			return nil
+		}
+		return errors.New("Unable to delete firewall rules: " + err.Error())
+	}
+
+	return nil
+}
+
+func getDeploymentAllowedPorts(deployment *apis.Deployment, log *logging.Logger) []string {
+	// TODO need to allowed ports by node deploy task
+	allowedPorts := []string{}
 	for _, task := range deployment.KubernetesDeployment.Kubernetes {
 		if task.PortTypes == nil || len(task.PortTypes) == 0 {
-			continue
-		}
-
-		isNodeTask := false
-		for _, nodeTaskName := range allowedPortTasks {
-			if task.Family == nodeTaskName {
-				isNodeTask = true
-			}
-		}
-		if !isNodeTask {
 			continue
 		}
 
@@ -507,38 +297,6 @@ func getAllowedPortsByNodeTasks(nodeId int, deployment *apis.Deployment, log *lo
 	}
 
 	return allowedPorts
-}
-
-func tagFirewallTarget(
-	computeSvc *compute.Service,
-	gcpCluster *hpgcp.GCPCluster,
-	targetTagName string,
-	log *logging.Logger) error {
-	projectId := gcpCluster.GCPProfile.ProjectId
-	var errBool bool
-	for _, nodeInfo := range gcpCluster.NodeInfos {
-		instanceName := nodeInfo.Instance.Name
-		instance, err := computeSvc.Instances.Get(projectId, gcpCluster.Zone, instanceName).Do()
-		if err != nil {
-			log.Warningf("Unable to get %s instance: %s", instanceName, err.Error())
-			errBool = true
-			break
-		}
-
-		instance.Tags.Items = append(instance.Tags.Items, targetTagName)
-		_, err = computeSvc.Instances.
-			SetTags(projectId, gcpCluster.Zone, instanceName, instance.Tags).
-			Do()
-		if err != nil {
-			log.Warningf("Unable to tag network: " + err.Error())
-			errBool = true
-		}
-	}
-	if errBool {
-		return errors.New("Unable to tag network for all node")
-	}
-
-	return nil
 }
 
 func tagPublicKey(
@@ -595,104 +353,6 @@ func tagPublicKey(
 	return nil
 }
 
-func findDeploymentNames(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string) ([]string, error) {
-	computeSvc, err := compute.New(client)
-	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	resp, err := computeSvc.Instances.List(projectId, zone).Do()
-	if err != nil {
-		return nil, errors.New("Unable to list instance: " + err.Error())
-	}
-
-	clusterInstances := []*compute.Instance{}
-	for _, instance := range resp.Items {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
-				clusterInstances = append(clusterInstances, instance)
-			}
-		}
-	}
-
-	deploymentNames := []string{}
-	for _, instance := range clusterInstances {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "deploymentName" {
-				existBool := false
-				for _, deploymentName := range deploymentNames {
-					if deploymentName == *metadata.Value {
-						existBool = true
-					}
-				}
-				if !existBool {
-					deploymentNames = append(deploymentNames, *metadata.Value)
-				}
-			}
-		}
-	}
-
-	return deploymentNames, nil
-}
-
-func findNodePoolNames(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string,
-	deploymentName string) ([]string, error) {
-	computeSvc, err := compute.New(client)
-	if err != nil {
-		return nil, errors.New("Unable to create google cloud platform compute service: " + err.Error())
-	}
-
-	resp, err := computeSvc.Instances.List(projectId, zone).Do()
-	if err != nil {
-		return nil, errors.New("Unable to list instance: " + err.Error())
-	}
-
-	clusterInstances := []*compute.Instance{}
-	for _, instance := range resp.Items {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "cluster-name" && *metadata.Value == clusterId {
-				clusterInstances = append(clusterInstances, instance)
-			}
-		}
-	}
-
-	deploymentInstances := []*compute.Instance{}
-	for _, instance := range clusterInstances {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "deploymentName" && *metadata.Value == deploymentName {
-				deploymentInstances = append(deploymentInstances, instance)
-			}
-		}
-	}
-
-	nodePoolNames := []string{}
-	for _, instance := range deploymentInstances {
-		for _, metadata := range instance.Metadata.Items {
-			if metadata.Key == "nodePoolName" {
-				existBool := false
-				for _, nodePoolName := range nodePoolNames {
-					if nodePoolName == *metadata.Value {
-						existBool = true
-					}
-				}
-				if !existBool {
-					nodePoolNames = append(nodePoolNames, *metadata.Value)
-				}
-			}
-		}
-	}
-
-	return nodePoolNames, nil
-}
-
 func waitUntilClusterStatusRunning(
 	containerSvc *container.Service,
 	projectId string,
@@ -731,51 +391,5 @@ func waitUntilClusterDeleteComplete(
 			return true, nil
 		}
 		return false, nil
-	})
-}
-
-func waitUntilNodePoolCreateComplete(
-	containerSvc *container.Service,
-	projectId string,
-	zone string,
-	clusterId string,
-	nodePoolName string,
-	timeout time.Duration,
-	log *logging.Logger) error {
-	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		nodePool, _ := containerSvc.Projects.Zones.Clusters.NodePools.
-			Get(projectId, zone, clusterId, nodePoolName).
-			Do()
-		if nodePool == nil {
-			return false, nil
-		}
-		log.Info("Node pool create complete")
-		return true, nil
-	})
-}
-
-func waitUntilNodePoolDeleteComplete(
-	client *http.Client,
-	projectId string,
-	zone string,
-	clusterId string,
-	nodePoolIds []string,
-	timeout time.Duration,
-	log *logging.Logger) error {
-	containerSvc, err := container.New(client)
-	if err != nil {
-		return errors.New("Unable to create google cloud platform container service: " + err.Error())
-	}
-	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
-		for _, nodePoolId := range nodePoolIds {
-			nodePoll, _ := containerSvc.Projects.Zones.Clusters.NodePools.
-				Get(projectId, zone, clusterId, nodePoolId).
-				Do()
-			if nodePoll != nil {
-				return false, nil
-			}
-		}
-		log.Info("Delete node pool complete")
-		return true, nil
 	})
 }
