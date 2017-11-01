@@ -2,6 +2,7 @@ package gcpgke
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -56,6 +57,48 @@ func NewDeployer(
 		Deployment:    deployment,
 		DeploymentLog: log,
 		Services:      map[string]k8sUtil.ServiceMapping{},
+	}
+
+	return deployer, nil
+}
+
+func NewSharedDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDeployer, error) {
+	serviceAccountFileContent := config.Get("hyperpilot-shared-gcp.serviceAccountFileContent")
+	b, err := json.Marshal(serviceAccountFileContent)
+	if err != nil {
+		return nil, errors.New("Unable to read service account file content: " + err.Error())
+	}
+
+	clusterId := hpgcp.CreateUniqueClusterId(deployment.Name)
+	deployment.Name = clusterId
+
+	log, err := log.NewLogger(config.GetString("filesPath"), deployment.Name)
+	if err != nil {
+		return nil, errors.New("Error creating deployment logger: " + err.Error())
+	}
+
+	deployer := &GCPDeployer{
+		Config: config,
+		GCPCluster: &hpgcp.GCPCluster{
+			Name:      clusterId,
+			Zone:      deployment.Region,
+			ClusterId: clusterId,
+			GCPProfile: &hpgcp.GCPProfile{
+				UserId:              deployment.UserId,
+				ServiceAccount:      config.GetString("gcp.serviceAccount"),
+				ProjectId:           config.GetString("hyperpilot-shared-gcp.serviceAccountFileContent.project_id"),
+				AuthJSONFileContent: string(b),
+			},
+			KeyPair: &hpgcp.GCPKeyPairOutput{
+				KeyName: clusterId,
+				Pem:     config.GetString("gcp.privateKey"),
+				Pub:     config.GetString("gcp.publicKey"),
+			},
+			NodeInfos: make(map[int]*hpgcp.NodeInfo),
+		},
+		Deployment:    deployment,
+		DeploymentLog: log,
+		Services:      make(map[string]k8sUtil.ServiceMapping),
 	}
 
 	return deployer, nil
@@ -187,6 +230,10 @@ func (deployer *GCPDeployer) deleteDeployment() error {
 	firewallName := fmt.Sprintf("gke-%s-http", gcpCluster.ClusterId)
 	if err := deleteFirewallRules(client, projectId, firewallName, log); err != nil {
 		log.Warningf("Unable to delete firewall rules: " + err.Error())
+	}
+
+	if err := deleteLoadBalancing(client, gcpCluster, log); err != nil {
+		log.Warningf("Unable to delete loadBalancing: " + err.Error())
 	}
 
 	return nil

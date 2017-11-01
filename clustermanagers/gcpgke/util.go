@@ -265,6 +265,115 @@ func deleteFirewallRules(
 	return nil
 }
 
+func deleteLoadBalancing(
+	client *http.Client,
+	gcpCluster *hpgcp.GCPCluster,
+	log *logging.Logger) error {
+	projectId := gcpCluster.GCPProfile.ProjectId
+	computeSvc, err := compute.New(client)
+	if err != nil {
+		return errors.New("Unable to create google cloud platform compute service: " + err.Error())
+	}
+
+	regions := strings.Split(gcpCluster.Zone, "-")
+	region := strings.Join(regions[:len(regions)-1], "-")
+	resp, err := computeSvc.TargetPools.List(projectId, region).Do()
+	if err != nil {
+		return errors.New("Unable to list targetPools: " + err.Error())
+	}
+
+	k8sUsedFirewalls := []string{}
+	firewallsResp, err := computeSvc.Firewalls.List(projectId).Do()
+	if err != nil {
+		return errors.New("Unable to list firewalls: " + err.Error())
+	}
+	for _, item := range firewallsResp.Items {
+		if strings.HasPrefix(item.Name, "k8s-") {
+			for _, targetTag := range item.TargetTags {
+				if strings.Index(targetTag, gcpCluster.ClusterId) != -1 {
+					k8sUsedFirewalls = append(k8sUsedFirewalls, item.Name)
+				}
+			}
+		}
+	}
+
+	healthCheckNames := []string{}
+	targetPools := []string{}
+	for _, targetPool := range resp.Items {
+		clusterUsed := false
+		for _, nodeInfo := range gcpCluster.NodeInfos {
+			for _, instanceUrl := range targetPool.Instances {
+				if strings.Index(instanceUrl, nodeInfo.Instance.Name) != -1 {
+					clusterUsed = true
+				}
+			}
+		}
+
+		if clusterUsed {
+			for _, healthCheckUrl := range targetPool.HealthChecks {
+				urls := strings.Split(healthCheckUrl, "/")
+				healthCheckNames = append(healthCheckNames, urls[len(urls)-1])
+			}
+			targetPools = append(targetPools, targetPool.Name)
+		}
+	}
+
+	log.Infof("Deleting kubernetes used firewalls: %s", k8sUsedFirewalls)
+	errMsgs := []string{}
+	var errBool bool
+	for _, firewallName := range k8sUsedFirewalls {
+		_, err = computeSvc.Firewalls.Delete(projectId, firewallName).Do()
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to delete firewall: "+err.Error())
+			errBool = true
+		}
+	}
+
+	log.Infof("Deleting targetPools: %s", targetPools)
+	for _, targetPool := range targetPools {
+		_, err := computeSvc.ForwardingRules.Delete(projectId, region, targetPool).Do()
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to delete ForwardingRule: "+err.Error())
+			errBool = true
+		}
+
+		err = waitUntilForwardingRulesDeleteComplete(computeSvc, projectId, region,
+			targetPool, time.Duration(30)*time.Second, log)
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to wait until forwardingRules to be delete completed: "+err.Error())
+			errBool = true
+		}
+
+		_, err = computeSvc.TargetPools.Delete(projectId, region, targetPool).Do()
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to delete targetPool: "+err.Error())
+			errBool = true
+		}
+
+		err = waitUntilTargetPoolsDeleteComplete(computeSvc, projectId, region,
+			targetPool, time.Duration(30)*time.Second, log)
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to wait until targetPools to be delete completed: "+err.Error())
+			errBool = true
+		}
+	}
+
+	log.Infof("Deleting healthCheck: %s", healthCheckNames)
+	for _, healthCheckName := range healthCheckNames {
+		_, err := computeSvc.HttpHealthChecks.Delete(projectId, healthCheckName).Do()
+		if err != nil {
+			errMsgs = append(errMsgs, "Unable to delete healthCheck: "+err.Error())
+			errBool = true
+		}
+	}
+
+	if errBool {
+		return errors.New(strings.Join(errMsgs, ": "))
+	}
+
+	return nil
+}
+
 func getDeploymentAllowedPorts(deployment *apis.Deployment, log *logging.Logger) []string {
 	// TODO need to allowed ports by node deploy task
 	allowedPorts := []string{}
@@ -388,6 +497,40 @@ func waitUntilClusterDeleteComplete(
 			Do()
 		if err != nil && strings.Contains(err.Error(), "was not found") {
 			log.Info("Delete cluster complete")
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func waitUntilForwardingRulesDeleteComplete(
+	computeSvc *compute.Service,
+	projectId string,
+	region string,
+	forwardingRuleName string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		_, err := computeSvc.ForwardingRules.Get(projectId, region, forwardingRuleName).Do()
+		if err != nil && strings.Contains(err.Error(), "was not found") {
+			log.Info("Delete forwardingRule complete")
+			return true, nil
+		}
+		return false, nil
+	})
+}
+
+func waitUntilTargetPoolsDeleteComplete(
+	computeSvc *compute.Service,
+	projectId string,
+	region string,
+	targetPoolName string,
+	timeout time.Duration,
+	log *logging.Logger) error {
+	return funcs.LoopUntil(timeout, time.Second*10, func() (bool, error) {
+		_, err := computeSvc.TargetPools.Get(projectId, region, targetPoolName).Do()
+		if err != nil && strings.Contains(err.Error(), "was not found") {
+			log.Info("Delete targetPool complete")
 			return true, nil
 		}
 		return false, nil
