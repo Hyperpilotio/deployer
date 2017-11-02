@@ -49,7 +49,7 @@ func NewDeployer(
 		return nil, errors.New("Unable to find projectId: " + err.Error())
 	}
 	gcpCluster.GCPProfile.ProjectId = projectId
-	gcpCluster.GCPProfile.ServiceAccount = config.GetString("gcp.serviceAccount")
+	gcpCluster.GCPProfile.ServiceAccount = config.GetString("hyperpilot-shared-gcp.serviceAccount")
 
 	deployer := &GCPDeployer{
 		Config:        config,
@@ -85,14 +85,14 @@ func NewSharedDeployer(config *viper.Viper, deployment *apis.Deployment) (*GCPDe
 			ClusterId: clusterId,
 			GCPProfile: &hpgcp.GCPProfile{
 				UserId:              deployment.UserId,
-				ServiceAccount:      config.GetString("gcp.serviceAccount"),
+				ServiceAccount:      config.GetString("hyperpilot-shared-gcp.serviceAccount"),
 				ProjectId:           config.GetString("hyperpilot-shared-gcp.serviceAccountFileContent.project_id"),
 				AuthJSONFileContent: string(b),
 			},
 			KeyPair: &hpgcp.GCPKeyPairOutput{
 				KeyName: clusterId,
-				Pem:     config.GetString("gcp.privateKey"),
-				Pub:     config.GetString("gcp.publicKey"),
+				Pem:     config.GetString("hyperpilot-shared-gcp.privateKey"),
+				Pub:     config.GetString("hyperpilot-shared-gcp.publicKey"),
 			},
 			NodeInfos: make(map[int]*hpgcp.NodeInfo),
 		},

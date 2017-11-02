@@ -83,8 +83,8 @@ func NewGCPCluster(
 		ClusterId: clusterId,
 		KeyPair: &GCPKeyPairOutput{
 			KeyName: clusterId,
-			Pem:     config.GetString("gcp.privateKey"),
-			Pub:     config.GetString("gcp.publicKey"),
+			Pem:     config.GetString("hyperpilot-shared-gcp.privateKey"),
+			Pub:     config.GetString("hyperpilot-shared-gcp.publicKey"),
 		},
 		NodeInfos:   make(map[int]*NodeInfo),
 		NodePoolIds: make([]string, 0),
