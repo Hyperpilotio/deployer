@@ -535,7 +535,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	deploymentType := deploymentInfo.GetDeploymentType()
 
 	var userProfile clusters.UserProfile
-	if checkUserProfile(server.Config) {
+	if needCheckDeploymentUserProfiles(server.Config) {
 		server.mutex.Lock()
 		deploymentProfile, profileOk := server.DeploymentUserProfiles[deployment.UserId]
 		server.mutex.Unlock()
@@ -1235,7 +1235,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		var userProfile clusters.UserProfile
-		if checkUserProfile(server.Config) {
+		if needCheckDeploymentUserProfiles(server.Config) {
 			userId := storeDeployment.UserId
 			if userId == "" {
 				glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
@@ -1389,7 +1389,7 @@ func (server *Server) NewShutDownScheduler(
 	return nil
 }
 
-func checkUserProfile(config *viper.Viper) bool {
+func needCheckDeploymentUserProfiles(config *viper.Viper) bool {
 	if config.GetBool("inCluster") {
 		return false
 	}
