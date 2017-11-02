@@ -943,7 +943,7 @@ func (deployer *K8SDeployer) uploadFiles(uploadedFiles map[string]string) error 
 	var errBool bool
 	for _, nodeInfo := range awsCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PrivateIp+":22", clientConfig, bastionIp+":22")
-		if err := common.UploadFiles(sshClient, deployment, uploadedFiles, log); err != nil {
+		if err := common.UploadFiles(deployer.Config, sshClient, deployment, uploadedFiles, log); err != nil {
 			errBool = true
 		}
 	}

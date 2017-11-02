@@ -103,8 +103,9 @@ type Deployment struct {
 	Region      string `form:"region" json:"region" binding:"required"`
 	ClusterType string `form:"clusterType" json:"clusterType"`
 	Files       []struct {
-		FileId string `json:"fileId"`
-		Path   string `json:"path"`
+		FileId  string `json:"fileId"`
+		FileUrl string `json:"fileUrl"`
+		Path    string `json:"path"`
 	} `form:"files" json:"files"`
 	AllowedPorts      []int             `form:"allowedPorts" json:"allowedPorts"`
 	ClusterDefinition ClusterDefinition `form:"clusterDefinition" json:"clusterDefinition" binding:"required"`

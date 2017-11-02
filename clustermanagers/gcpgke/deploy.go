@@ -491,7 +491,7 @@ func (deployer *GCPDeployer) uploadFiles(uploadedFiles map[string]string) error 
 
 	for _, nodeInfo := range gcpCluster.NodeInfos {
 		sshClient := common.NewSshClient(nodeInfo.PublicIp+":22", clientConfig, "")
-		if err := common.UploadFiles(sshClient, newDeployment, uploadedFiles, log); err != nil {
+		if err := common.UploadFiles(deployer.Config, sshClient, newDeployment, uploadedFiles, log); err != nil {
 			return fmt.Errorf("Unable to upload file to node %s: %s", nodeInfo.PublicIp, err.Error())
 		}
 	}
