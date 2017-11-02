@@ -23,12 +23,12 @@ func init() {
 func TestDownloadFileFromS3(t *testing.T) {
 	s3Downloader, err := NewS3Downloader(config)
 	if err != nil {
-		log.Fatalf("Uable to init S3Downloader: " + err.Error())
+		log.Fatalf("Unable to init S3Downloader: " + err.Error())
 	}
 
 	filePath, err := s3Downloader.Download(testFileUrl)
 	if err != nil {
-		log.Fatalf("Uable to download file: " + err.Error())
+		log.Fatalf("Unable to download file: " + err.Error())
 	}
 	log.Printf("Download %s to %s", testFileUrl, filePath)
 }

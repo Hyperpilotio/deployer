@@ -25,7 +25,7 @@ func UploadFiles(
 		if deployFile.FileUrl != "" {
 			downloader, err := NewS3Downloader(config)
 			if err != nil {
-				return errors.New("Uable to init S3Downloader: " + err.Error())
+				return errors.New("Unable to init S3Downloader: " + err.Error())
 			}
 			s3Downloader = downloader
 			break
@@ -37,7 +37,7 @@ func UploadFiles(
 		if deployFile.FileUrl != "" {
 			location, err := s3Downloader.Download(deployFile.FileUrl)
 			if err != nil {
-				return errors.New("Uable to download file: " + err.Error())
+				return errors.New("Unable to download file: " + err.Error())
 			}
 			uploadFilePath = location
 		} else {
