@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -37,13 +38,23 @@ func NewS3Downloader(config *viper.Viper) (Downloader, error) {
 }
 
 func (files *S3Downloader) Download(s3FileUrl string) (string, error) {
-	if !strings.HasPrefix(s3FileUrl, "s3://") {
-		return "", errors.New("Unsupported file url")
+	url, err := url.Parse(s3FileUrl)
+	if err != nil {
+		return "", errors.New("Unable to parse file url: " + err.Error())
 	}
 
-	urls := strings.Split(strings.Replace(s3FileUrl, "s3://", "", 1), "/")
-	bucket := urls[0]
-	key := urls[1]
+	// TODO need to supported https://s3.amazonaws.com or
+	// http://${bucketName}.s3.amazonaws.com
+	bucketName := ""
+	fileKey := ""
+	switch url.Scheme {
+	case "s3":
+		urls := strings.Split(strings.Replace(s3FileUrl, "s3://", "", 1), "/")
+		bucketName = urls[0]
+		fileKey = urls[1]
+	default:
+		return "", errors.New("Unsupported file url: " + err.Error())
+	}
 
 	sess, err := session.NewSession(&aws.Config{
 		Region:      aws.String(files.region),
@@ -54,7 +65,7 @@ func (files *S3Downloader) Download(s3FileUrl string) (string, error) {
 	}
 
 	downloader := s3manager.NewDownloader(sess)
-	tmpFile, err := ioutil.TempFile("", key+".tmp")
+	tmpFile, err := ioutil.TempFile("", bucketName+".tmp")
 	if err != nil {
 		return "", errors.New("Unable to create temp file: " + err.Error())
 	}
@@ -65,14 +76,14 @@ func (files *S3Downloader) Download(s3FileUrl string) (string, error) {
 
 	_, err = downloader.Download(tmpFile,
 		&s3.GetObjectInput{
-			Bucket: aws.String(bucket),
-			Key:    aws.String(key),
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(fileKey),
 		})
 	if err != nil {
-		return "", fmt.Errorf("Unable to download %s from bucket %s: %v", key, bucket, err)
+		return "", fmt.Errorf("Unable to download %s from bucket %s: %v", fileKey, bucketName, err)
 	}
 
-	destination := path.Join(files.config.GetString("filesPath"), key)
+	destination := path.Join(files.config.GetString("filesPath"), fileKey)
 	if err := os.Rename(tmpFile.Name(), destination); err != nil {
 		return "", errors.New("Unable to rename file: " + err.Error())
 	}
