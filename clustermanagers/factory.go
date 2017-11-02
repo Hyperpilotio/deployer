@@ -55,6 +55,10 @@ func NewDeployer(
 		}
 	}
 
+	if config.GetBool("hyperpilot-shared-gcp.use") {
+		return gcpgke.NewSharedDeployer(config, deployment)
+	}
+
 	cluster := clusters.NewCluster(config, deployType, userProfile, deployment)
 	switch deployType {
 	case "ECS":

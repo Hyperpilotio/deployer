@@ -535,7 +535,7 @@ func (server *Server) createDeployment(c *gin.Context) {
 	deploymentType := deploymentInfo.GetDeploymentType()
 
 	var userProfile clusters.UserProfile
-	if !server.Config.GetBool("inCluster") {
+	if needCheckDeploymentUserProfiles(server.Config) {
 		server.mutex.Lock()
 		deploymentProfile, profileOk := server.DeploymentUserProfiles[deployment.UserId]
 		server.mutex.Unlock()
@@ -1235,7 +1235,7 @@ func (server *Server) reloadClusterState() error {
 		}
 
 		var userProfile clusters.UserProfile
-		if !inCluster {
+		if needCheckDeploymentUserProfiles(server.Config) {
 			userId := storeDeployment.UserId
 			if userId == "" {
 				glog.Warningf("Skip loading deployment %s: Empty user id", storeDeployment.Name)
@@ -1387,4 +1387,15 @@ func (server *Server) NewShutDownScheduler(
 	deployer.SetScheduler(scheduler)
 
 	return nil
+}
+
+func needCheckDeploymentUserProfiles(config *viper.Viper) bool {
+	if config.GetBool("inCluster") {
+		return false
+	}
+	if config.GetBool("hyperpilot-shared-gcp.use") {
+		return false
+	}
+
+	return true
 }
