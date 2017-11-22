@@ -26,11 +26,11 @@ complete-build-linux: init build-linux
 
 docker-build:
 	sed -i.bak 's/"inCluster.*/"inCluster": false,/g' documents/deployed.config
-	docker build --no-cache . -t ${ORGANIZATION}/${IMAGE}:${TAG}
+	docker build . -t ${ORGANIZATION}/${IMAGE}:${TAG}
 
 docker-build-incluster:
 	sed -i.bak 's/"inCluster.*/"inCluster": true,/g' documents/deployed.config
-	docker build --no-cache . -t ${ORGANIZATION}/${IMAGE}:${INCLUSTER_TAG}
+	docker build . -t ${ORGANIZATION}/${IMAGE}:${INCLUSTER_TAG}
 docker-push:
 	docker push ${ORGANIZATION}/${IMAGE}:${TAG}
 

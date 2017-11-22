@@ -345,7 +345,7 @@ func deployKubernetes(
 			Zone:              gcpCluster.Zone,
 			Network:           "default",
 			LoggingService:    "logging.googleapis.com",
-			MonitoringService: "none",
+			MonitoringService: "monitoring.googleapis.com",
 			NodePools: []*container.NodePool{
 				&container.NodePool{
 					Name:             "default-pool",
