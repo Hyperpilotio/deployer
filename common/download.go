@@ -65,7 +65,7 @@ func (files *S3Downloader) Download(s3FileUrl string) (string, error) {
 	}
 
 	downloader := s3manager.NewDownloader(sess)
-	tmpFile, err := ioutil.TempFile("", bucketName+".tmp")
+	tmpFile, err := ioutil.TempFile("", fileKey+".tmp")
 	if err != nil {
 		return "", errors.New("Unable to create temp file: " + err.Error())
 	}
