@@ -822,13 +822,13 @@ func tagKubeNodes(
 	awsCluster *hpaws.AWSCluster,
 	deployment *apis.Deployment,
 	log *logging.Logger) error {
-	nodeInfos := map[string]int{}
-	for _, mapping := range deployment.NodeMapping {
-		privateDnsName := awsCluster.NodeInfos[mapping.Id].Instance.PrivateDnsName
-		nodeInfos[aws.StringValue(privateDnsName)] = mapping.Id
+	nodeNames := map[int]string{}
+	for _, node := range deployment.ClusterDefinition.Nodes {
+		privateDnsName := awsCluster.NodeInfos[node.Id].Instance.PrivateDnsName
+		nodeNames[node.Id] = aws.StringValue(privateDnsName)
 	}
 
-	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, nodeInfos, log)
+	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, deployment.ClusterDefinition, nodeNames, log)
 }
 
 func (deployer *K8SDeployer) recordPublicEndpoints(k8sClient *k8s.Clientset) {

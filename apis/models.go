@@ -11,8 +11,9 @@ import (
 )
 
 type ClusterNode struct {
-	Id           int    `form:"id" json:"id" binding:"required"`
-	InstanceType string `form:"instanceType" json:"instanceType" binding:"required"`
+	Id           int               `form:"id" json:"id" binding:"required"`
+	InstanceType string            `form:"instanceType" json:"instanceType" binding:"required"`
+	Labels       map[string]string `form:"labels" json:"labels" binding:"required"`
 }
 
 // ClusterDefinition storing the information of a cluster

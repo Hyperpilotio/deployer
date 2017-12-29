@@ -138,8 +138,16 @@ func DeployServices(
 		serviceMappings[family] = servicemapping
 		// Create service for each container that opens a port
 		for _, container := range deploySpec.Spec.Template.Spec.Containers {
-			err := CreateServiceForDeployment(namespace, family, k8sClient,
-				task, container, log, skipCreatePublicService, false)
+			err := CreateServiceForDeployment(
+				namespace,
+				family,
+				family,
+				k8sClient,
+				task,
+				container,
+				log,
+				skipCreatePublicService,
+				false)
 			if err != nil {
 				return serviceMappings, fmt.Errorf("Unable to create service for deployment %s: %s", family, err.Error())
 			}
@@ -208,9 +216,21 @@ func DeployServices(
 			return serviceMappings, fmt.Errorf("Unable to create statefulset %s: %s", task.Family, err.Error())
 		}
 
-		for _, container := range task.StatefulSet.Spec.Template.Spec.Containers {
-			if err := CreateServiceForDeployment(namespace, task.Family, k8sClient, task, container, log, false, true); err != nil {
-				return serviceMappings, fmt.Errorf("Unable to create service for stateful set: " + err.Error())
+		for i := int32(0); i < *task.StatefulSet.Spec.Replicas; i++ {
+			for _, container := range task.StatefulSet.Spec.Template.Spec.Containers {
+				err := CreateServiceForDeployment(
+					namespace,
+					task.Family+"-"+strconv.Itoa(int(i)),
+					task.Family,
+					k8sClient,
+					task,
+					container,
+					log,
+					false,
+					true)
+				if err != nil {
+					return serviceMappings, fmt.Errorf("Unable to create service for stateful set: " + err.Error())
+				}
 			}
 		}
 	}
@@ -414,6 +434,7 @@ func CreateSecretsByNamespace(
 
 func CreateServiceForDeployment(
 	namespace string,
+	serviceName string,
 	family string,
 	k8sClient *k8s.Clientset,
 	task apis.KubernetesTask,
@@ -426,11 +447,12 @@ func CreateServiceForDeployment(
 	}
 
 	service := k8sClient.CoreV1().Services(namespace)
-	serviceName := family
-	if !strings.HasPrefix(family, serviceName) {
-		serviceName = serviceName + "-" + container.Name
-	}
 	labels := map[string]string{"app": family}
+
+	if serviceName != family {
+		labels["name"] = serviceName
+	}
+
 	servicePorts := []v1.ServicePort{}
 	for i, port := range container.Ports {
 		newPort := v1.ServicePort{
@@ -667,14 +689,20 @@ func GetNamespace(objectMeta metav1.ObjectMeta) string {
 func TagKubeNodes(
 	k8sClient *k8s.Clientset,
 	deploymentName string,
-	nodeInfos map[string]int,
+	clusterDefinition apis.ClusterDefinition,
+	nodeNames map[int]string,
 	log *logging.Logger) error {
-	for nodeName, id := range nodeInfos {
+	for _, nodeInfo := range clusterDefinition.Nodes {
+		nodeName := nodeNames[nodeInfo.Id]
 		if node, err := k8sClient.CoreV1().Nodes().Get(nodeName, metav1.GetOptions{}); err == nil {
-			node.Labels["hyperpilot/node-id"] = strconv.Itoa(id)
+			node.Labels["hyperpilot/node-id"] = strconv.Itoa(nodeInfo.Id)
 			node.Labels["hyperpilot/deployment"] = deploymentName
+			for key, value := range nodeInfo.Labels {
+				node.Labels[key] = value
+			}
+
 			if _, err := k8sClient.CoreV1().Nodes().Update(node); err == nil {
-				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(id), nodeName)
+				log.Infof("Added label hyperpilot/node-id:%s to Kubernetes node %s", strconv.Itoa(nodeInfo.Id), nodeName)
 				log.Infof("Added label hyperpilot/deployment:%s to Kubernetes node %s", deploymentName, nodeName)
 			}
 		} else {

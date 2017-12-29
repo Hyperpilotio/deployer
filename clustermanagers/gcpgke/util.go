@@ -168,13 +168,13 @@ func tagKubeNodes(
 	gcpCluster *hpgcp.GCPCluster,
 	deployment *apis.Deployment,
 	log *logging.Logger) error {
-	nodeInfos := map[string]int{}
-	for _, mapping := range deployment.NodeMapping {
-		instanceName := gcpCluster.NodeInfos[mapping.Id].Instance.Name
-		nodeInfos[instanceName] = mapping.Id
+	nodeNames := map[int]string{}
+	for _, node := range deployment.ClusterDefinition.Nodes {
+		instanceName := gcpCluster.NodeInfos[node.Id].Instance.Name
+		nodeNames[node.Id] = instanceName
 	}
 
-	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, nodeInfos, log)
+	return k8sUtil.TagKubeNodes(k8sClient, deployment.Name, deployment.ClusterDefinition, nodeNames, log)
 }
 
 func insertFirewallIngressRules(
