@@ -1,0 +1,123 @@
+{
+    "name": "in-cluster",
+    "region": "us-west1-a",
+    "clusterType": "GCP",
+    "files": [
+        {
+            "fileId": "gcpServiceAccount_json",
+            "path": "~/service_account/gcpServiceAccount.json"
+        }
+    ],
+    "nodeMapping": [
+        {
+            "task": "deployer",
+            "id": 1
+        }
+    ],
+    "clusterDefinition": {
+        "nodes": [
+            {
+                "instanceType": "n1-standard-2",
+                "id": 1
+            },
+            {
+                "instanceType": "n1-standard-2",
+                "id": 2
+            },
+            {
+                "instanceType": "n1-standard-2",
+                "id": 3
+            }
+        ]
+    },
+    "kubernetes": {
+        "secrets": [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": "myregistrykey"
+                },
+                "type": "kubernetes.io\/dockerconfigjson",
+                "data": {
+                    ".dockerconfigjson": "ewoJImF1dGhzIjogewoJCSJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CgkJCSJhdXRoIjogImFIbHdaWEp3YVd4dmRIVnpaWEk2YUhsd1pYSXhNak09IgoJCX0KCX0KfQ=="
+                }
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "deployment": {
+                    "apiVersion": "extensions\/v1beta1",
+                    "kind": "Deployment",
+                    "metadata": {
+                        "labels": {
+                            "app": "deployer"
+                        },
+                        "name": "deployer"
+                    },
+                    "spec": {
+                        "replicas": 1,
+                        "selector": {
+                            "matchLabels": {
+                                "app": "deployer"
+                            }
+                        },
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    "app": "deployer"
+                                }
+                            },
+                            "spec": {
+                                "imagePullSecrets": [
+                                    {
+                                        "name": "myregistrykey"
+                                    }
+                                ],
+                                "hostname": "deployer",
+                                "containers": [
+                                    {
+                                        "imagePullPolicy": "Always",
+                                        "image": "hyperpilot\/deployer:in-cluster-gcp",
+                                        "name": "deployer",
+                                        "ports": [
+                                            {
+                                                "containerPort": 7777,
+                                                "hostPort": 7777,
+                                                "protocol": "TCP"
+                                            }
+                                        ],
+                                        "resources": {
+                                            "limits": {
+                                                "cpu": "500m",
+                                                "memory": "1024Mi"
+                                            }
+                                        },
+                                        "volumeMounts": [
+                                            {
+                                                "mountPath": "/service_account",
+                                                "name": "home-ubuntu-service-account"
+                                            }
+                                        ]
+                                    }
+                                ],
+                                "volumes": [
+                                    {
+                                        "hostPath": {
+                                            "path": "~/service_account/"
+                                        },
+                                        "name": "home-ubuntu-service-account"
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                "portTypes": [
+                    1
+                ],
+                "family": "deployer"
+            }
+        ]
+    }
+}

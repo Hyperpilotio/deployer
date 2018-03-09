@@ -1,0 +1,108 @@
+{
+    "name": "in-cluster",
+    "region": "us-east-1",
+    "nodeMapping": [
+        {
+            "task": "deployer",
+            "id": 1
+        }
+    ],
+    "clusterDefinition": {
+        "nodes": [
+            {
+                "instanceType": "t2.large",
+                "id": 1
+            },
+            {
+                "instanceType": "t2.large",
+                "id": 2
+            }
+        ]
+    },
+    "kubernetes": {
+        "secrets": [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": "myregistrykey"
+                },
+                "type": "kubernetes.io\/dockerconfigjson",
+                "data": {
+                    ".dockerconfigjson": "ewoJImF1dGhzIjogewoJCSJodHRwczovL2luZGV4LmRvY2tlci5pby92MS8iOiB7CgkJCSJhdXRoIjogImFIbHdaWEp3YVd4dmRIVnpaWEk2YUhsd1pYSXhNak09IgoJCX0KCX0KfQ=="
+                }
+            }
+        ],
+        "taskDefinitions": [
+            {
+                "deployment": {
+                    "apiVersion": "extensions\/v1beta1",
+                    "kind": "Deployment",
+                    "metadata": {
+                        "labels": {
+                            "app": "deployer"
+                        },
+                        "name": "deployer"
+                    },
+                    "spec": {
+                        "replicas": 1,
+                        "selector": {
+                            "matchLabels": {
+                                "app": "deployer"
+                            }
+                        },
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    "app": "deployer"
+                                }
+                            },
+                            "spec": {
+                                "imagePullSecrets": [
+                                    {
+                                        "name": "myregistrykey"
+                                    }
+                                ],
+                                "hostname": "deployer",
+                                "containers": [
+                                    {
+                                        "imagePullPolicy": "Always",
+                                        "image": "hyperpilot\/deployer:in-cluster",
+                                        "name": "deployer",
+                                        "ports": [
+                                            {
+                                                "containerPort": 7777,
+                                                "hostPort": 7777,
+                                                "protocol": "TCP"
+                                            }
+                                        ],
+                                        "resources": {
+                                            "requests": {
+                                                "cpu": "500m",
+                                                "memory": "1024Mi"
+                                            }
+                                        },
+                                        "env": [
+                                            {
+                                                "name": "AWS_ACCESS_KEY_ID",
+                                                "value": ""
+                                            },
+                                            {
+                                                "name": "AWS_SECRET_ACCESS_KEY",
+                                                "value": ""
+                                            }
+                                        ]
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                },
+                "portTypes": [
+                    1
+                ],
+                "family": "deployer"
+            }
+        ]
+    }
+}
