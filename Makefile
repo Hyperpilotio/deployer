@@ -24,6 +24,12 @@ build-linux:
 
 complete-build-linux: init build-linux
 
+run-on-aws:
+	./deployer -v 1 --config documents/template.config
+
+run-on-gcp: gcp-create-service-account-file
+	./deployer -v 1 --config documents/template.config
+
 docker-build:
 	sed -i.bak 's/"inCluster.*/"inCluster": false,/g' documents/deployed.config
 	docker build . -t ${ORGANIZATION}/${IMAGE}:${TAG}
@@ -35,4 +41,4 @@ docker-push:
 	docker push ${ORGANIZATION}/${IMAGE}:${TAG}
 
 gcp-create-service-account-file:
-	./build_gcp_serviceAccoutFile.sh
+	./scripts/build_gcp_serviceAccoutFile.sh

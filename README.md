@@ -23,8 +23,8 @@ make dev-test
 ```{shell}
 cd $GOPATH/src/github.com/hyperpilotio/deployer
 make init
-go build
-./deployer -v 1 --config documents/template.config
+make build
+make run
 ```
 
 API Server
